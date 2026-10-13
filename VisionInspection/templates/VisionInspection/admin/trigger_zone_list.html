@@ -1,0 +1,49 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Trigger Zones - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-card">
+    <div class="vi-table-wrap">
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>Zone Name</th>
+                    <th>Preset</th>
+                    <th>Trigger Type</th>
+                    <th>Coordinates</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for zone in trigger_zones %}
+                <tr>
+                    <td>{{ zone.zone_name }}</td>
+                    <td>{{ zone.preset.name }}</td>
+                    <td>{{ zone.trigger_type }}</td>
+                    <td>
+                        {% if zone.polygon_points %}
+                            {{ zone.polygon_points|truncatechars:50 }}
+                        {% else %}
+                            X: {{ zone.x|floatformat:0 }}, Y: {{ zone.y|floatformat:0 }}, W: {{ zone.width|floatformat:0 }}, H: {{ zone.height|floatformat:0 }}
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if zone.is_active %}
+                            <span class="vi-badge vi-badge-active">Active</span>
+                        {% else %}
+                            <span class="vi-badge vi-badge-inactive">Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ zone.created_at|date:"Y-m-d" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" style="text-align:center; color: var(--vi-text-muted);">No trigger zones found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

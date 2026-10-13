@@ -1,0 +1,54 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Training Jobs — VisionInspection{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>Training Jobs</h2>
+</div>
+
+<div class="vi-card" style="padding: 0; overflow-x: auto;">
+    <table class="vi-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Project</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Epoch</th>
+                <th>Message</th>
+                <th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for job in jobs %}
+            <tr>
+                <td>#{{ job.pk }}</td>
+                <td>{{ job.training_project }}</td>
+                <td>
+                    <span class="vi-badge
+                        {% if job.status == 'COMPLETED' %}vi-badge-ok
+                        {% elif job.status == 'FAILED' or job.status == 'CANCELLED' %}vi-badge-error
+                        {% elif job.status == 'TRAINING' %}vi-badge-not-ok
+                        {% else %}vi-badge-skip{% endif %}">
+                        {{ job.status }}
+                    </span>
+                </td>
+                <td>
+                    <div class="vi-progress-bar">
+                        <div class="vi-progress-fill" style="width: {{ job.progress }}%;"></div>
+                    </div>
+                    <span>{{ job.progress }}%</span>
+                </td>
+                <td>{{ job.current_epoch }} / {{ job.total_epochs }}</td>
+                <td>{{ job.message|default:"—" }}</td>
+                <td>{{ job.created_at|date:"Y-m-d H:i" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7">No training jobs found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

@@ -1,0 +1,1633 @@
+/* ============================================================================
+ * VisionInspection — Airbag Stitch Inspection station
+ *
+ *  Replicates the reference station layout: navy header, left Part Scan & Model
+ *  panel, centre dual-camera workspace, right progress/detection sidebar.
+ *  Proportions use CSS Grid fr units
+ *  (19 / 60 / 21) so nothing is pinned to the screenshot's pixel sizes.
+ *
+ *  Sections:
+ *    1.  Design tokens & reset
+ *    2.  Reference page chrome (navy header)
+ *    3.  Four-region grid (19% / 60% / 21%)
+ *    4.  Left panel — part scan, model status, part information
+ *    5.  Camera workspace (navy headers, frames)
+ *    6.  Camera control toolbar
+ *    7.  Inspection result & overall result
+ *    8.  Right sidebar — progress, detection tables, legend
+ *    9.  ROI coordinate panels (below each camera card)
+ *   10.  Responsive breakpoints
+ *   11.  Fullscreen mode
+ *   12.  Component states (disabled / loading / success / warning / error)
+ * ========================================================================== */
+
+/* ---------------------------------------------------------------------------
+ *  1. Design tokens & reset
+ * ------------------------------------------------------------------------- */
+
+.ws {
+    --ws-navy: #0b1c3d;
+    --ws-navy-2: #122a55;
+    --ws-page: #f1f5fa;
+    --ws-card: #ffffff;
+    --ws-surface: #f6f9fd;
+    --ws-surface-2: #eef4fb;
+    --ws-border: #dde5ef;
+    --ws-border-strong: #c6d3e5;
+    --ws-heading: #0f2350;
+    --ws-text: #24344f;
+    --ws-muted: #6b7c96;
+
+    --ws-blue: #2563eb;
+    --ws-blue-2: #1d4ed8;
+    --ws-violet: #4f46e5;
+
+    --ws-green: #16a34a;
+    --ws-green-strong: #0f7a41;
+    --ws-green-bg: #e7f7ee;
+    --ws-red: #dc2626;
+    --ws-red-bg: #fdecec;
+    --ws-amber: #b45309;
+    --ws-amber-bg: #fff5e6;
+    --ws-neutral: #64748b;
+    --ws-neutral-bg: #f1f4f9;
+
+    --ws-radius: 10px;
+    --ws-radius-sm: 7px;
+    --ws-gap: 10px;
+    --ws-pad: 12px;
+    /* Camera frames dominate the viewport; the sidebar may scroll instead. */
+    --ws-cam-max-h: 52vh;
+
+    box-sizing: border-box;
+    color: var(--ws-text);
+    /* Readable base size — matches industrial dashboards at 100% zoom. */
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.ws *,
+.ws *::before,
+.ws *::after {
+    box-sizing: border-box;
+}
+
+.ws-card {
+    background: var(--ws-card);
+    border: 1px solid var(--ws-border);
+    border-radius: var(--ws-radius);
+    padding: var(--ws-pad);
+    box-shadow: 0 1px 2px rgba(15, 35, 80, 0.05);
+    min-width: 0;
+}
+
+.ws-hint {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--ws-muted);
+}
+
+.ws-empty {
+    padding: 14px 10px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--ws-muted);
+}
+
+/* ---------------------------------------------------------------------------
+ *  2. Reference page chrome — navy header (inspection station only)
+ * ------------------------------------------------------------------------- */
+
+body.vi-inspection-chrome .vi-main-wrapper {
+    background: var(--ws-page, #f1f5fa);
+    width: 100%;
+    min-width: 0;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+}
+
+body.vi-inspection-chrome .vi-sidebar-toggle,
+body.vi-inspection-chrome .vi-header-search,
+body.vi-inspection-chrome .vi-theme-toggle,
+body.vi-inspection-chrome .vi-header-bell,
+body.vi-inspection-chrome .vi-profile {
+    display: none;
+}
+
+body.vi-inspection-chrome .vi-top-header {
+    background: linear-gradient(180deg, #0d2149 0%, #0b1c3d 100%);
+    border-bottom: 1px solid #071432;
+    padding: 0 16px;
+}
+
+body.vi-inspection-chrome .vi-header-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 25px;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+    color: #ffffff;
+    text-transform: none;
+}
+
+body.vi-inspection-chrome .vi-header-actions {
+    gap: 14px;
+}
+
+/* Header height — aligned with the page content, not oversized. */
+body.vi-inspection-chrome .vi-top-header {
+    height: 64px;
+}
+
+/* Aperture-style app logo in a rounded tile */
+.vi-ins-logo {
+    width: 32px;
+    height: 32px;
+    font-size: 17px;
+    border-radius: 8px;
+    display: inline-grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+    flex: 0 0 auto;
+}
+
+.vi-ins-clock {
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.82);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* Home icon only — no visible text */
+.vi-ins-home {
+    width: 36px;
+    height: 36px;
+    font-size: 17px;
+    border-radius: 9px;
+    display: inline-grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    text-decoration: none;
+    flex: 0 0 auto;
+}
+
+.vi-ins-home:hover {
+    background: rgba(255, 255, 255, 0.22);
+}
+
+.vi-ins-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 13px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    font-size: 13.5px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/* Keep the shared profile control legible on the dark header. */
+body.vi-inspection-chrome .vi-profile-btn,
+body.vi-inspection-chrome .vi-profile-name {
+    color: #ffffff;
+}
+
+body.vi-inspection-chrome .vi-profile-btn:hover {
+    color: #ffffff;
+}
+
+/* ---------------------------------------------------------------------------
+ *  3. Four-region grid — 19% / 60% / 21%
+ * ------------------------------------------------------------------------- */
+
+.vi-content > .ws {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ws-gap);
+    width: 100%;
+    min-width: 0;
+}
+
+body.vi-inspection-chrome .vi-content {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ *  3. Four-region grid — 20% / 57% / 23%
+ *
+ *  Proportions are in fr units against the *available content width*, never
+ *  against the reference screenshot's pixel sizes, so the page fills whatever
+ *  the browser gives it.
+ * ------------------------------------------------------------------------- */
+
+.ws-grid {
+    display: grid;
+    grid-template-columns:
+        minmax(250px, 20fr)
+        minmax(0, 57fr)
+        minmax(300px, 23fr);
+    gap: var(--ws-gap);
+    align-items: start;
+}
+
+.ws-grid > * {
+    min-width: 0;
+}
+
+.ws-col-left,
+.ws-col-center,
+.ws-col-right {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ws-gap);
+    min-width: 0;
+}
+
+.ws-col-right {
+    max-height: calc(100dvh - 88px);
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+
+/* ---------------------------------------------------------------------------
+ *  4. Left panel — part scan, model status, part information
+ * ------------------------------------------------------------------------- */
+
+.ws-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 11px;
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--ws-heading);
+}
+
+.ws-panel-title::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--ws-border);
+}
+
+.ws-panel-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--ws-blue);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 800;
+    flex: 0 0 auto;
+}
+
+/* --- Barcode row --- */
+.ws-barcode {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+
+.ws-barcode-icon {
+    width: 42px;
+    height: 38px;
+    border-radius: var(--ws-radius-sm);
+    display: grid;
+    place-items: center;
+    background: var(--ws-surface-2);
+    border: 1px solid var(--ws-border);
+    color: var(--ws-blue);
+    font-size: 17px;
+    flex: 0 0 auto;
+}
+
+.ws-barcode .vi-master-control {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 38px;
+    padding: 0 11px;
+    font-size: 14.5px;
+    font-family: "Consolas", "SF Mono", "Segoe UI", monospace;
+    color: var(--ws-text);
+    background: var(--ws-surface);
+    border: 1px solid var(--ws-border-strong);
+    border-radius: var(--ws-radius-sm);
+    outline: none;
+}
+
+.ws-barcode .vi-master-control:focus {
+    border-color: var(--ws-blue);
+    background: #ffffff;
+}
+
+/* Round green confirm button, as in the reference. */
+#wfScanBtn {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--ws-green);
+    border-color: var(--ws-green);
+    color: #ffffff;
+    font-size: 16px;
+    flex: 0 0 auto;
+}
+
+#wfScanBtn:hover:not(:disabled) {
+    background: var(--ws-green-strong);
+    border-color: var(--ws-green-strong);
+    color: #ffffff;
+}
+
+/* --- Model status (green only when genuinely loaded) --- */
+.ws-model-status {
+    margin-top: 11px;
+    padding: 11px;
+    border-radius: var(--ws-radius-sm);
+    border: 1px solid var(--ws-border);
+    background: var(--ws-neutral-bg);
+}
+
+.ws-model-status.is-loaded {
+    background: var(--ws-green-bg);
+    border-color: rgba(22, 163, 74, 0.35);
+}
+
+.ws-model-status.is-error {
+    background: var(--ws-red-bg);
+    border-color: rgba(220, 38, 38, 0.35);
+}
+
+.ws-model-status-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    font-weight: 800;
+    color: var(--ws-neutral);
+}
+
+.ws-model-status.is-loaded .ws-model-status-head { color: var(--ws-green-strong); }
+.ws-model-status.is-error .ws-model-status-head { color: var(--ws-red); }
+
+.ws-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: 0 0 auto;
+}
+
+.ws-model-status-meta {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 3px 10px;
+    margin: 9px 0 0;
+    font-size: 12.5px;
+}
+
+.ws-model-status-meta dt {
+    color: var(--ws-muted);
+    font-weight: 600;
+}
+
+.ws-model-status-meta dd {
+    margin: 0;
+    font-weight: 700;
+    color: var(--ws-text);
+    overflow-wrap: anywhere;
+}
+
+/* --- Scan flags + readiness pills --- */
+.ws-scan-flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 11px;
+}
+
+.ws-readiness-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 9px;
+}
+
+.ws-readiness {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    border-radius: 999px;
+    border: 1px solid var(--ws-border-strong);
+    background: var(--ws-neutral-bg);
+    color: var(--ws-neutral);
+}
+
+.ws-readiness--ready {
+    color: var(--ws-green-strong);
+    border-color: rgba(22, 163, 74, 0.35);
+    background: var(--ws-green-bg);
+}
+
+.ws-readiness--waiting {
+    color: var(--ws-amber);
+    border-color: rgba(180, 83, 9, 0.3);
+    background: var(--ws-amber-bg);
+}
+
+.ws-scan-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+    margin-top: 11px;
+}
+
+.ws-scan-actions .vi-master-btn {
+    flex: 1 1 140px;
+}
+
+/* --- Part information table --- */
+.ws-info {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 11px;
+}
+
+.ws-info th,
+.ws-info td {
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--ws-border);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.ws-info th {
+    width: 44%;
+    font-weight: 600;
+    color: var(--ws-muted);
+    background: var(--ws-surface);
+}
+
+.ws-info td {
+    font-weight: 700;
+    color: var(--ws-heading);
+    overflow-wrap: anywhere;
+}
+
+.ws-info tr:last-child th,
+.ws-info tr:last-child td {
+    border-bottom: none;
+}
+
+/* --- Compact camera configuration --- */
+.ws-config {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 9px;
+    padding-top: 11px;
+    border-top: 1px solid var(--ws-border);
+}
+
+.ws-config .ws-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.ws-config .ws-field label {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--ws-muted);
+}
+
+.ws-config .ws-field .vi-master-control {
+    width: 100%;
+    min-width: 0;
+    height: 34px;
+    padding: 0 9px;
+    font-size: 13px;
+    color: var(--ws-text);
+    background: var(--ws-surface);
+    border: 1px solid var(--ws-border-strong);
+    border-radius: var(--ws-radius-sm);
+    outline: none;
+}
+
+/* --- ROI & performance metrics --- */
+.ws-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px 12px;
+    margin-bottom: 10px;
+}
+
+.ws .vi-master-stat {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 11.5px;
+    min-width: 0;
+}
+
+.ws .vi-master-stat .k {
+    color: var(--ws-muted);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws .vi-master-stat .v {
+    color: var(--ws-heading);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+ *  5. Camera workspace
+ * ------------------------------------------------------------------------- */
+
+.ws-cameras {
+    display: grid;
+    /* Equal-width, equal-height panels: both cards share the same grid track. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--ws-gap);
+    align-items: stretch;
+}
+
+.ws-cameras > * {
+    min-width: 0;
+}
+
+/* Camera card: navy header bar + dark frame + ROI panel */
+.ws-view {
+    display: flex;
+    flex-direction: column;
+    background: var(--ws-card);
+    border: 1px solid var(--ws-border);
+    border-radius: var(--ws-radius);
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(15, 35, 80, 0.05);
+}
+
+.ws-cam-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 11px 13px;
+    background: linear-gradient(180deg, var(--ws-navy-2), var(--ws-navy));
+    color: #ffffff;
+}
+
+.ws-cam-head-icon {
+    font-size: 15px;
+    color: rgba(255, 255, 255, 0.85);
+    flex: 0 0 auto;
+}
+
+.ws-cam-head-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws-cam-head .vi-master-badge {
+    flex: 0 0 auto;
+}
+
+.ws-cam-fs {
+    margin-left: auto;
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+
+.ws-cam-fs:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+}
+
+/* Camera frame — the dominant visual element, aspect-correct and bounded. */
+.ws .vi-master-cam {
+    position: relative;
+    width: 100%;
+    max-width: 100%;
+    aspect-ratio: 4 / 3;
+    max-height: var(--ws-cam-max-h);
+    min-height: 220px;
+    background: #08101f;
+    overflow: hidden;
+    touch-action: none;
+}
+
+.ws .vi-master-cam img.vi-master-feed {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+.ws .vi-master-cam canvas.vi-master-draw {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+}
+
+.ws .vi-master-cam-overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 12px;
+    text-align: center;
+    color: #b9c3e0;
+    font-size: 13px;
+    pointer-events: none;
+}
+
+.ws .vi-master-cam-overlay.hidden { display: none; }
+
+/* Segmentation mask layer — aligned to the same letterboxed image. */
+.ws-mask {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Unavailable / reposition state for the back view. */
+.ws-cam-off {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    gap: 6px;
+    text-align: center;
+    padding: 16px;
+    background: radial-gradient(500px 260px at 50% 42%, #eaf1fa 0%, #dde7f3 100%);
+    color: var(--ws-muted);
+    font-size: 13px;
+    z-index: 3;
+}
+
+.ws-cam-off .ws-cam-off-title {
+    font-weight: 800;
+    color: var(--ws-heading);
+}
+
+.ws-cam-off .ws-cam-off-sub {
+    font-size: 12px;
+    max-width: 260px;
+}
+
+/* Single-camera view switch */
+.ws-view-switch {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 9px;
+}
+
+/* The guidance line takes the remaining space, then the toggle. */
+.ws-view-switch .ws-hint {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--ws-border-strong);
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--ws-surface);
+}
+
+.ws-view-toggle button {
+    border: none;
+    background: transparent;
+    color: var(--ws-muted);
+    padding: 6px 16px;
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.ws-view-toggle button.active {
+    background: var(--ws-blue);
+    color: #ffffff;
+}
+
+/* ---------------------------------------------------------------------------
+ *  6. Camera control toolbar + live metrics
+ * ------------------------------------------------------------------------- */
+
+.ws-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 9px;
+}
+
+.ws-toolbar .vi-master-btn {
+    height: 38px;
+    min-width: 106px;
+    font-size: 13.5px;
+    justify-content: center;
+}
+
+.ws-toolbar-spacer {
+    margin-left: auto;
+}
+
+/* Solid primary capture button, as in the reference. */
+.vi-master-btn-solid {
+    background: var(--ws-blue);
+    border-color: var(--ws-blue);
+    color: #ffffff;
+}
+
+.vi-master-btn-solid:hover:not(:disabled) {
+    background: var(--ws-blue-2);
+    border-color: var(--ws-blue-2);
+    color: #ffffff;
+}
+
+/* Live camera / inference metrics strip */
+.ws-cam-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 9px 14px;
+    padding: 9px 12px;
+    background: var(--ws-surface);
+    border: 1px solid var(--ws-border);
+    border-radius: var(--ws-radius-sm);
+    font-size: 12.5px;
+    color: var(--ws-muted);
+}
+
+.ws-cam-metrics .ws-metric b {
+    color: var(--ws-heading);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+ *  7. Inspection result & overall result
+ * ------------------------------------------------------------------------- */
+
+.ws-results {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: var(--ws-gap);
+    align-items: start;
+}
+
+.ws-results > * {
+    min-width: 0;
+}
+
+/* Two sub-panels divided by a thin rule */
+.ws-sides {
+    display: grid;
+    grid-template-columns: 1fr 1px 1fr;
+    align-items: stretch;
+    gap: 11px;
+}
+
+.ws-sides-divider {
+    background: var(--ws-border);
+}
+
+.ws-side {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 16px 10px;
+    border-radius: var(--ws-radius-sm);
+    background: var(--ws-surface);
+    border: 1px solid var(--ws-border);
+    text-align: center;
+}
+
+.ws-side-label {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--ws-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.ws-side-icon {
+    font-size: 24px;
+    line-height: 1;
+}
+
+.ws-side-value {
+    font-size: 13.5px;
+    font-weight: 800;
+    color: var(--ws-heading);
+}
+
+.ws-side[data-state="OK"] {
+    background: var(--ws-green-bg);
+    border-color: rgba(22, 163, 74, 0.35);
+}
+
+.ws-side[data-state="OK"] .ws-side-value,
+.ws-side[data-state="OK"] .ws-side-icon { color: var(--ws-green-strong); }
+
+.ws-side[data-state="NOT_OK"] {
+    background: var(--ws-red-bg);
+    border-color: rgba(220, 38, 38, 0.35);
+}
+
+.ws-side[data-state="NOT_OK"] .ws-side-value,
+.ws-side[data-state="NOT_OK"] .ws-side-icon { color: var(--ws-red); }
+
+.ws-side[data-state="IN_PROGRESS"] .ws-side-icon { color: var(--ws-blue); }
+
+.ws-side[data-state="ERROR"] .ws-side-value,
+.ws-side[data-state="ERROR"] .ws-side-icon { color: var(--ws-amber); }
+
+.ws-card-inline-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+    margin-top: 11px;
+}
+
+.ws-card-inline-actions .vi-master-btn {
+    height: 36px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+/* Overall result */
+.ws-result {
+    display: grid;
+    place-items: center;
+    gap: 4px;
+    padding: 16px 14px;
+    border-radius: var(--ws-radius-sm);
+    border: 1px solid var(--ws-border);
+    background: var(--ws-surface);
+    text-align: center;
+}
+
+.ws-result .ws-result-icon {
+    font-size: 34px;
+    line-height: 1;
+}
+
+.ws-result .ws-result-state {
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    color: var(--ws-heading);
+}
+
+.ws-result .ws-result-note {
+    font-size: 12.5px;
+    color: var(--ws-muted);
+    overflow-wrap: anywhere;
+}
+
+.ws-result.state-OK {
+    background: var(--ws-green-bg);
+    border-color: rgba(22, 163, 74, 0.35);
+}
+
+.ws-result.state-OK .ws-result-state,
+.ws-result.state-OK .ws-result-icon { color: var(--ws-green-strong); }
+
+.ws-result.state-NOT_OK {
+    background: var(--ws-red-bg);
+    border-color: rgba(220, 38, 38, 0.35);
+}
+
+.ws-result.state-NOT_OK .ws-result-state,
+.ws-result.state-NOT_OK .ws-result-icon { color: var(--ws-red); }
+
+.ws-result.state-WAITING,
+.ws-result.state-INFO {
+    background: var(--ws-neutral-bg);
+    border-color: var(--ws-border-strong);
+}
+
+.ws-result.state-ERROR {
+    background: var(--ws-amber-bg);
+    border-color: rgba(180, 83, 9, 0.35);
+}
+
+.ws-result.state-ERROR .ws-result-state,
+.ws-result.state-ERROR .ws-result-icon { color: var(--ws-amber); }
+
+/* ---------------------------------------------------------------------------
+ *  8. Right sidebar — progress, detection tables, legend
+ * ------------------------------------------------------------------------- */
+
+.ws-progress-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ws-border);
+}
+
+.ws-progress-row:last-child { border-bottom: none; }
+
+.ws-progress-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--ws-neutral-bg);
+    border: 1px solid var(--ws-border-strong);
+    color: var(--ws-muted);
+    font-size: 12px;
+    font-weight: 800;
+    flex: 0 0 auto;
+}
+
+.ws-progress-label {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ws-text);
+    min-width: 0;
+}
+
+.ws-progress-state {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--ws-muted);
+    white-space: nowrap;
+    max-width: 104px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws-progress-row.is-Completed .ws-progress-num {
+    background: var(--ws-green);
+    border-color: var(--ws-green);
+    color: #ffffff;
+    font-size: 0;
+}
+
+.ws-progress-row.is-Completed .ws-progress-num::after {
+    content: "\2713";
+    font-size: 13px;
+}
+
+.ws-progress-row.is-Completed .ws-progress-state { color: var(--ws-green-strong); }
+
+.ws-progress-row.is-InProgress {
+    background: #eef4ff;
+    margin: 0 -7px;
+    padding: 8px 7px;
+    border-radius: var(--ws-radius-sm);
+    border-bottom-color: transparent;
+}
+
+.ws-progress-row.is-InProgress .ws-progress-num {
+    background: var(--ws-blue);
+    border-color: var(--ws-blue);
+    color: #ffffff;
+}
+
+.ws-progress-row.is-InProgress .ws-progress-label { color: var(--ws-blue-2); font-weight: 800; }
+.ws-progress-row.is-InProgress .ws-progress-state { color: var(--ws-blue-2); }
+
+.ws-progress-row.is-Failed .ws-progress-num {
+    background: var(--ws-red);
+    border-color: var(--ws-red);
+    color: #ffffff;
+}
+
+.ws-progress-row.is-Failed .ws-progress-label { color: var(--ws-red); }
+.ws-progress-row.is-Failed .ws-progress-state { color: var(--ws-red); }
+
+.ws-progress-meta {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--ws-border);
+}
+
+/* --- Detection tables --- */
+.ws-table-wrap {
+    max-height: 232px;
+    overflow-y: auto;
+    border: 1px solid var(--ws-border);
+    border-radius: var(--ws-radius-sm);
+}
+
+.ws-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    table-layout: fixed;
+}
+
+.ws-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    text-align: left;
+    color: var(--ws-muted);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    padding: 8px 10px;
+    background: var(--ws-surface-2);
+    border-bottom: 1px solid var(--ws-border);
+}
+
+.ws-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--ws-border);
+    color: var(--ws-text);
+    vertical-align: middle;
+}
+
+.ws-table tbody tr:last-child td { border-bottom: none; }
+
+.ws-table th:nth-child(1),
+.ws-table td:nth-child(1) { width: 46%; }
+
+.ws-table th:nth-child(2),
+.ws-table td:nth-child(2) { width: 22%; }
+
+.ws-table th:nth-child(3),
+.ws-table td:nth-child(3) { width: 32%; }
+
+.ws-table td {
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+.ws-status-pill {
+    display: inline-block;
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.ws-status-pill.pass { color: #ffffff; background: var(--ws-green); }
+.ws-status-pill.fail { color: #ffffff; background: var(--ws-red); }
+.ws-status-pill.neutral { color: var(--ws-neutral); background: var(--ws-neutral-bg); }
+
+/* --- Legend --- */
+.ws-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ws-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 12.5px;
+    color: var(--ws-text);
+    min-width: 0;
+}
+
+.ws-legend-item span:last-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.ws-legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    flex: 0 0 auto;
+    box-shadow: inset 0 0 0 1px rgba(15, 35, 80, 0.12);
+}
+
+/* ---------------------------------------------------------------------------
+ *  9. ROI coordinate panels (below each camera card)
+ * ------------------------------------------------------------------------- */
+
+.ws-roi {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--ws-border);
+    background: var(--ws-surface);
+}
+
+.ws-roi-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+    flex: 1 1 auto;
+    border: 1px solid var(--ws-border);
+    border-radius: var(--ws-radius-sm);
+    padding: 9px 11px;
+    background: var(--ws-card);
+    min-width: 0;
+}
+
+.ws-roi-cell {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--ws-muted);
+    min-width: 0;
+}
+
+.ws-roi-cell b {
+    display: block;
+    margin-top: 2px;
+    font-size: 15px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: var(--ws-heading);
+    overflow-wrap: anywhere;
+}
+
+.ws-roi-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.ws-roi-actions .vi-master-btn {
+    height: 34px;
+    font-size: 12.5px;
+    white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+ *  9. Responsive breakpoints
+ *
+ *  The camera workspace keeps priority at every size: the frames shrink before
+ *  anything is dropped, and panels reflow instead of overflowing.  Breakpoints
+ *  are width-based on the *viewport*, never on the screenshot's pixel sizes.
+ * ------------------------------------------------------------------------- */
+
+/* Large desktop — the reference three-column composition. */
+@media (max-width: 1680px) {
+    .ws-grid {
+        grid-template-columns:
+            minmax(240px, 21fr)
+            minmax(0, 56fr)
+            minmax(290px, 23fr);
+    }
+}
+
+/* Laptop: camera frames a little shorter, gaps tighter. */
+@media (max-width: 1440px) {
+    .ws-grid {
+        grid-template-columns: minmax(220px, 22fr) minmax(0, 55fr) minmax(280px, 23fr);
+    }
+
+    .ws {
+        --ws-cam-max-h: 44vh;
+        --ws-gap: 9px;
+        --ws-pad: 11px;
+    }
+
+    .ws-results {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Small laptop and tablet: cameras span the first row; information rails share
+    the row below so the feeds remain prominent without squeezing card content. */
+@media (max-width: 1200px) {
+    .ws-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    /* Cameras come first and span the full width. */
+    .ws-col-center {
+        grid-column: 1 / -1;
+        order: -1;
+    }
+
+    .ws-col-left,
+    .ws-col-right {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+
+    .ws {
+        --ws-cam-max-h: 40vh;
+    }
+}
+
+/* Tablet portrait: retain paired cameras and a two-rail support row. */
+@media (max-width: 900px) {
+    .ws-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ws-col-right {
+        max-height: none;
+        overflow-y: visible;
+    }
+
+    .ws {
+        --ws-cam-max-h: 36vh;
+        --ws-gap: 8px;
+        --ws-pad: 10px;
+    }
+
+    .ws-toolbar .vi-master-btn {
+        flex: 1 1 calc(50% - 5px);
+        min-width: 0;
+        height: 36px;
+    }
+
+    .ws-toolbar-spacer {
+        margin-left: 0;
+    }
+
+    .vi-content {
+        padding: 12px;
+    }
+}
+
+/* Narrow phones: stack cameras and supporting rails to keep controls usable. */
+@media (max-width: 700px) {
+    .ws-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ws-col-center {
+        grid-column: 1;
+    }
+
+    .ws-cameras {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ws-results {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ws-sides {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 9px;
+    }
+
+    .ws-sides-divider {
+        display: none;
+    }
+}
+
+/* Mobile: one column, tighter everything. */
+@media (max-width: 600px) {
+    .vi-content {
+        padding: 10px;
+    }
+
+    .ws {
+        --ws-cam-max-h: 30vh;
+        --ws-gap: 9px;
+        font-size: 13px;
+    }
+
+    body.vi-inspection-chrome .vi-header-title {
+        font-size: 17px;
+    }
+
+    body.vi-inspection-chrome .vi-top-header {
+        height: 56px;
+    }
+
+    .vi-ins-badge {
+        display: none;
+    }
+
+    .ws-cam-head-title {
+        font-size: 12px;
+    }
+
+    .ws-barcode {
+        flex-wrap: wrap;
+    }
+
+    .ws-barcode .vi-master-control {
+        flex: 1 1 100%;
+    }
+
+    .ws-config {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ws-toolbar .vi-master-btn {
+        flex: 1 1 calc(50% - 5px);
+        min-width: 0;
+        height: 36px;
+    }
+
+    .ws-table-wrap {
+        max-height: 200px;
+    }
+
+    .ws-roi {
+        flex-direction: column;
+    }
+
+    .ws-roi-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .ws-scan-actions .vi-master-btn {
+        flex: 1 1 100%;
+    }
+}
+
+/* Very short viewports (landscape phones): keep the frames visible. */
+@media (max-height: 620px) {
+    .ws {
+        --ws-cam-max-h: 42vh;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * 10. Fullscreen mode
+ *
+ *  The workspace expands to the viewport, camera frames take the extra height,
+ *  and the sidebar scrolls internally only when it genuinely needs to.
+ * ------------------------------------------------------------------------- */
+
+.ws:fullscreen {
+    height: 100vh;
+    height: 100dvh;
+    width: 100vw;
+    max-width: 100vw;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ws-gap);
+    padding: 10px;
+    background: var(--ws-page, #f1f5fa);
+}
+
+/* Fullscreen a single camera card: the frame takes the viewport. */
+.ws-view:fullscreen {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    background: var(--ws-navy);
+}
+
+.ws-view:fullscreen .vi-master-cam {
+    flex: 1 1 auto;
+    aspect-ratio: auto;
+    max-height: none;
+    min-height: 0;
+}
+
+.ws:fullscreen .ws-grid {
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-columns: minmax(230px, 20fr) minmax(0, 60fr) minmax(280px, 20fr);
+    align-items: stretch;
+}
+
+.ws:fullscreen .ws-col-center {
+    min-height: 0;
+}
+
+.ws:fullscreen .ws-col-left,
+.ws:fullscreen .ws-col-right {
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.ws:fullscreen .ws-cameras {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.ws:fullscreen .ws-view { min-height: 0; }
+
+.ws:fullscreen .vi-master-cam {
+    flex: 1 1 auto;
+    aspect-ratio: auto;
+    max-height: none;
+    min-height: 0;
+}
+
+@media (max-width: 1200px) {
+    .ws:fullscreen .ws-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 700px) {
+    .ws:fullscreen .ws-grid { grid-template-columns: minmax(0, 1fr); }
+    .ws:fullscreen .ws-cameras { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------------------------------------------------------------------------
+ * 11. Component states
+ * ------------------------------------------------------------------------- */
+
+.ws .vi-master-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 12px;
+    height: 34px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ws-text);
+    background: var(--ws-card);
+    border: 1px solid var(--ws-border-strong);
+    border-radius: var(--ws-radius-sm);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+
+.ws .vi-master-btn:hover:not(:disabled) {
+    border-color: var(--ws-blue);
+    color: var(--ws-blue-2);
+}
+
+.ws .vi-master-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.ws .vi-master-btn-primary {
+    background: var(--ws-blue);
+    border-color: var(--ws-blue);
+    color: #ffffff;
+}
+
+.ws .vi-master-btn-primary:hover:not(:disabled) {
+    background: var(--ws-blue-2);
+    border-color: var(--ws-blue-2);
+    color: #ffffff;
+}
+
+.ws .vi-master-btn-danger {
+    background: var(--ws-card);
+    border-color: rgba(220, 38, 38, 0.4);
+    color: var(--ws-red);
+}
+
+.ws .vi-master-btn-danger:hover:not(:disabled) {
+    background: var(--ws-red-bg);
+    border-color: var(--ws-red);
+    color: var(--ws-red);
+}
+
+/* Loading */
+.ws .vi-master-btn.is-loading {
+    pointer-events: none;
+    opacity: 0.8;
+}
+
+.ws .vi-master-btn.is-loading::after {
+    content: "";
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    animation: ws-spin 0.7s linear infinite;
+}
+
+@keyframes ws-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Status badges */
+.ws .vi-master-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    border-radius: 999px;
+    border: 1px solid var(--ws-border-strong);
+    background: var(--ws-neutral-bg);
+    color: var(--ws-neutral);
+    white-space: nowrap;
+}
+
+.ws .vi-master-badge.STARTING,
+.ws .vi-master-badge.CONNECTING {
+    color: var(--ws-amber);
+    border-color: rgba(180, 83, 9, 0.3);
+    background: var(--ws-amber-bg);
+}
+
+.ws .vi-master-badge.RUNNING,
+.ws .vi-master-badge.ON,
+.ws .vi-master-badge.COMPLETED {
+    color: var(--ws-green-strong);
+    border-color: rgba(22, 163, 74, 0.3);
+    background: var(--ws-green-bg);
+}
+
+.ws .vi-master-badge.ERROR,
+.ws .vi-master-badge.NOT_OK {
+    color: var(--ws-red);
+    border-color: rgba(220, 38, 38, 0.3);
+    background: var(--ws-red-bg);
+}
+
+.ws .vi-master-badge.STOPPED,
+.ws .vi-master-badge.OFF,
+.ws .vi-master-badge.PENDING {
+    color: var(--ws-neutral);
+    border-color: var(--ws-border-strong);
+    background: var(--ws-neutral-bg);
+}
+
+/* Badges sitting on the navy camera header keep their own contrast. */
+.ws-cam-head .vi-master-badge {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+}
+
+.ws-cam-head .vi-master-badge.ON,
+.ws-cam-head .vi-master-badge.RUNNING {
+    background: var(--ws-green);
+    border-color: var(--ws-green);
+    color: #ffffff;
+}
+
+.vi-master-alert {
+    min-height: 16px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--ws-red);
+    overflow-wrap: anywhere;
+}

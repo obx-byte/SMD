@@ -1,0 +1,50 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Inspection State - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-card">
+    <div class="vi-card-title">Current Inspection State</div>
+    {% if current_state %}
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">Status</span>
+            <span class="vi-detail-value">
+                <span class="vi-badge vi-badge-{{ current_state.status|lower }}">{{ current_state.get_status_display }}</span>
+            </span>
+        </div>
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">Part</span>
+            <span class="vi-detail-value">{{ current_state.part.part_number }} - {{ current_state.part.part_name }}</span>
+        </div>
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">Preset</span>
+            <span class="vi-detail-value">{{ current_state.preset.name }}</span>
+        </div>
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">Employee</span>
+            <span class="vi-detail-value">{{ current_state.employee.employee_name }} ({{ current_state.employee.employee_code }})</span>
+        </div>
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">Started At</span>
+            <span class="vi-detail-value">{{ current_state.started_at|date:"Y-m-d H:i:s" }}</span>
+        </div>
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">Updated At</span>
+            <span class="vi-detail-value">{{ current_state.updated_at|date:"Y-m-d H:i:s" }}</span>
+        </div>
+        {% if current_state.last_log %}
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">Last Log Result</span>
+            <span class="vi-detail-value">
+                <span class="vi-badge vi-badge-{{ current_state.last_log.result|lower }}">{{ current_state.last_log.get_result_display }}</span>
+            </span>
+        </div>
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">Last Log At</span>
+            <span class="vi-detail-value">{{ current_state.last_log.created_at|date:"Y-m-d H:i:s" }}</span>
+        </div>
+        {% endif %}
+    {% else %}
+        <p style="color: var(--vi-text-muted);">No active inspection state.</p>
+    {% endif %}
+</div>
+{% endblock %}

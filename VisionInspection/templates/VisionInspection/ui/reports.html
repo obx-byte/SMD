@@ -1,0 +1,237 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Inspection Report — VisionInspection{% endblock %}
+
+{% block extra_head %}
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}">
+{% endblock %}
+
+{% block header_title %}Inspection Report{% endblock %}
+
+{% block content %}
+<div class="vi-report">
+
+    {# ============ Page heading ============ #}
+    <div class="vi-page-head">
+        <div>
+            <h2 class="vi-page-title">Inspection Report</h2>
+            <p class="vi-page-subtitle">View and export Airbag Stitch Inspection records.</p>
+        </div>
+    </div>
+
+    {# ============ Filters (applied on the backend) ============ #}
+    <div class="vi-card vi-filter-card">
+        <form method="get" action="{% url 'VisionInspection:ui-reports' %}" class="vi-report-filters" id="reportFilters">
+            <div class="vi-filter-grid">
+                <div class="vi-field">
+                    <label for="reportDateFrom">Date From</label>
+                    <input type="date" id="reportDateFrom" name="date_from" value="{{ filters.date_from }}" class="vi-control">
+                </div>
+                <div class="vi-field">
+                    <label for="reportDateTo">Date To</label>
+                    <input type="date" id="reportDateTo" name="date_to" value="{{ filters.date_to }}" class="vi-control">
+                </div>
+                <div class="vi-field">
+                    <label for="reportPart">Part</label>
+                    <select id="reportPart" name="part" class="vi-control">
+                        <option value="">All Parts</option>
+                        {% for part in parts %}
+                            <option value="{{ part.part_number }}" {% if filters.part == part.part_number %}selected{% endif %}>
+                                {{ part.part_number }}{% if part.part_name %} — {{ part.part_name }}{% endif %}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label for="reportEmployee">Employee</label>
+                    <select id="reportEmployee" name="employee" class="vi-control">
+                        <option value="">All Employees</option>
+                        {% for employee in employees %}
+                            <option value="{{ employee.code }}" {% if filters.employee == employee.code %}selected{% endif %}>{{ employee.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label for="reportResult">Result Status</label>
+                    <select id="reportResult" name="result" class="vi-control">
+                        {% for option in result_options %}
+                            <option value="{{ option.value }}" {% if filters.result == option.value %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label for="reportPartNumber">Part Number</label>
+                    <input type="text" id="reportPartNumber" name="part_number" value="{{ filters.part_number }}"
+                           class="vi-control" placeholder="Enter Part No." autocomplete="off">
+                </div>
+                <div class="vi-field">
+                    <label for="reportPartName">Part Name</label>
+                    <input type="text" id="reportPartName" name="part_name" value="{{ filters.part_name }}"
+                           class="vi-control" placeholder="Enter Part Name" autocomplete="off">
+                </div>
+                <div class="vi-field">
+                    <label for="reportUniqueNumber">Unique No. / Serial No.</label>
+                    <input type="text" id="reportUniqueNumber" name="unique_number" value="{{ filters.unique_number }}"
+                           class="vi-control" placeholder="Enter Unique No." autocomplete="off">
+                </div>
+            </div>
+            <div class="vi-filter-actions">
+                <button type="submit" class="vi-btn vi-btn-primary">&#128269; Search</button>
+                <a class="vi-btn" href="{% url 'VisionInspection:ui-reports' %}">&#8634; Reset</a>
+                {% if filters_active %}
+                    <span class="vi-filter-note">Filters applied — exports and the summary cards use the same selection.</span>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    {# ============ Summary cards ============ #}
+    <div class="vi-grid vi-grid-cols-4">
+        <div class="vi-card vi-kpi" data-tone="blue">
+            <span class="vi-kpi-icon" aria-hidden="true">&#128203;</span>
+            <div class="vi-kpi-body">
+                <div class="vi-kpi-value">{{ summary.total }}</div>
+                <div class="vi-kpi-label">Total Inspections</div>
+                <div class="vi-kpi-sub">Matching the filters</div>
+            </div>
+        </div>
+        <div class="vi-card vi-kpi" data-tone="green">
+            <span class="vi-kpi-icon" aria-hidden="true">&#10003;</span>
+            <div class="vi-kpi-body">
+                <div class="vi-kpi-value">{{ summary.ok }}</div>
+                <div class="vi-kpi-label">Total OK</div>
+                <div class="vi-kpi-sub">({{ summary.ok_pct|floatformat:"1" }}%)</div>
+            </div>
+        </div>
+        <div class="vi-card vi-kpi" data-tone="red">
+            <span class="vi-kpi-icon" aria-hidden="true">&#10005;</span>
+            <div class="vi-kpi-body">
+                <div class="vi-kpi-value">{{ summary.not_ok }}</div>
+                <div class="vi-kpi-label">Total NOT OK</div>
+                <div class="vi-kpi-sub">({{ summary.not_ok_pct|floatformat:"1" }}%)</div>
+            </div>
+        </div>
+        <div class="vi-card vi-kpi" data-tone="purple">
+            <span class="vi-kpi-icon" aria-hidden="true">&#9888;</span>
+            <div class="vi-kpi-body">
+                <div class="vi-kpi-value">{{ summary.incomplete_error }}</div>
+                <div class="vi-kpi-label">Incomplete / Error</div>
+                <div class="vi-kpi-sub">({{ summary.incomplete_error_pct|floatformat:"1" }}%)</div>
+            </div>
+        </div>
+    </div>
+
+    {# ============ Inspection records ============ #}
+    <div class="vi-card vi-panel">
+        <div class="vi-report-toolbar">
+            <h3 class="vi-card-title">Inspection Records</h3>
+            <div class="vi-report-tools">
+                <a class="vi-btn vi-btn-success" href="{% url 'VisionInspection:ui-report-export-excel' %}?{{ export_query }}"
+                   title="Export the filtered records as an Excel workbook">&#128196; Export Excel</a>
+                <a class="vi-btn vi-btn-danger" href="{% url 'VisionInspection:ui-report-export-pdf' %}?{{ export_query }}"
+                   title="Export the filtered records as a PDF document">&#128196; Export PDF</a>
+                <button type="button" class="vi-btn" id="reportPrintBtn" title="Print the report">&#128424; Print</button>
+                <input type="text" id="reportSearch" class="vi-report-search" placeholder="Search…" aria-label="Search records">
+                <span class="vi-report-page-size">
+                    Show
+                    <select id="reportPageSize" class="vi-control vi-control-sm" aria-label="Records per page">
+                        {% for size in page_sizes %}
+                            <option value="{{ size }}" {% if size == page_size %}selected{% endif %}>{{ size }}</option>
+                        {% endfor %}
+                    </select>
+                    entries
+                </span>
+            </div>
+        </div>
+
+        <div class="vi-table-wrap">
+            <table class="vi-table vi-report-table" id="reportTable">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Date &amp; Time</th>
+                        <th>Part No.</th>
+                        <th>Part Name</th>
+                        <th>Employee</th>
+                        <th>Unique No.</th>
+                        <th>Result</th>
+                        <th>Front Result</th>
+                        <th>Back Result</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in recent_rows %}
+                        <tr data-report-row>
+                            <td>{{ page_first|add:forloop.counter0 }}</td>
+                            <td>{{ row.log.timestamp|date:"Y-m-d H:i:s" }}</td>
+                            <td>{{ row.log.part_number|default:"—" }}</td>
+                            <td>{{ row.part_name|default:"—" }}</td>
+                            <td>{{ row.employee_label }}</td>
+                            <td>{{ row.unique_number|default:"—" }}</td>
+                            <td><span class="vi-badge {{ row.result_badge }}">{{ row.result_label }}</span></td>
+                            <td><span class="vi-badge {{ row.front_badge }}">{{ row.front_label }}</span></td>
+                            <td><span class="vi-badge {{ row.back_badge }}">{{ row.back_label }}</span></td>
+                            <td>
+                                <a class="vi-btn vi-btn-sm" href="{% url 'VisionInspection:history-detail' row.log.pk %}"
+                                   title="View inspection details" aria-label="View inspection details">&#128065;</a>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="10">
+                                <div class="vi-empty">
+                                    <div class="vi-empty-icon">&#9702;</div>
+                                    <div class="vi-empty-title">No inspection records found</div>
+                                    <div class="vi-empty-text">No stored inspection matches the selected filters. Reset the filters to see all records.</div>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    <tr id="reportSearchEmpty" style="display:none">
+                        <td colspan="10">
+                            <div class="vi-empty">
+                                <div class="vi-empty-title">No records on this page match the search</div>
+                                <div class="vi-empty-text">Clear the search box to see every record of this page again.</div>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="vi-report-footer">
+            <span class="vi-report-count">
+                {% if page_first %}
+                    Showing {{ page_first }} to {{ page_last }} of {{ page_total }} entries
+                {% else %}
+                    Showing 0 to 0 of 0 entries
+                {% endif %}
+            </span>
+            {% if page_obj.paginator.num_pages > 1 %}
+                <div class="vi-pagination">
+                    {% if page_obj.has_previous %}
+                        <a class="vi-btn vi-btn-sm" href="?page={{ page_obj.previous_page_number }}&{{ export_query }}">&laquo; Previous</a>
+                    {% endif %}
+                    {% for number in page_links %}
+                        {% if number %}
+                            <a class="vi-btn vi-btn-sm {% if number == page_obj.number %}vi-btn-primary{% endif %}"
+                               href="?page={{ number }}&{{ export_query }}">{{ number }}</a>
+                        {% else %}
+                            <span class="vi-page-ellipsis">…</span>
+                        {% endif %}
+                    {% endfor %}
+                    {% if page_obj.has_next %}
+                        <a class="vi-btn vi-btn-sm" href="?page={{ page_obj.next_page_number }}&{{ export_query }}">Next &raquo;</a>
+                    {% endif %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+    <script src="{% static 'VisionInspection/js/report.js' %}" defer></script>
+{% endblock %}

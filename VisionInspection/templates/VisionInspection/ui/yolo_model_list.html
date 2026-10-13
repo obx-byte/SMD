@@ -1,0 +1,56 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}YOLO Models — VisionInspection{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>YOLO Models</h2>
+</div>
+
+<div class="vi-card">
+    <form method="get" class="vi-toolbar">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search model name, version, or class...">
+        <select name="is_active">
+            <option value="">All Status</option>
+            <option value="1" {% if is_active == '1' %}selected{% endif %}>Active</option>
+            <option value="0" {% if is_active == '0' %}selected{% endif %}>Inactive</option>
+        </select>
+        <button type="submit" class="vi-btn vi-btn-primary">Search</button>
+        <a href="{% url 'VisionInspection:ui-yolo-models' %}" class="vi-btn">Reset</a>
+    </form>
+</div>
+
+<div class="vi-card" style="padding: 0; overflow-x: auto;">
+    <table class="vi-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Version</th>
+                <th>Part Class</th>
+                <th>Classes</th>
+                <th>Status</th>
+                <th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in models %}
+            <tr>
+                <td>{{ m.name }}</td>
+                <td>{{ m.version|default:"—" }}</td>
+                <td>{{ m.part_class|default:"—" }}</td>
+                <td>{{ m.num_classes }}</td>
+                <td>
+                    <span class="vi-badge {% if m.is_active %}vi-badge-ok{% else %}vi-badge-skip{% endif %}">
+                        {% if m.is_active %}Active{% else %}Inactive{% endif %}
+                    </span>
+                </td>
+                <td>{{ m.created_at|date:"Y-m-d H:i" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6">No YOLO models found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

@@ -1,0 +1,154 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Inspection Master — Vision Inspection{% endblock %}
+
+{% block extra_head %}
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_master.css' %}">
+{% endblock %}
+
+{% block header_title %}Inspection Master{% endblock %}
+{% block header_actions %}
+        {% if user.is_authenticated %}
+            {% if user.is_staff %}<span class="vi-header-role">Admin</span>{% endif %}
+        {% endif %}
+        {% if station_id %}<span class="vi-header-station" title="Station identifier recorded on saved inspections">Station {{ station_id }}</span>{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="vi-master">
+    {# Compact workflow strip: state + next step (no duplicate title) #}
+    <div class="vi-master-strip">
+        <span id="mxInspStateBadge" class="vi-master-badge STOPPED">
+            <span class="vi-master-dot"></span><span id="mxInspStateText">Stopped</span>
+        </span>
+        <span class="vi-master-hint" id="mxHint">Select a part to begin.</span>
+    </div>
+
+    {# Part / camera controls + actions #}
+    <div class="vi-master-toolbar">
+        <div class="vi-master-toolbar-row vi-master-selects">
+            <div class="vi-master-field">
+                <label for="mxPartSelect">Part Number</label>
+                <select id="mxPartSelect" class="vi-master-control">
+                    <option value="">— Select part —</option>
+                    {% for p in parts %}
+                    <option value="{{ p.part_number }}" {% if selected_part == p.part_number %}selected{% endif %}>
+                        {{ p.part_number }}{% if p.part_desc %} — {{ p.part_desc }}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="vi-master-field">
+                <label for="mxCamSource">Camera Source</label>
+                <select id="mxCamSource" class="vi-master-control">
+                    {% for src in camera_capabilities.sources %}
+                        {% if src.available %}
+                        <option value="{{ src.id }}">{{ src.label }}</option>
+                        {% else %}
+                        <option value="{{ src.id }}" disabled title="Not available on this system">{{ src.label }} — unavailable</option>
+                        {% endif %}
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="vi-master-field" id="mxCamIndexField">
+                <label for="mxCamIndex">Camera Index</label>
+                <select id="mxCamIndex" class="vi-master-control">
+                    {% for i in "012345" %}
+                    <option value="{{ forloop.counter0 }}">Camera {{ forloop.counter0 }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="vi-master-toolbar-row vi-master-actions-top">
+            <button id="mxStartCamBtn" class="vi-master-btn vi-master-btn-primary" type="button">&#9679; Start Camera</button>
+            <button id="mxStopCamBtn" class="vi-master-btn" type="button" disabled>&#9632; Stop Camera</button>
+            <button id="mxStartInspBtn" class="vi-master-btn" type="button">&#9654; Start Inspection</button>
+            <button id="mxStopInspBtn" class="vi-master-btn vi-master-btn-danger" type="button" disabled>&#9632; Stop Inspection</button>
+        </div>
+    </div>
+
+    <div class="vi-master-grid">
+        {# ---- Left: live camera + ROI controls ---- #}
+        <div class="vi-master-card">
+            <div class="vi-master-card-title">
+                <span class="vi-master-dot" style="color:#22d3ee"></span> Live Camera — Draw ROI
+            </div>
+            <div class="vi-master-cam" id="mxCamWrap">
+                <img id="mxCamFeed" class="vi-master-feed" alt="Live camera preview" style="display:none" />
+                <canvas id="mxDrawCanvas" class="vi-master-draw"></canvas>
+                <div class="vi-master-cam-overlay" id="mxCamOverlay">Camera stopped — click “Start Camera”</div>
+            </div>
+
+            {# ROI coordinates + actions — directly under the preview #}
+            <div class="vi-master-roi-row">
+                <div class="vi-master-roi-readout">
+                    <div class="vi-master-roi-num">X<b id="mxRoiX">—</b></div>
+                    <div class="vi-master-roi-num">Y<b id="mxRoiY">—</b></div>
+                    <div class="vi-master-roi-num">Width<b id="mxRoiW">—</b></div>
+                    <div class="vi-master-roi-num">Height<b id="mxRoiH">—</b></div>
+                    <div class="vi-master-roi-num">Frame<b id="mxRefDims">—</b></div>
+                </div>
+                <div class="vi-master-actions">
+                    <button id="mxSaveRoiBtn" class="vi-master-btn vi-master-btn-primary" type="button" disabled>&#128190; Save ROI</button>
+                    <button id="mxEditRoiBtn" class="vi-master-btn" type="button" disabled>&#9998; Edit ROI</button>
+                    <button id="mxResetRoiBtn" class="vi-master-btn" type="button">&#8634; Reset ROI</button>
+                </div>
+            </div>
+            <div class="vi-master-alert" id="mxError"></div>
+            <div class="vi-master-note">
+                Drag on the live preview to draw the inspection ROI. Saving stores it as the reusable camera configuration (front/back) so subsequent parts skip redrawing — only the cropped ROI is used for inference.
+            </div>
+        </div>
+
+        {# ---- Right: Inspection Status ---- #}
+        <div>
+            <div class="vi-master-card">
+                <div class="vi-master-card-title">
+                    <span class="vi-master-dot" style="color:#34d399"></span> Inspection Status
+                </div>
+                <div class="vi-master-stat"><span class="k">Inspection</span><span class="v"><span id="mxStateInline" class="vi-master-badge STOPPED">STOPPED</span></span></div>
+                <div class="vi-master-stat"><span class="k">Camera</span><span class="v"><span id="mxCamInline" class="vi-master-badge OFF">OFF</span></span></div>
+                <div class="vi-master-stat"><span class="k">Model</span><span class="v"><span id="mxModelInline" class="vi-master-badge STOPPED">NOT CONFIGURED</span></span></div>
+                <div class="vi-master-stat"><span class="k">Saved ROI</span><span class="v" id="mxRoiSaved">—</span></div>
+
+                <div class="vi-master-metrics">
+                    <div class="vi-master-stat"><span class="k">Processing FPS</span><span class="v" id="mxFps">—</span></div>
+                    <div class="vi-master-stat"><span class="k">Inference latency</span><span class="v" id="mxLatency">—</span></div>
+                    <div class="vi-master-stat"><span class="k">End-to-end</span><span class="v" id="mxE2E">—</span></div>
+                    <div class="vi-master-stat"><span class="k">Frame age</span><span class="v" id="mxFrameAge">—</span></div>
+                    <div class="vi-master-stat"><span class="k">Dropped frames</span><span class="v" id="mxDropped">—</span></div>
+                </div>
+
+                <div class="vi-master-predict">
+                    <div class="label" id="mxPrediction">ROI READY — MODEL NOT CONFIGURED</div>
+                    <div class="hint" id="mxPredictionHint">A YOLO model will be attached later. No predictions are fabricated.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{{ camera_capabilities|json_script:"vi-cam-caps" }}
+<script>
+    window.__VI_MASTER__ = {
+        capabilities: JSON.parse(document.getElementById("vi-cam-caps").textContent),
+        urls: {
+            cameraStart: "{% url 'VisionInspection:camera-start' %}",
+            cameraStop: "{% url 'VisionInspection:camera-stop' %}",
+            cameraStatus: "{% url 'VisionInspection:camera-status' %}",
+            cameraStream: "{% url 'VisionInspection:camera-stream' %}",
+            cameraResolution: "{% url 'VisionInspection:master-camera-resolution' %}",
+            saveRoi: "{% url 'VisionInspection:master-roi-save' %}",
+            start: "{% url 'VisionInspection:master-inspection-start' %}",
+            stop: "{% url 'VisionInspection:master-inspection-stop' %}",
+            status: "{% url 'VisionInspection:master-inspection-status' %}",
+            roiGet: "{% url 'VisionInspection:master-roi-get' %}"
+        },
+        csrfToken: (document.cookie.split("; ").find(c => c.startsWith("csrftoken=")) || "").split("=")[1] || ""
+    };
+</script>
+<script src="{% static 'VisionInspection/js/inspection_master.js' %}" defer></script>
+{% endblock %}

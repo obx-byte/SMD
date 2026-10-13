@@ -1,0 +1,56 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Training Jobs - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-card">
+    <div class="vi-table-wrap">
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>Job ID</th>
+                    <th>Name</th>
+                    <th>YOLO Model</th>
+                    <th>Status</th>
+                    <th>Progress</th>
+                    <th>Started</th>
+                    <th>Completed</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in training_jobs %}
+                <tr>
+                    <td>{{ job.id }}</td>
+                    <td>{{ job.name }}</td>
+                    <td>{{ job.yolo_model.name }} v{{ job.yolo_model.version }}</td>
+                    <td>
+                        {% if job.status == 'pending' %}
+                            <span class="vi-badge vi-badge-pending">Pending</span>
+                        {% elif job.status == 'running' %}
+                            <span class="vi-badge vi-badge-running">Running</span>
+                        {% elif job.status == 'completed' %}
+                            <span class="vi-badge vi-badge-ok">Completed</span>
+                        {% elif job.status == 'failed' %}
+                            <span class="vi-badge vi-badge-error">Failed</span>
+                        {% else %}
+                            <span class="vi-badge vi-badge-inactive">{{ job.status|title }}</span>
+                        {% endif %}
+                    </td>
+                    <td style="min-width: 160px;">
+                        {{ job.progress|floatformat:1 }}%
+                        <div class="vi-progress-bar">
+                            <div class="vi-progress-fill" style="width: {{ job.progress|floatformat:0 }}%;"></div>
+                        </div>
+                    </td>
+                    <td>{{ job.started_at|date:"Y-m-d H:i"|default:"-" }}</td>
+                    <td>{{ job.completed_at|date:"Y-m-d H:i"|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" style="text-align:center; color: var(--vi-text-muted);">No training jobs found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

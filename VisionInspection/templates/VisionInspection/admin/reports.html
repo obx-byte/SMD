@@ -1,0 +1,109 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Inspection Reports - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-card">
+    <form method="get" class="vi-form-row">
+        <div class="vi-form-group">
+            <label for="id_date_from">Date From</label>
+            <input type="date" name="date_from" id="id_date_from" value="{{ request.GET.date_from|default:'' }}">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_date_to">Date To</label>
+            <input type="date" name="date_to" id="id_date_to" value="{{ request.GET.date_to|default:'' }}">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_employee">Employee</label>
+            <input type="text" name="employee" id="id_employee" value="{{ request.GET.employee|default:'' }}" placeholder="Employee name or code">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_part_number">Part Number</label>
+            <input type="text" name="part_number" id="id_part_number" value="{{ request.GET.part_number|default:'' }}" placeholder="Part number">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_result">Result</label>
+            <select name="result" id="id_result">
+                <option value="">All</option>
+                <option value="OK" {% if request.GET.result == 'OK' %}selected{% endif %}>OK</option>
+                <option value="NOT_OK" {% if request.GET.result == 'NOT_OK' %}selected{% endif %}>NOT_OK</option>
+                <option value="ERROR" {% if request.GET.result == 'ERROR' %}selected{% endif %}>Error</option>
+            </select>
+        </div>
+        <div class="vi-form-group">
+            <label for="id_preset">Preset</label>
+            <select name="preset" id="id_preset">
+                <option value="">All Presets</option>
+                {% for preset in presets %}
+                <option value="{{ preset.id }}" {% if request.GET.preset == preset.id|stringformat:'s' %}selected{% endif %}>
+                    {{ preset.name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="vi-form-group">
+            <label>&nbsp;</label>
+            <button type="submit" class="vi-btn vi-btn-primary">Generate Report</button>
+        </div>
+    </form>
+</div>
+
+<div class="vi-grid vi-grid-cols-5">
+    <div class="vi-summary-card">
+        <div class="vi-summary-value">{{ total_inspections }}</div>
+        <div class="vi-summary-label">Total Inspections</div>
+    </div>
+    <div class="vi-summary-card">
+        <div class="vi-summary-value">{{ ok_count }}</div>
+        <div class="vi-summary-label">OK</div>
+    </div>
+    <div class="vi-summary-card">
+        <div class="vi-summary-value">{{ not_ok_count }}</div>
+        <div class="vi-summary-label">NOT OK</div>
+    </div>
+    <div class="vi-summary-card">
+        <div class="vi-summary-value">{{ error_count }}</div>
+        <div class="vi-summary-label">Error</div>
+    </div>
+    <div class="vi-summary-card">
+        <div class="vi-summary-value">{{ ok_percent|floatformat:1 }}%</div>
+        <div class="vi-summary-label">OK %</div>
+    </div>
+</div>
+
+<div class="vi-card">
+    <div class="vi-card-title">Matching Logs</div>
+    <div class="vi-table-wrap">
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Employee</th>
+                    <th>Part</th>
+                    <th>Preset</th>
+                    <th>Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.created_at|date:"Y-m-d H:i:s" }}</td>
+                    <td>{{ log.employee.employee_name }}</td>
+                    <td>{{ log.part.part_number }}</td>
+                    <td>{{ log.preset.name }}</td>
+                    <td>
+                        <span class="vi-badge vi-badge-{{ log.result|lower }}">{{ log.get_result_display }}</span>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5" style="text-align:center; color: var(--vi-text-muted);">No logs match the selected criteria.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="vi-pagination">
+        Pagination handled by Django ORM in views.
+    </div>
+</div>
+{% endblock %}

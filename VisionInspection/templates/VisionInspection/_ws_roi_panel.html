@@ -1,0 +1,15 @@
+{# ROI coordinate panel + controls for one workspace view (front/back). Ids are scoped by view and are required by inspection_workspace.js - do not rename them. #}
+<div class="ws-roi">
+    <div class="ws-roi-grid">
+        <div class="ws-roi-cell">X<b id="ro{{ view|capfirst }}X">&mdash;</b></div>
+        <div class="ws-roi-cell">Y<b id="ro{{ view|capfirst }}Y">&mdash;</b></div>
+        <div class="ws-roi-cell">Width<b id="ro{{ view|capfirst }}W">&mdash;</b></div>
+        <div class="ws-roi-cell">Height<b id="ro{{ view|capfirst }}H">&mdash;</b></div>
+        <div class="ws-roi-cell">Frame<b id="ro{{ view|capfirst }}Ref">&mdash;</b></div>
+    </div>
+    <div class="ws-roi-actions">
+        <button id="ro{{ view|capfirst }}Edit" class="vi-master-btn" type="button" disabled title="Redraw the ROI on the live preview">&#9998; Edit ROI</button>
+        <button id="ro{{ view|capfirst }}Save" class="vi-master-btn vi-master-btn-primary" type="button" disabled title="Save the drawn ROI for this view">&#128190; Save ROI</button>
+        <button id="ro{{ view|capfirst }}Reset" class="vi-master-btn" type="button" title="Discard the ROI for this view">&#8634; Reset ROI</button>
+    </div>
+</div>

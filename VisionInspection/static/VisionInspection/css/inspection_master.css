@@ -1,0 +1,418 @@
+
+.vi-master {
+    --mx-cyan: #713CF5;
+    --mx-green: #20B66F;
+    --mx-amber: #F5A623;
+    --mx-red: #F04458;
+    --mx-card: #FFFFFF;
+    --mx-card-alt: #FAF6FF;
+    --mx-border: #E6E3F1;
+    --mx-heading: #11182F;
+    --mx-muted: #737C98;
+}
+
+[data-theme="green"] .vi-master {
+    --mx-cyan: #2F9276;
+    --mx-green: #2F9276;
+    --mx-card-alt: #F3F8F5;
+    --mx-border: #E2EDE7;
+}
+
+.vi-master {
+    --mx-cyan: #6525F5;
+    --mx-cyan-2: #8A4DFA;
+    --mx-green: #20B66F;
+    --mx-amber: #F5A623;
+    --mx-red: #F04458;
+    --mx-card: #FFFFFF;
+    --mx-card-alt: #FAF6FF;
+    --mx-border: #E6E3F1;
+    --mx-heading: #11182F;
+    --mx-muted: #6B7280;
+    --mx-input-bg: #F3F2F9;
+}
+
+[data-theme="green"] .vi-master {
+    --mx-cyan: #2F9276;
+    --mx-cyan-2: #37A585;
+    --mx-card-alt: #F3F9F6;
+    --mx-border: #E2EDE7;
+}
+
+/* Compact workflow strip (state + next step; no duplicate page title) */
+.vi-master-strip {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.vi-master-hint {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mx-heading);
+    background: var(--mx-card-alt);
+    border: 1px dashed var(--mx-border);
+    border-radius: 999px;
+    padding: 6px 14px;
+}
+
+/* Compact responsive control panel: selects row + actions row */
+.vi-master-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 12px;
+    background: var(--mx-card);
+    border: 1px solid var(--mx-border);
+    border-radius: 12px;
+}
+
+.vi-master-toolbar-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.vi-master-selects { flex: 1 1 auto; }
+
+.vi-master-actions-top .vi-master-btn {
+    flex: 1 1 160px;
+}
+
+.vi-master-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex: 1 1 160px;
+    min-width: 130px;
+}
+
+.vi-master-field label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--mx-muted);
+    font-weight: 600;
+}
+
+.vi-master-control {
+    appearance: none;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    background: var(--mx-input-bg);
+    border: 1px solid var(--mx-border);
+    color: var(--mx-heading);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    outline: none;
+}
+
+.vi-master-control:focus {
+    border-color: var(--mx-cyan);
+    box-shadow: 0 0 0 3px rgba(101, 37, 245, 0.15);
+}
+
+.vi-master-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 10px 16px;
+    min-height: 46px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid var(--mx-border);
+    background: var(--mx-input-bg);
+    color: var(--mx-heading);
+    transition: border-color 0.15s, filter 0.15s, opacity 0.15s;
+}
+
+.vi-master-btn:hover:not(:disabled) { border-color: var(--mx-cyan); }
+.vi-master-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.vi-master-btn-primary {
+    background: linear-gradient(160deg, var(--mx-cyan), var(--mx-cyan-2));
+    border-color: transparent;
+    color: #ffffff;
+    min-height: 46px;
+}
+
+.vi-master-btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+
+.vi-master-btn-danger {
+    background: #fff;
+    color: var(--mx-red);
+    border-color: rgba(240, 68, 88, 0.45);
+}
+
+.vi-master-btn-danger:hover:not(:disabled) {
+    border-color: var(--mx-red);
+    background: rgba(240, 68, 88, 0.08);
+}
+
+.vi-master-grid {
+    display: grid;
+    width: 100%;
+    max-width: 100%;
+    /* Desktop: camera ~62% / status ~38%, never overflowing (min-width:0). */
+    grid-template-columns: minmax(0, 1.62fr) minmax(300px, 1fr);
+    gap: 20px;
+    align-items: start;
+}
+
+.vi-master-grid > * {
+    min-width: 0;
+}
+
+.vi-master-card {
+    background: #ffffff;
+    border: 1px solid var(--mx-border);
+    border-radius: 12px;
+    padding: 14px;
+    box-shadow: 0 1px 2px rgba(17, 24, 47, 0.05), 0 8px 24px rgba(113, 60, 245, 0.05);
+}
+
+.vi-master-card-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--mx-heading);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Camera preview — responsive landscape, bounded by viewport height */
+.vi-master-cam {
+    position: relative;
+    width: 100%;
+    max-width: 100%;
+    aspect-ratio: 16 / 9;
+    max-height: 56vh;
+    margin: 0 auto;
+    background: #000;
+    border: 1px solid var(--mx-border);
+    border-radius: 10px;
+    overflow: hidden;
+    touch-action: none; /* drawing gestures, not page scroll */
+}
+
+.vi-master-cam img.vi-master-feed {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+.vi-master-cam canvas.vi-master-draw {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+}
+
+.vi-master-cam-overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--mx-muted);
+    font-size: 14px;
+    text-align: center;
+    pointer-events: none;
+}
+
+.vi-master-cam-overlay.hidden { display: none; }
+
+/* ROI readout + actions — directly below the preview */
+.vi-master-roi-row {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.vi-master-roi-readout {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+    flex: 1 1 auto;
+    border: 1px solid var(--mx-border);
+    border-radius: 10px;
+    padding: 12px 14px;
+}
+
+.vi-master-roi-num {
+    font-size: 11px;
+    color: var(--mx-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.vi-master-roi-num b {
+    display: block;
+    font-size: 18px;
+    color: var(--mx-heading);
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+}
+
+.vi-master-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    align-items: center;
+}
+
+/* Compact metrics group inside the status card */
+.vi-master-metrics {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--mx-border);
+}
+
+/* Status panel */
+.vi-master-stat {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--mx-border);
+    font-size: 13px;
+}
+
+.vi-master-stat:last-child { border-bottom: none; }
+.vi-master-stat .k { color: var(--mx-muted); }
+.vi-master-stat .v { color: var(--mx-heading); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.vi-master-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: 1px solid var(--mx-border);
+    color: var(--mx-muted);
+}
+
+.vi-master-badge.STOPPED { color: var(--mx-muted); border-color: var(--mx-border); }
+.vi-master-badge.STARTING { color: var(--mx-cyan); border-color: rgba(101,37,245,.4); background: rgba(101,37,245,.08); }
+.vi-master-badge.RUNNING { color: var(--mx-green); border-color: rgba(32,182,111,.4); background: rgba(32,182,111,.08); }
+.vi-master-badge.ERROR { color: var(--mx-red); border-color: rgba(240,68,88,.4); background: rgba(240,68,88,.08); }
+.vi-master-badge.ON { color: var(--mx-green); border-color: rgba(32,182,111,.4); }
+.vi-master-badge.OFF { color: var(--mx-muted); border-color: var(--mx-border); }
+.vi-master-badge.CONNECTING { color: var(--mx-amber); border-color: rgba(245,166,35,.4); }
+.vi-master-badge.error, .vi-master-badge.ERROR_cam { color: var(--mx-red); border-color: rgba(240,68,88,.4); }
+
+.vi-master-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+    box-shadow: 0 0 8px currentColor;
+}
+
+.vi-master-predict {
+    margin-top: 10px;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--mx-card-alt);
+    border: 1px solid var(--mx-border);
+    font-size: 13px;
+}
+
+.vi-master-predict .label {
+    color: var(--mx-heading);
+    font-weight: 700;
+}
+
+.vi-master-predict .hint {
+    color: var(--mx-muted);
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.vi-master-note {
+    font-size: 11px;
+    color: var(--mx-muted);
+    margin-top: 8px;
+    line-height: 1.5;
+}
+
+.vi-master-alert {
+    font-size: 12px;
+    color: var(--mx-red);
+    margin-top: 6px;
+    min-height: 16px;
+}
+
+/* ---------------------------------------------------------------------------
+   Responsive — Inspection Master
+   Landscape (>=1024px): camera + status side-by-side (handled by base grid).
+   Tablet portrait (<=1023px): stack cards; ROI controls stack.
+   Mobile (<640px): full-width fields/buttons; two-column ROI coordinate grid.
+   --------------------------------------------------------------------------- */
+@media (max-width: 1180px) {
+    .vi-master-grid {
+        grid-template-columns: minmax(0, 1.45fr) minmax(280px, 1fr);
+        gap: 16px;
+    }
+}
+
+@media (max-width: 1023px) {
+    /* Tablet portrait: stack toolbar, camera, ROI and status vertically. */
+    .vi-master-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .vi-master-cam {
+        max-height: 42vh;
+    }
+    .vi-master-roi-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .vi-master-roi-readout {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .vi-master-actions {
+        justify-content: flex-start;
+    }
+    .vi-master-actions .vi-master-btn,
+    .vi-master-actions-top .vi-master-btn {
+        flex: 1 1 auto;
+    }
+}
+
+@media (max-width: 640px) {
+    .vi-master-field {
+        flex: 1 1 100%;
+    }
+    .vi-master-actions-top .vi-master-btn,
+    .vi-master-actions .vi-master-btn {
+        flex: 1 1 100%;
+    }
+    .vi-master-roi-readout {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .vi-master-cam {
+        max-height: 38vh;
+    }
+}

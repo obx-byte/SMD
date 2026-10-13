@@ -1,0 +1,74 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Settings — Vision Inspection{% endblock %}
+
+{% block header_title %}Settings{% endblock %}
+{% block header_actions %}
+    {% if user.is_authenticated %}
+        <span class="vi-header-user">{{ user.get_full_name|default:user.username }}</span>
+    {% else %}
+        <span class="vi-header-user">Operator</span>
+    {% endif %}
+    <a href="{% url 'VisionInspection:dashboard' %}" class="vi-header-action" title="Dashboard" aria-label="Dashboard">&#9632;</a>
+{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>System Settings</h2>
+</div>
+
+<div class="vi-card" style="max-width:760px">
+    <div class="vi-card-title">Runtime Configuration</div>
+    <p class="vi-card-sub" style="margin-bottom:14px">
+        Values below are read from the active configuration. Unset options show
+        the application default.
+    </p>
+    <div class="vi-table-wrap">
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>Setting</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Dashboard refresh interval</td>
+                    <td>{{ poll_interval|floatformat:0 }} ms</td>
+                </tr>
+                <tr>
+                    <td>Django version</td>
+                    <td>{{ django_version }}</td>
+                </tr>
+                <tr>
+                    <td>Database engine</td>
+                    <td>{{ settings.DATABASE_ENGINE }}</td>
+                </tr>
+                <tr>
+                    <td>Debug mode</td>
+                    <td>
+                        {% if settings.DEBUG %}
+                            <span class="vi-badge vi-badge-pending">Enabled</span>
+                        {% else %}
+                            <span class="vi-badge vi-badge-ok">Disabled</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% for key, value in settings.items %}
+                <tr>
+                    <td>{{ key }}</td>
+                    <td>
+                        {% if value == "" or value is None %}
+                            <span style="opacity:.6">not set</span>
+                        {% else %}
+                            {{ value }}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

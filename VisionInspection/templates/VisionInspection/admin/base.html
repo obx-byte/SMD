@@ -1,0 +1,102 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}VisionInspection Admin{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}">
+</head>
+<body>
+    <aside class="vi-sidebar" id="viSidebar">
+        <div class="vi-sidebar-header">
+            <span class="vi-sidebar-title">VISIONINSPECTION</span>
+        </div>
+        <nav class="vi-sidebar-nav">
+            <a href="{% url 'VisionInspection:admin-dashboard' %}" class="vi-sidebar-link {% if sidebar_active == 'dashboard' %}active{% endif %}">
+                <span class="vi-sidebar-icon">&#9632;</span> Dashboard
+            </a>
+
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-master">Master &#9662;</div>
+                <div class="vi-sidebar-collapse" id="section-master">
+                    <a href="{% url 'VisionInspection:admin-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' %}active{% endif %}">Employee Master</a>
+                    <a href="{% url 'VisionInspection:admin-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}">Part Master</a>
+                    <a href="{% url 'VisionInspection:admin-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' %}active{% endif %}">YOLO Model Master</a>
+                    <a href="{% url 'VisionInspection:admin-presets' %}" class="vi-sidebar-link {% if sidebar_active == 'presets' %}active{% endif %}">Inspection Preset Master</a>
+                </div>
+            </div>
+
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-inspection">Vision Inspection &#9662;</div>
+                <div class="vi-sidebar-collapse" id="section-inspection">
+                    <a href="{% url 'VisionInspection:admin-state' %}" class="vi-sidebar-link {% if sidebar_active == 'state' %}active{% endif %}">Inspection State</a>
+                    <a href="{% url 'VisionInspection:admin-logs' %}" class="vi-sidebar-link {% if sidebar_active == 'logs' %}active{% endif %}">Inspection Logs</a>
+                    <a href="{% url 'VisionInspection:admin-rois' %}" class="vi-sidebar-link {% if sidebar_active == 'rois' %}active{% endif %}">ROI Configuration</a>
+                    <a href="{% url 'VisionInspection:admin-trigger-zones' %}" class="vi-sidebar-link {% if sidebar_active == 'trigger_zones' %}active{% endif %}">Trigger Zone Configuration</a>
+                </div>
+            </div>
+
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-ai">AI / Model &#9662;</div>
+                <div class="vi-sidebar-collapse" id="section-ai">
+                    <a href="{% url 'VisionInspection:admin-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' %}active{% endif %}">YOLO Models</a>
+                    <a href="{% url 'VisionInspection:admin-training-jobs' %}" class="vi-sidebar-link {% if sidebar_active == 'training_jobs' %}active{% endif %}">Training Jobs</a>
+                </div>
+            </div>
+
+            <div class="vi-sidebar-section">
+                <a href="{% url 'VisionInspection:admin-reports' %}" class="vi-sidebar-link {% if sidebar_active == 'reports' %}active{% endif %}">
+                    <span class="vi-sidebar-icon">&#9632;</span> Reports
+                </a>
+            </div>
+
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-system">System &#9662;</div>
+                <div class="vi-sidebar-collapse" id="section-system">
+                    <a href="{% url 'VisionInspection:admin-system-status' %}" class="vi-sidebar-link {% if sidebar_active == 'system_status' %}active{% endif %}">System Status</a>
+                    <a href="{% url 'VisionInspection:admin-camera-status' %}" class="vi-sidebar-link {% if sidebar_active == 'camera_status' %}active{% endif %}">Camera Status</a>
+                    <a href="{% url 'VisionInspection:admin-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'settings' %}active{% endif %}">Settings</a>
+                </div>
+            </div>
+        </nav>
+    </aside>
+
+    <div class="vi-main-wrapper">
+        <header class="vi-top-header">
+            <button class="vi-sidebar-toggle" id="viSidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+            <h1 class="vi-header-title">VisionInspection</h1>
+            <div class="vi-header-actions">
+                <span class="vi-user-display">{{ user.get_full_name|default:user.username }}</span>
+                <a href="{% url 'logout' %}" class="vi-logout-link">Logout</a>
+            </div>
+        </header>
+
+        <main class="vi-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const toggle = document.getElementById('viSidebarToggle');
+            const sidebar = document.getElementById('viSidebar');
+            if (toggle && sidebar) {
+                toggle.addEventListener('click', function() {
+                    sidebar.classList.toggle('vi-sidebar-collapsed');
+                });
+            }
+            document.querySelectorAll('.vi-sidebar-section-title').forEach(function(title) {
+                title.addEventListener('click', function() {
+                    const targetId = this.getAttribute('data-target');
+                    const target = document.getElementById(targetId);
+                    if (target) {
+                        target.classList.toggle('vi-collapsed');
+                        this.classList.toggle('vi-expanded');
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}ROI Configuration - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-card">
+    <form method="get" class="vi-form-row">
+        <div class="vi-form-group">
+            <label for="id_roi_name">ROI Name</label>
+            <input type="text" name="roi_name" id="id_roi_name" value="{{ request.GET.roi_name|default:'' }}" placeholder="Search ROI name">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_preset">Preset</label>
+            <select name="preset" id="id_preset">
+                <option value="">All Presets</option>
+                {% for preset in presets %}
+                <option value="{{ preset.id }}" {% if request.GET.preset == preset.id|stringformat:'s' %}selected{% endif %}>
+                    {{ preset.name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="vi-form-group">
+            <label>&nbsp;</label>
+            <button type="submit" class="vi-btn vi-btn-primary">Filter</button>
+        </div>
+    </form>
+</div>
+
+<div class="vi-card">
+    <div class="vi-table-wrap">
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>ROI Name</th>
+                    <th>Preset</th>
+                    <th>Zone Type</th>
+                    <th>Coordinates</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for roi in rois %}
+                <tr>
+                    <td>{{ roi.roi_name }}</td>
+                    <td>{{ roi.preset.name }}</td>
+                    <td>{{ roi.zone_type }}</td>
+                    <td>
+                        {% if roi.polygon_points %}
+                            {{ roi.polygon_points|truncatechars:50 }}
+                        {% else %}
+                            X: {{ roi.x|floatformat:0 }}, Y: {{ roi.y|floatformat:0 }}, W: {{ roi.width|floatformat:0 }}, H: {{ roi.height|floatformat:0 }}
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if roi.is_active %}
+                            <span class="vi-badge vi-badge-active">Active</span>
+                        {% else %}
+                            <span class="vi-badge vi-badge-inactive">Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ roi.created_at|date:"Y-m-d" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" style="text-align:center; color: var(--vi-text-muted);">No ROIs found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Employee Master — VisionInspection{% endblock %}
+
+{% block header_title %}Employee Master{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>Employee Master</h2>
+</div>
+<div id="viMasterApp"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    window.__VI_MASTERS__ = {
+        collection: "employee",
+        pageSize: 15,
+        primaryLabel: "Employee",
+        searchPlaceholder: "Search employee ID or name…",
+        columns: [
+            { key: "employee_code", label: "Employee ID" },
+            { key: "employee_name", label: "Employee Name" },
+            { key: "department", label: "Department" },
+            { key: "designation", label: "Designation" },
+        ],
+        fields: [
+            { name: "employee_code", label: "Employee ID", type: "text", required: true },
+            { name: "employee_name", label: "Employee Name", type: "text", required: true },
+            { name: "department", label: "Department", type: "text", required: false },
+            { name: "designation", label: "Designation", type: "text", required: false },
+        ],
+        urls: {
+            list: "{% url 'VisionInspection:api-employee-list' %}",
+            create: "{% url 'VisionInspection:employee-create' %}",
+            update: "{% url 'VisionInspection:employee-update' 0 %}".replace("/0/update/", "/__ID__/update/"),
+        },
+    };
+</script>
+<script src="{% static 'VisionInspection/js/masters.js' %}" defer></script>
+{% endblock %}

@@ -1,0 +1,251 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" data-theme="">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}VisionInspection{% endblock %}</title>
+    <script>
+        // Apply the persisted theme (Purple default, Green optional) before paint.
+        (function () {
+            try {
+                var t = localStorage.getItem("vi-theme");
+                if (t !== "green" && t !== "purple") t = "purple";
+                document.documentElement.setAttribute("data-theme", t || "purple");
+            } catch (e) {
+                document.documentElement.setAttribute("data-theme", "purple");
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}">
+    {% block extra_head %}{% endblock %}
+</head>
+{# The Airbag Stitch Inspection station page uses the dark reference chrome. #}
+<body class="{% if sidebar_active == 'inspection_master' or sidebar_active == 'inspection' %}vi-fullscreen-chrome{% if sidebar_active == 'inspection' %} vi-inspection-chrome{% endif %}{% endif %}">
+    <aside class="vi-sidebar" id="viSidebar">
+        <div class="vi-sidebar-header">
+            <span class="vi-sidebar-logo">&#9670;</span>
+            <span class="vi-sidebar-title">Vision Inspection</span>
+        </div>
+        <nav class="vi-sidebar-nav" id="viSidebarNav">
+            <a href="{% url 'VisionInspection:dashboard' %}" class="vi-sidebar-link {% if sidebar_active == 'dashboard' %}active{% endif %}">
+                <span class="vi-sidebar-icon">&#9632;</span> Dashboard
+            </a>
+
+            <!-- Inventory == Part Master (single route, no duplicate) -->
+            <a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}">
+                <span class="vi-sidebar-icon">&#9638;</span>{% if user.is_staff %} Inventory &amp; Parts{% else %} Part Vision Setup{% endif %}
+            </a>
+
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-operations">Operations <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse" id="section-operations">
+                    <a href="{% url 'VisionInspection:inspection-master' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection_master' %}active{% endif %}">Inspection Master</a>
+                    <a href="{% url 'VisionInspection:inspection' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection' %}active{% endif %}">Live Inspection</a>
+                    <a href="{% url 'VisionInspection:history' %}" class="vi-sidebar-link {% if sidebar_active == 'history' %}active{% endif %}">History</a>
+                    {% if user.is_staff %}
+                    <a href="{% url 'VisionInspection:ui-logs' %}" class="vi-sidebar-link {% if sidebar_active == 'logs' %}active{% endif %}">Inspection Logs</a>
+                    <a href="{% url 'VisionInspection:ui-rois' %}" class="vi-sidebar-link {% if sidebar_active == 'rois' %}active{% endif %}">ROI</a>
+                    <a href="{% url 'VisionInspection:ui-trigger-zones' %}" class="vi-sidebar-link {% if sidebar_active == 'trigger_zones' %}active{% endif %}">Trigger Zone</a>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if user.is_staff %}
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-masters">Masters <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse" id="section-masters">
+                    <a href="{% url 'VisionInspection:ui-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' %}active{% endif %}">Employee Master</a>
+                    <a href="{% url 'VisionInspection:ui-presets' %}" class="vi-sidebar-link {% if sidebar_active == 'presets' %}active{% endif %}">Inspection Presets</a>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-ai">AI Insights <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse" id="section-ai">
+                    <a href="{% url 'VisionInspection:ui-traceability' %}" class="vi-sidebar-link {% if sidebar_active == 'traceability' %}active{% endif %}">Inspection Traceability</a>
+                    {% if user.is_staff %}
+                    <a href="{% url 'VisionInspection:ui-reports' %}" class="vi-sidebar-link {% if sidebar_active == 'reports' %}active{% endif %}">Reports</a>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="vi-sidebar-footer">
+                {% if user.is_staff %}
+                <a href="{% url 'VisionInspection:ui-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'settings' %}active{% endif %}">
+                    <span class="vi-sidebar-icon">&#9881;</span> Settings
+                </a>
+                {% endif %}
+            </div>
+        </nav>
+    </aside>
+
+    <div class="vi-main-wrapper">
+        <header class="vi-top-header">
+            <button class="vi-sidebar-toggle" id="viSidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+            <h1 class="vi-header-title">{% block header_title %}VisionInspection{% endblock %}</h1>
+            <div class="vi-header-actions">
+                <div class="vi-header-search">
+                    <input type="text" id="viNavSearch" placeholder="Search menu…" aria-label="Search navigation">
+                </div>
+                <button class="vi-theme-toggle" id="viThemeToggle" type="button" aria-label="Toggle color theme" title="Switch Purple / Green theme">
+                    <span id="viThemeToggleLabel">Green</span>
+                </button>
+                <a href="{% url 'VisionInspection:ui-traceability' %}" class="vi-header-bell" title="Notifications — Inspection Traceability" aria-label="Notifications">&#9873;</a>
+                <div class="vi-profile" id="viProfile">
+                    <button class="vi-profile-btn" id="viProfileBtn" type="button" aria-haspopup="true" aria-expanded="false">
+                        <span class="vi-profile-avatar" id="viProfileAvatar">?</span>
+                        <span id="viProfileName">Operator</span>
+                    </button>
+                    <div class="vi-profile-menu" role="menu">
+                        <div class="vi-profile-head">
+                            <span class="vi-profile-avatar" id="viProfileAvatar2">?</span>
+                            <div>
+                                <div class="vi-profile-name" id="viProfileFullName">Operator</div>
+                                <div class="vi-profile-sub">
+                                    {% if user.is_staff %}Administrator{% else %}Inspection Operator{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        <a href="{% url 'VisionInspection:dashboard' %}">&#9632; Dashboard</a>
+                        {% if user.is_staff %}
+                        <a href="{% url 'VisionInspection:ui-settings' %}">&#9881; Settings</a>
+                        <a href="/admin/">&#128274; Admin Panel</a>
+                        {% endif %}
+                    </div>
+                </div>
+                {% block header_actions %}{% endblock %}
+            </div>
+        </header>
+
+        <main class="vi-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Sidebar drawer toggle (tablet/mobile)
+            var toggle = document.getElementById('viSidebarToggle');
+            var sidebar = document.getElementById('viSidebar');
+            if (toggle && sidebar) {
+                toggle.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    sidebar.classList.toggle('vi-sidebar-collapsed');
+                });
+            }
+
+            // Dismiss the sidebar overlay when clicking outside it (works in
+            // full-screen chrome and tablet/mobile drawer modes).
+            document.addEventListener('click', function(e) {
+                if (!sidebar) return;
+                if (!sidebar.classList.contains('vi-sidebar-collapsed')) return; // not open as overlay
+                if (sidebar.contains(e.target)) return;                          // click inside
+                if (toggle && toggle.contains(e.target)) return;                 // toggle handles itself
+                sidebar.classList.remove('vi-sidebar-collapsed');
+            });
+
+            // Collapsible parent sections (open the active one; caret rotates)
+            function closeDrawerOnNav() {
+                var fullscreen = document.body.classList.contains("vi-fullscreen-chrome");
+                if ((fullscreen || window.matchMedia("(max-width: 1023px)").matches) && sidebar) {
+                    sidebar.classList.remove("vi-sidebar-collapsed");
+                }
+            }
+            document.querySelectorAll('.vi-sidebar-section').forEach(function(section) {
+                var title = section.querySelector('.vi-sidebar-section-title');
+                var collapse = section.querySelector('.vi-sidebar-collapse');
+                if (!title || !collapse) return;
+                var hasActive = collapse.querySelector('.vi-sidebar-link.active');
+                if (hasActive) {
+                    title.classList.add('has-active', 'vi-expanded');
+                } else {
+                    collapse.classList.add('vi-collapsed');
+                }
+                title.addEventListener('click', function() {
+                    collapse.classList.toggle('vi-collapsed');
+                    title.classList.toggle('vi-expanded');
+                });
+                collapse.querySelectorAll('.vi-sidebar-link').forEach(function(a) {
+                    a.addEventListener('click', closeDrawerOnNav);
+                });
+            });
+
+            // Menu search (filters sidebar links; honest, no backend calls)
+            var search = document.getElementById('viNavSearch');
+            if (search) {
+                search.addEventListener('input', function() {
+                    var q = this.value.trim().toLowerCase();
+                    var nav = document.getElementById('viSidebarNav');
+                    nav.querySelectorAll('a.vi-sidebar-link').forEach(function(a) {
+                        var t = a.textContent.toLowerCase();
+                        a.style.display = (!q || t.indexOf(q) !== -1) ? '' : 'none';
+                    });
+                    nav.querySelectorAll('.vi-sidebar-section').forEach(function(section) {
+                        var title = section.querySelector('.vi-sidebar-section-title');
+                        var collapse = section.querySelector('.vi-sidebar-collapse');
+                        var anyVisible = Array.prototype.some.call(
+                            collapse.querySelectorAll('a.vi-sidebar-link'),
+                            function(a) { return a.style.display !== 'none'; }
+                        );
+                        section.style.display = anyVisible ? '' : 'none';
+                        if (q && anyVisible) {
+                            collapse.classList.remove('vi-collapsed');
+                            title.classList.add('vi-expanded');
+                        }
+                    });
+                });
+            }
+
+            // Profile dropdown
+            var profile = document.getElementById('viProfile');
+            var profileBtn = document.getElementById('viProfileBtn');
+            if (profile && profileBtn) {
+                profileBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var open = profile.classList.toggle('open');
+                    profileBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                });
+                document.addEventListener('click', function(e) {
+                    if (!profile.contains(e.target)) {
+                        profile.classList.remove('open');
+                        profileBtn.setAttribute('aria-expanded', 'false');
+                    }
+                });
+            }
+
+            // Populate real user info when authenticated
+            var authed = {% if user.is_authenticated %}true{% else %}false{% endif %};
+            var displayName = {% if user.is_authenticated %}"{{ user.get_full_name|default:user.username|escapejs }}"{% else %}""{% endif %};
+            if (authed && displayName) {
+                var initial = displayName.trim().charAt(0).toUpperCase() || '?';
+                var nameEls = [document.getElementById('viProfileName'), document.getElementById('viProfileFullName')];
+                nameEls.forEach(function(el) { if (el) el.textContent = displayName; });
+                var avEls = [document.getElementById('viProfileAvatar'), document.getElementById('viProfileAvatar2')];
+                avEls.forEach(function(el) { if (el) el.textContent = initial; });
+            }
+
+            // Theme toggle (Purple default <-> Green), persisted in localStorage.
+            var themeBtn = document.getElementById('viThemeToggle');
+            var themeLabel = document.getElementById('viThemeToggleLabel');
+            function syncLabel() {
+                var cur = document.documentElement.getAttribute('data-theme');
+                if (themeLabel) themeLabel.textContent = cur === 'green' ? 'Purple' : 'Green';
+            }
+            if (themeBtn) {
+                syncLabel();
+                themeBtn.addEventListener('click', function() {
+                    var cur = document.documentElement.getAttribute('data-theme');
+                    var next = cur === 'green' ? 'purple' : 'green';
+                    document.documentElement.setAttribute('data-theme', next);
+                    try { localStorage.setItem('vi-theme', next); } catch (e) {}
+                    syncLabel();
+                });
+            }
+        });
+    </script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

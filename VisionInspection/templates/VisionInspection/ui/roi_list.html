@@ -1,0 +1,61 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}ROI Configuration — VisionInspection{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>ROI Configuration</h2>
+</div>
+
+<div class="vi-card">
+    <form method="get" class="vi-toolbar">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search ROI name or expected class...">
+        <select name="preset_id">
+            <option value="">All Presets</option>
+            {% for p in presets %}
+            <option value="{{ p.id }}" {% if preset_id == p.id|stringformat:"s" %}selected{% endif %}>{{ p.name }} ({{ p.part_number }})</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="vi-btn vi-btn-primary">Filter</button>
+        <a href="{% url 'VisionInspection:ui-rois' %}" class="vi-btn">Reset</a>
+    </form>
+</div>
+
+<div class="vi-card" style="padding: 0; overflow-x: auto;">
+    <table class="vi-table">
+        <thead>
+            <tr>
+                <th>ROI Name</th>
+                <th>Preset</th>
+                <th>Sequence</th>
+                <th>Expected Class</th>
+                <th>Min / Max Count</th>
+                <th>Confidence</th>
+                <th>Rule</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for roi in rois %}
+            <tr>
+                <td>{{ roi.roi_name }}</td>
+                <td>{{ roi.preset.name }} ({{ roi.preset.part_number }})</td>
+                <td>{{ roi.sequence }}</td>
+                <td>{{ roi.expected_class }}</td>
+                <td>{{ roi.min_count }} / {{ roi.max_count }}</td>
+                <td>{{ roi.confidence_threshold }}</td>
+                <td>{{ roi.inspection_rule }}</td>
+                <td>
+                    <span class="vi-badge {% if roi.is_active %}vi-badge-ok{% else %}vi-badge-skip{% endif %}">
+                        {% if roi.is_active %}Active{% else %}Inactive{% endif %}
+                    </span>
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="8">No ROIs found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

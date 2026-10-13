@@ -1,0 +1,62 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Inspection Logs — VisionInspection{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>Inspection Logs</h2>
+</div>
+
+<div class="vi-card">
+    <form method="get" class="vi-toolbar">
+        <input type="date" name="date_from" value="{{ date_from }}" placeholder="Date From">
+        <input type="date" name="date_to" value="{{ date_to }}" placeholder="Date To">
+        <input type="text" name="employee" value="{{ employee }}" placeholder="Employee">
+        <input type="text" name="part_number" value="{{ part_number }}" placeholder="Part Number">
+        <select name="result">
+            <option value="">All Results</option>
+            <option value="OK" {% if result == 'OK' %}selected{% endif %}>OK</option>
+            <option value="NOT_OK" {% if result == 'NOT_OK' %}selected{% endif %}>NOT OK</option>
+            <option value="ERROR" {% if result == 'ERROR' %}selected{% endif %}>ERROR</option>
+        </select>
+        <button type="submit" class="vi-btn vi-btn-primary">Filter</button>
+        <a href="{% url 'VisionInspection:ui-logs' %}" class="vi-btn">Reset</a>
+    </form>
+</div>
+
+<div class="vi-card" style="padding: 0; overflow-x: auto;">
+    <table class="vi-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Timestamp</th>
+                <th>Employee</th>
+                <th>Part</th>
+                <th>Preset</th>
+                <th>Result</th>
+                <th>Stable Frames</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+            <tr class="{% if log.result == 'OK' %}vi-row-ok{% elif log.result == 'NOT_OK' %}vi-row-not-ok{% else %}vi-row-error{% endif %}">
+                <td>#{{ log.pk }}</td>
+                <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
+                <td>{{ log.employee_code|default:"—" }}</td>
+                <td>{{ log.part_number|default:"—" }}</td>
+                <td>{{ log.preset_name|default:"—" }} v{{ log.preset_version|default:"?" }}</td>
+                <td>
+                    <span class="vi-badge {% if log.result == 'OK' %}vi-badge-ok{% elif log.result == 'NOT_OK' %}vi-badge-not-ok{% else %}vi-badge-error{% endif %}">
+                        {{ log.get_result_display }}
+                    </span>
+                </td>
+                <td>{{ log.stable_frames_used }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7">No inspection logs found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

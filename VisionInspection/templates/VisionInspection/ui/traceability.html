@@ -1,0 +1,82 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Inspection Traceability — VisionInspection{% endblock %}
+{% block header_title %}Inspection Traceability{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>Inspection Traceability</h2>
+</div>
+
+<div class="vi-card">
+    <form method="get" class="vi-toolbar">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search part number, employee or preset…">
+        <select name="result">
+            <option value="">All results</option>
+            <option value="OK" {% if result == 'OK' %}selected{% endif %}>OK</option>
+            <option value="NOT_OK" {% if result == 'NOT_OK' %}selected{% endif %}>Not OK</option>
+            <option value="ERROR" {% if result == 'ERROR' %}selected{% endif %}>Error</option>
+        </select>
+        <button type="submit" class="vi-btn vi-btn-primary">Search</button>
+        <a href="{% url 'VisionInspection:ui-traceability' %}" class="vi-btn">Reset</a>
+    </form>
+</div>
+
+<div class="vi-card" style="padding:0; overflow-x:auto;">
+    <table class="vi-table">
+        <thead>
+            <tr>
+                <th>Inspection ID</th>
+                <th>Timestamp</th>
+                <th>Part Number</th>
+                <th>Employee</th>
+                <th>Result</th>
+                <th>Model</th>
+                <th>Evidence</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+            <tr>
+                <td>#{{ log.pk }}</td>
+                <td>{{ log.timestamp|date:"Y-m-d H:i" }}</td>
+                <td>{{ log.part_number|default:"—" }}</td>
+                <td>{{ log.employee_code|default:"—" }}</td>
+                <td>
+                    <span class="vi-badge {% if log.result == 'OK' %}vi-badge-ok{% elif log.result == 'NOT_OK' %}vi-badge-not-ok{% elif log.result == 'ERROR' %}vi-badge-error{% else %}vi-badge-skip{% endif %}">
+                        {{ log.get_result_display }}
+                    </span>
+                </td>
+                <td>{% if log.yolo_model_name %}{{ log.yolo_model_name }}{% if log.yolo_model_version %} v{{ log.yolo_model_version }}{% endif %}{% else %}<span style="opacity:.6">not configured</span>{% endif %}</td>
+                <td>{% if log.inspection_image %}<span class="vi-badge vi-badge-active">Image</span>{% else %}<span class="vi-badge vi-badge-inactive">None</span>{% endif %}</td>
+                <td><a href="{% url 'VisionInspection:traceability-detail' log.pk %}" class="vi-btn vi-btn-sm">View</a></td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="8">
+                    <div class="vi-empty">
+                        <div class="vi-empty-icon">&#9702;</div>
+                        <div class="vi-empty-title">No inspection records</div>
+                        <div class="vi-empty-text">Traceability is populated automatically as real inspections are completed.</div>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if page_obj.paginator.num_pages > 1 %}
+<div class="vi-pagination">
+    {% if page_obj.has_previous %}
+    <a class="vi-btn vi-btn-sm" href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q }}{% endif %}{% if result %}&result={{ result }}{% endif %}">&laquo; Prev</a>
+    {% endif %}
+    <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }} · {{ total }} records</span>
+    {% if page_obj.has_next %}
+    <a class="vi-btn vi-btn-sm" href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q }}{% endif %}{% if result %}&result={{ result }}{% endif %}">Next &raquo;</a>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}

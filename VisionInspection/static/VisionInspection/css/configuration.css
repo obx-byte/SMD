@@ -1,0 +1,332 @@
+/* VisionInspection - Configuration Screen CSS */
+
+:root {
+    --vi-bg: #F4EDFF;
+    --vi-bg-card: #FFFFFF;
+    --vi-bg-dark: #EDE7FB;
+    --vi-border: #E6E3F1;
+    --vi-text: #11182F;
+    --vi-text-muted: #737C98;
+    --vi-text-bright: #11182F;
+    --vi-accent: #713CF5;
+    --vi-accent-light: #8A4DFA;
+    --vi-warning: #F5A623;
+    --vi-error: #F04458;
+    --vi-info: #8A4DFA;
+    --vi-input-bg: #F8F7FC;
+    --vi-input-border: #E6E3F1;
+    --vi-green: #20B66F;
+    --vi-red: #F04458;
+    --vi-yellow: #F5A623;
+    --vi-blue: #8A4DFA;
+    --vi-badge-ok: #178f56;
+    --vi-badge-not-ok: #d12a3d;
+    --vi-badge-error: #c9861a;
+    --vi-badge-skip: #737C98;
+}
+
+.vi-config-container {
+    min-height: 100vh;
+    background: var(--vi-bg);
+    color: var(--vi-text);
+    padding: 16px;
+}
+
+.vi-config-header {
+    margin-bottom: 20px;
+}
+
+.vi-config-header h1 {
+    font-size: 20px;
+    color: var(--vi-text-bright);
+}
+
+.vi-config-nav {
+    display: flex;
+    gap: 4px;
+    margin-top: 12px;
+    background: var(--vi-bg-card);
+    border: 1px solid var(--vi-border);
+    border-radius: 6px;
+    padding: 4px;
+}
+
+.vi-nav-btn {
+    flex: 1;
+    padding: 10px 16px;
+    background: transparent;
+    color: var(--vi-text-muted);
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.vi-nav-btn:hover {
+    background: var(--vi-input-bg);
+    color: var(--vi-text);
+}
+
+.vi-nav-btn.active {
+    background: var(--vi-accent);
+    color: #fff;
+}
+
+.vi-tab-content {
+    display: none;
+    background: var(--vi-bg-card);
+    border: 1px solid var(--vi-border);
+    border-radius: 6px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.vi-tab-content.active {
+    display: block;
+}
+
+.vi-form-section {
+    margin-bottom: 24px;
+}
+
+.vi-form-section h2 {
+    font-size: 16px;
+    color: var(--vi-text-bright);
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--vi-border);
+    padding-bottom: 8px;
+}
+
+.vi-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.vi-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.vi-form-group label {
+    font-size: 12px;
+    color: var(--vi-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.vi-form-group input,
+.vi-form-group select,
+.vi-form-group textarea {
+    background: var(--vi-input-bg);
+    border: 1px solid var(--vi-input-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    color: var(--vi-text-bright);
+    font-size: 14px;
+    outline: none;
+}
+
+.vi-form-group input:focus,
+.vi-form-group select:focus {
+    border-color: var(--vi-blue);
+}
+
+.vi-form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.vi-presets-list,
+.vi-models-list {
+    margin-top: 24px;
+}
+
+.vi-presets-list h3,
+.vi-models-list h3 {
+    font-size: 14px;
+    color: var(--vi-text);
+    margin-bottom: 12px;
+}
+
+.vi-config-canvas {
+    width: 100%;
+    max-width: 800px;
+    background: var(--vi-bg-dark);
+    border: 1px solid var(--vi-border);
+    border-radius: 6px;
+    cursor: crosshair;
+}
+
+.vi-master-image-container {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.vi-master-image-display {
+    flex: 1;
+    background: var(--vi-bg-dark);
+    border: 2px dashed var(--vi-border);
+    border-radius: 6px;
+    min-height: 400px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--vi-text-muted);
+    overflow: hidden;
+}
+
+.vi-master-image-display img {
+    max-width: 100%;
+    max-height: 400px;
+}
+
+.vi-camera-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.vi-live-feed-small {
+    margin-top: 16px;
+}
+
+.vi-live-feed-small img {
+    width: 320px;
+    border: 1px solid var(--vi-border);
+    border-radius: 4px;
+}
+
+.vi-trigger-canvas-container {
+    margin-bottom: 16px;
+}
+
+.vi-polygon-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.vi-roi-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.vi-roi-canvas-container {
+    margin-bottom: 16px;
+}
+
+.vi-roi-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.vi-roi-item {
+    background: var(--vi-input-bg);
+    border: 1px solid var(--vi-input-border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.vi-roi-item .vi-roi-item-info {
+    flex: 1;
+}
+
+.vi-roi-item .vi-roi-item-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.vi-coords-display {
+    background: var(--vi-input-bg);
+    border: 1px solid var(--vi-input-border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--vi-text-muted);
+    margin-top: 8px;
+}
+
+.vi-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(autofill, minmax(250px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.vi-detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.vi-detail-item label {
+    font-size: 12px;
+    color: var(--vi-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.vi-detail-item span {
+    font-size: 14px;
+    color: var(--vi-text-bright);
+}
+
+.vi-inspection-image {
+    max-width: 100%;
+    border: 1px solid var(--vi-border);
+    border-radius: 4px;
+    margin-top: 16px;
+}
+
+.vi-back-link,
+.vi-back-link a {
+    color: var(--vi-text-muted);
+    font-size: 12px;
+    text-decoration: none;
+}
+
+.vi-back-link a:hover {
+    color: var(--vi-blue);
+}
+
+.vi-btn-sm {
+    padding: 4px 10px;
+    font-size: 11px;
+}
+
+.vi-history-section {
+    padding: 0 4px;
+}
+
+.vi-history-detail {
+    margin-top: 32px;
+    background: var(--vi-bg-card);
+    border: 1px solid var(--vi-border);
+    border-radius: 6px;
+    padding: 20px;
+}
+
+.vi-history-detail h2 {
+    font-size: 16px;
+    color: var(--vi-text-bright);
+    margin-bottom: 16px;
+}
+
+.vi-history-detail h3 {
+    font-size: 14px;
+    color: var(--vi-text);
+    margin: 16px 0 8px;
+}

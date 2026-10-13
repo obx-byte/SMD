@@ -1,0 +1,42 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Inventory &amp; Part Master — VisionInspection{% endblock %}
+
+{% block header_title %}Inventory &amp; Part Master{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>Inventory &amp; Part Master</h2>
+</div>
+<div id="viMasterApp"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    window.__VI_MASTERS__ = {
+        collection: "part",
+        readOnly: {% if can_manage_parts %}false{% else %}true{% endif %},
+        pageSize: 15,
+        primaryLabel: "Part",
+        searchPlaceholder: "Search part number or name…",
+        columns: [
+            { key: "part_number", label: "Part Number" },
+            { key: "part_name", label: "Part Name" },
+            { key: "description", label: "Description" },
+        ],
+        fields: [
+            { name: "part_number", label: "Part Number", type: "text", required: true },
+            { name: "part_name", label: "Part Name", type: "text", required: true },
+            { name: "description", label: "Description", type: "textarea", required: false },
+        ],
+        urls: {
+            list: "{% url 'VisionInspection:api-part-list' %}",
+            create: "{% url 'VisionInspection:part-create' %}",
+            update: "{% url 'VisionInspection:part-update' 0 %}".replace("/0/update/", "/__ID__/update/"),
+            visionConfiguration: "{% url 'VisionInspection:part-vision-configuration' 0 %}".replace("/0/vision-configuration/", "/__ID__/vision-configuration/"),
+        },
+    };
+</script>
+<script src="{% static 'VisionInspection/js/masters.js' %}" defer></script>
+{% endblock %}

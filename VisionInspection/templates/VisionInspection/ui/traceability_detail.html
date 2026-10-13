@@ -1,0 +1,141 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Inspection #{{ log.pk }} — Traceability{% endblock %}
+{% block header_title %}Inspection #{{ log.pk }}{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <a href="{% url 'VisionInspection:ui-traceability' %}" class="vi-btn" style="margin-right:10px">&laquo; Back</a>
+    <h2 style="display:inline-block; vertical-align:middle">Inspection #{{ log.pk }} — Traceability</h2>
+</div>
+
+<div class="vi-grid vi-grid-cols-4">
+    <div class="vi-summary-card">
+        <div class="vi-summary-label">Result</div>
+        <div class="vi-summary-value">
+            <span class="vi-badge {{ result_badge }}">{{ log.get_result_display }}</span>
+        </div>
+    </div>
+    <div class="vi-summary-card">
+        <div class="vi-summary-label">Part Number</div>
+        <div class="vi-summary-value" style="font-size:16px">{{ log.part_number|default:"—" }}</div>
+    </div>
+    <div class="vi-summary-card">
+        <div class="vi-summary-label">Employee</div>
+        <div class="vi-summary-value" style="font-size:16px">{{ log.employee_code|default:"—" }}</div>
+    </div>
+    <div class="vi-summary-card">
+        <div class="vi-summary-label">Timestamp</div>
+        <div class="vi-summary-value" style="font-size:14px">{{ log.timestamp|date:"Y-m-d H:i" }}</div>
+    </div>
+</div>
+
+<div class="vi-grid" style="grid-template-columns: 1fr 1fr; align-items:start;">
+    <div class="vi-card">
+        <div class="vi-card-title">Original Inspection Image</div>
+        {% if evidence.original %}
+            <img src="{{ log.inspection_image.url }}" alt="Original inspection frame"
+                 style="width:100%; border-radius:12px; border:1px solid var(--vi-border);">
+        {% else %}
+            <div class="vi-empty">
+                <div class="vi-empty-icon">&#9632;</div>
+                <div class="vi-empty-title">No image stored</div>
+                <div class="vi-empty-text">This inspection did not persist an original frame.</div>
+            </div>
+        {% endif %}
+
+        <div class="vi-card-title" style="margin-top:18px">Cropped ROI Image</div>
+        {% if evidence.cropped_roi %}
+            <div><!-- populated when cropped-ROI capture is configured --></div>
+        {% else %}
+            <div class="vi-empty">
+                <div class="vi-empty-icon">&#9634;</div>
+                <div class="vi-empty-title">Not captured</div>
+                <div class="vi-empty-text">A cropped ROI image is stored only when the configured inspection workflow captures evidence.</div>
+            </div>
+        {% endif %}
+    </div>
+
+    <div>
+        <div class="vi-card">
+            <div class="vi-card-title">Model &amp; Prediction</div>
+            {% if model_configured %}
+                <div class="vi-detail-row"><span class="vi-detail-label">Model</span><span class="vi-detail-value">{{ log.yolo_model_name }}{% if log.yolo_model_version %} v{{ log.yolo_model_version }}{% endif %}</span></div>
+                <div class="vi-detail-row"><span class="vi-detail-label">Detections</span><span class="vi-detail-value">{{ detections_count }}</span></div>
+            {% else %}
+                <div class="vi-empty">
+                    <div class="vi-empty-icon">&#9888;</div>
+                    <div class="vi-empty-title">ROI READY — MODEL NOT CONFIGURED</div>
+                    <div class="vi-empty-text">No YOLO model was configured for this inspection, so no prediction results are available.</div>
+                </div>
+            {% endif %}
+
+            <div class="vi-card-title" style="margin-top:16px">Annotated Image</div>
+            {% if evidence.annotated %}
+                <div><!-- populated when a real prediction annotation exists --></div>
+            {% else %}
+                <div class="vi-empty">
+                    <div class="vi-empty-icon">&#9634;</div>
+                    <div class="vi-empty-title">Not generated</div>
+                    <div class="vi-empty-text">An annotated image is only generated when a real model prediction exists.</div>
+                </div>
+            {% endif %}
+        </div>
+
+        <div class="vi-card" style="margin-top:16px">
+            <div class="vi-card-title">ROI Configuration Used</div>
+            {% if roi_config %}
+            <table class="vi-table">
+                <thead><tr><th>ROI</th><th>Result</th><th>Details</th></tr></thead>
+                <tbody>
+                    {% for roi in roi_config %}
+                    <tr>
+                        <td>{{ roi.roi_name }}</td>
+                        <td>
+                            <span class="vi-badge {% if roi.result == 'MATCH' %}vi-badge-ok{% elif roi.result == 'SKIPPED' %}vi-badge-inactive{% elif roi.result == 'NOT_MATCH' %}vi-badge-not-ok{% else %}vi-badge-error{% endif %}">
+                                {{ roi.result|default:"—" }}
+                            </span>
+                        </td>
+                        <td>{{ roi.details|default:"—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+                <div class="vi-empty">
+                    <div class="vi-empty-text">No ROI configuration snapshot stored with this record.</div>
+                </div>
+            {% endif %}
+            {% if part_bbox %}
+            <div class="vi-detail-row" style="margin-top:10px"><span class="vi-detail-label">Part bbox</span><span class="vi-detail-value">{{ part_bbox }}</span></div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% if detections %}
+<div class="vi-card" style="margin-top:16px">
+    <div class="vi-card-title">Detections</div>
+    <table class="vi-table">
+        <thead><tr><th>Class</th><th>Confidence</th><th>Box [x1,y1,x2,y2]</th></tr></thead>
+        <tbody>
+            {% for d in detections %}
+            <tr>
+                <td>{{ d.class }}</td>
+                <td>{{ d.confidence|floatformat:2 }}</td>
+                <td>{{ d.bbox|default:'' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if log.error_details %}
+<div class="vi-card" style="margin-top:16px">
+    <div class="vi-card-title">Error Details</div>
+    <div style="color:var(--vi-error); font-size:14px;">{{ log.error_details }}</div>
+</div>
+{% endif %}
+{% endblock %}

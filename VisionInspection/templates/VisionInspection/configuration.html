@@ -1,0 +1,278 @@
+{% load static %}
+{% csrf_token %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preset Configuration - Vision Inspection</title>
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/configuration.css' %}">
+</head>
+<body>
+<div class="vi-config-container">
+    <header class="vi-config-header">
+        <h1>Vision Inspection Configuration</h1>
+        <nav class="vi-config-nav">
+            <button class="vi-nav-btn active" onclick="showTab('preset')">Preset</button>
+            <button class="vi-nav-btn" onclick="showTab('master')">Master Image</button>
+            <button class="vi-nav-btn" onclick="showTab('trigger')">Trigger Zone</button>
+            <button class="vi-nav-btn" onclick="showTab('roi')">ROI Areas</button>
+            <button class="vi-nav-btn" onclick="showTab('yolo')">YOLO Model</button>
+            <button class="vi-nav-btn" onclick="showTab('training')">Training</button>
+        </nav>
+    </header>
+
+    <!-- Preset Tab -->
+    <section id="tab-preset" class="vi-tab-content active">
+        <div class="vi-form-section">
+            <h2>Create / Manage Preset</h2>
+            <div class="vi-form-grid">
+                <div class="vi-form-group">
+                    <label>Select Part Number</label>
+                    <select id="partSelect" onchange="loadPartConfig()">
+                        <option value="">-- Select Part --</option>
+                    </select>
+                </div>
+                <div class="vi-form-group">
+                    <label>Preset Name</label>
+                    <input type="text" id="presetName" placeholder="e.g. PART-001 v1">
+                </div>
+                <div class="vi-form-group">
+                    <label>Part Class (YOLO)</label>
+                    <input type="text" id="partClass" placeholder="e.g. PART-001">
+                </div>
+                <div class="vi-form-group">
+                    <label>YOLO Model</label>
+                    <select id="yoloModel">
+                        <option value="">-- Select Model --</option>
+                    </select>
+                </div>
+                <div class="vi-form-group">
+                    <label>Camera Index</label>
+                    <input type="number" id="cameraIndex" value="0" min="0">
+                </div>
+                <div class="vi-form-group">
+                    <label>Confidence Threshold</label>
+                    <input type="number" id="confidenceThreshold" value="0.5" min="0.1" max="0.99" step="0.01">
+                </div>
+                <div class="vi-form-group">
+                    <label>Stable Frames</label>
+                    <input type="number" id="stableFrames" value="3" min="1">
+                </div>
+                <div class="vi-form-group">
+                    <label>Trigger Cooldown (sec)</label>
+                    <input type="number" id="triggerCooldown" value="2.0" min="0" step="0.1">
+                </div>
+            </div>
+            <div class="vi-form-actions">
+                <button class="vi-btn vi-btn-primary" onclick="savePreset()">Save Preset</button>
+                <button class="vi-btn" onclick="activatePreset()">Activate</button>
+            </div>
+        </div>
+
+        <!-- Existing Presets List -->
+        <div class="vi-presets-list">
+            <h3>Existing Presets</h3>
+            <table class="vi-table">
+                <thead>
+                    <tr>
+                        <th>Part Number</th>
+                        <th>Name</th>
+                        <th>Version</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="presetsTableBody"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Master Image Tab -->
+    <section id="tab-master" class="vi-tab-content">
+        <div class="vi-master-image-section">
+            <h2>Master Image</h2>
+            <p>The master image serves as the reference coordinate system for all ROIs.</p>
+            <div class="vi-master-image-container">
+                <div class="vi-master-image-display" id="masterImageDisplay">
+                    <span>No master image captured</span>
+                </div>
+                <div class="vi-camera-controls">
+                    <button class="vi-btn vi-btn-primary" id="btnStartCamera" onclick="startCameraConfig()">Start Camera</button>
+                    <button class="vi-btn" id="btnStopCamera" onclick="stopCameraConfig()">Stop Camera</button>
+                    <button class="vi-btn vi-btn-success" id="btnCaptureMaster" onclick="captureMasterImage()" disabled>Capture Master Image</button>
+                </div>
+            </div>
+            <div class="vi-live-feed-small" id="liveFeedContainer" style="display:none;">
+                <img id="liveFeed" src="" alt="Live Camera">
+            </div>
+        </div>
+    </section>
+
+    <!-- Trigger Zone Tab -->
+    <section id="tab-trigger" class="vi-tab-content">
+        <div class="vi-trigger-zone-section">
+            <h2>Trigger Zone (Outer Part Bounding Box)</h2>
+            <p>Drag the four corners (P1-P4) to define the part boundary. This zone is used to detect when a part enters the inspection area.</p>
+            <div class="vi-trigger-canvas-container">
+                <canvas id="triggerCanvas" class="vi-config-canvas"></canvas>
+            </div>
+            <div class="vi-polygon-controls">
+                <button class="vi-btn" onclick="resetTriggerZone()">Reset</button>
+                <button class="vi-btn vi-btn-primary" onclick="saveTriggerZone()">Save Trigger Zone</button>
+            </div>
+            <div class="vi-coords-display" id="triggerCoords"></div>
+        </div>
+    </section>
+
+    <!-- ROI Areas Tab -->
+    <section id="tab-roi" class="vi-tab-content">
+        <div class="vi-roi-section">
+            <div class="vi-roi-toolbar">
+                <h2>ROI Areas</h2>
+                <button class="vi-btn vi-btn-primary" onclick="addRoi()">Add ROI</button>
+                <button class="vi-btn" onclick="saveAllRois()">Save All ROIs</button>
+            </div>
+            <div class="vi-roi-canvas-container">
+                <canvas id="roiCanvas" class="vi-config-canvas"></canvas>
+            </div>
+            <div class="vi-roi-list" id="roiList">
+                <!-- ROI items populated dynamically -->
+            </div>
+        </div>
+    </section>
+
+    <!-- YOLO Model Tab -->
+    <section id="tab-yolo" class="vi-tab-content">
+        <div class="vi-yolo-section">
+            <h2>YOLO Model Management</h2>
+            <div class="vi-form-group">
+                <label>Model Path (.pt file)</label>
+                <input type="text" id="modelPath" placeholder="/path/to/model.pt">
+            </div>
+            <div class="vi-form-group">
+                <label>Model Name</label>
+                <input type="text" id="modelName" placeholder="e.g. inspection_model">
+            </div>
+            <div class="vi-form-group">
+                <label>Version</label>
+                <input type="text" id="modelVersion" placeholder="1.0">
+            </div>
+            <div class="vi-form-group">
+                <label>Part Class</label>
+                <input type="text" id="modelPartClass" placeholder="e.g. bolt">
+            </div>
+            <div class="vi-form-group">
+                <label>Number of Classes</label>
+                <input type="number" id="modelNumClasses" value="0" min="0">
+            </div>
+            <div class="vi-form-actions">
+                <button class="vi-btn vi-btn-primary" onclick="uploadModel()">Register Model</button>
+                <button class="vi-btn" onclick="testModel()">Test Model</button>
+            </div>
+            <div class="vi-models-list">
+                <h3>Available Models</h3>
+                <table class="vi-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Version</th>
+                            <th>Part Class</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modelsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- Training Tab -->
+    <section id="tab-training" class="vi-tab-content">
+        <div id="trainingSection" style="display:none;">
+            <h2>YOLO Model Training</h2>
+
+            <div class="vi-form-section">
+                <h3>Project & Dataset</h3>
+                <div class="vi-form-grid">
+                    <div class="vi-form-group">
+                        <label>Dataset / Project</label>
+                        <select id="datasetSelect">
+                            <option value="">-- Select Dataset --</option>
+                        </select>
+                    </div>
+                    <div class="vi-form-group">
+                        <label>Project Name</label>
+                        <input type="text" id="trainingProject" placeholder="e.g. PART-001">
+                    </div>
+                    <div class="vi-form-group">
+                        <label>Epochs</label>
+                        <input type="number" id="trainingEpochs" value="100" min="1" max="10000">
+                    </div>
+                </div>
+
+                <div class="vi-form-actions">
+                    <button class="vi-btn vi-btn-primary" id="btnStartTraining" onclick="trainingManager.startTraining()">
+                        Start Training
+                    </button>
+                    <button class="vi-btn vi-btn-error" id="btnCancelTraining" onclick="trainingManager.cancelTraining()" disabled>
+                        Cancel Training
+                    </button>
+                </div>
+            </div>
+
+            <div class="vi-form-section">
+                <h3>Training Progress</h3>
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                    <span id="trainingStatus" style="font-weight: 700;">—</span>
+                    <progress id="trainingProgress" value="0" max="100" style="flex: 1; height: 20px;"></progress>
+                    <span id="trainingProgressText">0%</span>
+                </div>
+                <div id="trainingMessage" style="margin-bottom: 16px; color: var(--vi-text-muted);"></div>
+
+                <div class="vi-detail-grid">
+                    <div class="vi-detail-item">
+                        <label>Epoch</label>
+                        <span><span id="trainingCurrentEpoch">0</span> / <span id="trainingTotalEpochs">100</span></span>
+                    </div>
+                    <div class="vi-detail-item">
+                        <label>Precision</label>
+                        <span id="trainingPrecision">—</span>
+                    </div>
+                    <div class="vi-detail-item">
+                        <label>Recall</label>
+                        <span id="trainingRecall">—</span>
+                    </div>
+                    <div class="vi-detail-item">
+                        <label>mAP50</label>
+                        <span id="trainingMap50">—</span>
+                    </div>
+                    <div class="vi-detail-item">
+                        <label>mAP50-95</label>
+                        <span id="trainingMap5095">—</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="trainingStartPrompt">
+            <h2>YOLO Model Training</h2>
+            <p>Select parameters above and click "Start Training" to begin.</p>
+            <p style="color: var(--vi-text-muted); margin-top: 8px;">
+                Uses Celery + Redis. Progress updates via AJAX polling (no page reload).
+            </p>
+        </div>
+    </section>
+</div>
+
+<script>
+    var csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    var presetId = {% if preset_id %}{{ preset_id }}{% else %}null{% endif %};
+    var masterWidth = 0;
+    var masterHeight = 0;
+</script>
+<script src="{% static 'VisionInspection/js/configuration.js' %}"></script>
+<script src="{% static 'VisionInspection/js/roi_editor.js' %}"></script>
+<script src="{% static 'VisionInspection/js/training.js' %}"></script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Inspection Logs - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-card">
+    <form method="get" class="vi-form-row">
+        <div class="vi-form-group">
+            <label for="id_date_from">Date From</label>
+            <input type="date" name="date_from" id="id_date_from" value="{{ request.GET.date_from|default:'' }}">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_date_to">Date To</label>
+            <input type="date" name="date_to" id="id_date_to" value="{{ request.GET.date_to|default:'' }}">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_employee">Employee</label>
+            <input type="text" name="employee" id="id_employee" value="{{ request.GET.employee|default:'' }}" placeholder="Employee name or code">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_part_number">Part Number</label>
+            <input type="text" name="part_number" id="id_part_number" value="{{ request.GET.part_number|default:'' }}" placeholder="Part number">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_result">Result</label>
+            <select name="result" id="id_result">
+                <option value="">All</option>
+                <option value="OK" {% if request.GET.result == 'OK' %}selected{% endif %}>OK</option>
+                <option value="NOT_OK" {% if request.GET.result == 'NOT_OK' %}selected{% endif %}>NOT_OK</option>
+                <option value="ERROR" {% if request.GET.result == 'ERROR' %}selected{% endif %}>Error</option>
+            </select>
+        </div>
+        <div class="vi-form-group">
+            <label>&nbsp;</label>
+            <button type="submit" class="vi-btn vi-btn-primary">Filter</button>
+        </div>
+    </form>
+</div>
+
+<div class="vi-card">
+    <div class="vi-table-wrap">
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Employee</th>
+                    <th>Part</th>
+                    <th>Preset</th>
+                    <th>Result</th>
+                    <th>Defects</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.created_at|date:"Y-m-d H:i:s" }}</td>
+                    <td>{{ log.employee.employee_name }}</td>
+                    <td>{{ log.part.part_number }}</td>
+                    <td>{{ log.preset.name }}</td>
+                    <td>
+                        <span class="vi-badge vi-badge-{{ log.result|lower }}">{{ log.get_result_display }}</span>
+                    </td>
+                    <td>
+                        {% if log.defects_json %}
+                            {{ log.defects_json|length }}
+                        {% else %}
+                            0
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" style="text-align:center; color: var(--vi-text-muted);">No logs found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="vi-pagination">
+        Pagination handled by Django ORM in views.
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,73 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Parts - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-actions">
+    <a href="{% url 'vision_admin_part_add' %}" class="vi-btn vi-btn-primary">+ Add Part</a>
+</div>
+
+<div class="vi-card">
+    <form method="get" class="vi-form-row">
+        <div class="vi-form-group">
+            <label for="id_part_number">Part Number</label>
+            <input type="text" name="part_number" id="id_part_number" value="{{ request.GET.part_number|default:'' }}" placeholder="Search part number">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_part_name">Part Name</label>
+            <input type="text" name="part_name" id="id_part_name" value="{{ request.GET.part_name|default:'' }}" placeholder="Search part name">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_is_active">Status</label>
+            <select name="is_active" id="id_is_active">
+                <option value="">All</option>
+                <option value="true" {% if request.GET.is_active == 'true' %}selected{% endif %}>Active</option>
+                <option value="false" {% if request.GET.is_active == 'false' %}selected{% endif %}>Inactive</option>
+            </select>
+        </div>
+        <div class="vi-form-group">
+            <label>&nbsp;</label>
+            <button type="submit" class="vi-btn vi-btn-primary">Search</button>
+        </div>
+    </form>
+</div>
+
+<div class="vi-card">
+    <div class="vi-table-wrap">
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>Part Number</th>
+                    <th>Part Name</th>
+                    <th>Description</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for part in parts %}
+                <tr>
+                    <td>{{ part.part_number }}</td>
+                    <td>{{ part.part_name }}</td>
+                    <td>{{ part.description|truncatechars:80 }}</td>
+                    <td>
+                        {% if part.is_active %}
+                            <span class="vi-badge vi-badge-active">Active</span>
+                        {% else %}
+                            <span class="vi-badge vi-badge-inactive">Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ part.created_at|date:"Y-m-d" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5" style="text-align:center; color: var(--vi-text-muted);">No parts found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="vi-pagination">
+        Pagination handled by Django ORM in views.
+    </div>
+</div>
+{% endblock %}

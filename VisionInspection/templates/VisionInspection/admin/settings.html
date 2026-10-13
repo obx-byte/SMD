@@ -1,0 +1,18 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Settings - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-card">
+    <div class="vi-card-title">VisionInspection Settings</div>
+    {% if settings %}
+        {% for key, value in settings.items %}
+        <div class="vi-detail-row">
+            <span class="vi-detail-label">{{ key }}</span>
+            <span class="vi-detail-value">{{ value }}</span>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p style="color: var(--vi-text-muted);">No VisionInspection settings found in Django settings.</p>
+    {% endif %}
+</div>
+{% endblock %}

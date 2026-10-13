@@ -1,0 +1,107 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Part Vision Configuration — {{ part.part_number }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'VisionInspection/css/part_configuration.css' %}">
+{% endblock %}
+{% block header_title %}Part Vision Configuration{% endblock %}
+
+{% block content %}
+<div class="pc-page" id="partConfigPage" data-part-id="{{ part.pk }}">
+    <div class="pc-page-head">
+        <div>
+            <h2>{{ part.part_number }} <span>{{ part.part_name }}</span></h2>
+            <p>Configurations that pass validation become active for this part. Invalid configurations remain inactive until corrected.</p>
+        </div>
+        <a class="vi-btn" href="{% url 'VisionInspection:ui-parts' %}">Back to Parts</a>
+    </div>
+
+    <div class="pc-status-row">
+        <span>Current configuration</span>
+        <strong id="pcStatus">Loading</strong>
+        <span id="pcVersion"></span>
+        <span class="pc-roi" id="pcRoi">Common ROI: checking</span>
+    </div>
+    <div class="pc-message" id="pcMessage" role="status" aria-live="polite"></div>
+
+    <form id="partConfigForm">
+        {% csrf_token %}
+        <section class="pc-section">
+            <h3>Inspection and Camera Setup</h3>
+            <div class="pc-fields">
+                <label>Part inspection mode
+                    <select name="inspection_mode" id="pcMode" required>
+                        <option value="FRONT_ONLY">Front Only</option>
+                        <option value="BACK_ONLY">Back Only</option>
+                        <option value="FRONT_BACK">Front + Back</option>
+                    </select>
+                </label>
+                <label>Acceptance rule
+                    <select name="acceptance_rule" id="pcRule" required>
+                        <option value="count">Expected detection count</option>
+                        <option value="presence">Required class presence</option>
+                        <option value="confidence">Confidence threshold</option>
+                        <option value="count_confidence">Count and confidence</option>
+                    </select>
+                </label>
+                <label>Front camera source
+                    <select name="front_camera_source" id="pcFrontSource" required>
+                        <option value="OPENCV">OpenCV Camera</option>
+                        <option value="RPI">Raspberry Pi Camera</option>
+                    </select>
+                </label>
+                <label>Front camera index
+                    <input name="front_camera_index" id="pcFrontIndex" type="number" min="0" max="32" value="0" required>
+                </label>
+                <label>Back camera source
+                    <select name="back_camera_source" id="pcBackSource" required>
+                        <option value="OPENCV">OpenCV Camera</option>
+                        <option value="RPI">Raspberry Pi Camera</option>
+                    </select>
+                </label>
+                <label>Back camera index
+                    <input name="back_camera_index" id="pcBackIndex" type="number" min="0" max="32" value="1" required>
+                </label>
+            </div>
+        </section>
+
+        <section class="pc-section">
+            <div class="pc-section-head">
+                <h3>Models and Class Rules</h3>
+                <div class="pc-add-model">
+                    <input id="pcModelFile" type="file" accept=".pt,.onnx" hidden>
+                    <input id="pcUploadVersion" type="text" maxlength="50" placeholder="Version (optional)" aria-label="Uploaded model version">
+                    <button class="vi-btn vi-btn-primary" id="pcAddModel" type="button">Add Model</button>
+                    <select id="pcModelPicker" aria-label="Select a registered model" disabled>
+                        <option value="">Loading registered models…</option>
+                    </select>
+                    <button class="vi-btn" id="pcAddRegisteredModel" type="button" disabled>Use Registered</button>
+                </div>
+            </div>
+            <p class="pc-note" id="pcModelAvailability" role="status" aria-live="polite">Loading registered models…</p>
+            <p class="pc-note">Class names are read from each model; only enabled models and classes are used for inspection.</p>
+            <div id="pcModels" class="pc-models"></div>
+        </section>
+
+        <div class="pc-save-row">
+            <label class="pc-confirm"><input id="pcConfirm" type="checkbox" required>
+                I confirm this saves a configuration for {{ part.part_number }}. It activates only if validation passes.
+            </label>
+            <button class="vi-btn vi-btn-primary" id="pcSave" type="submit">Save Model Configuration</button>
+        </div>
+    </form>
+</div>
+<script>
+    window.__VI_PART_CONFIG__ = {
+        partId: {{ part.pk }},
+        urls: {
+            read: "{% url 'VisionInspection:api-part-vision-configuration' part.pk %}",
+            save: "{% url 'VisionInspection:api-part-vision-configuration-save' part.pk %}",
+            classes: "{% url 'VisionInspection:api-yolo-model-classes' 0 %}".replace("/0/classes/", "/__ID__/classes/"),
+            upload: "{% url 'VisionInspection:part-model-upload' %}"
+        }
+    };
+</script>
+<script src="{% static 'VisionInspection/js/part_configuration.js' %}?v=20261011-2" defer></script>
+{% endblock %}

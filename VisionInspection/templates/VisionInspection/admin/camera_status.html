@@ -1,0 +1,44 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Camera Status - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-card">
+    <div class="vi-card-title">Camera Status</div>
+    {% if camera_statuses %}
+        {% for camera in camera_statuses %}
+        <div class="vi-detail-panel" style="margin-bottom: 16px;">
+            <div class="vi-detail-row">
+                <span class="vi-detail-label">Camera Name</span>
+                <span class="vi-detail-value">{{ camera.name }}</span>
+            </div>
+            <div class="vi-detail-row">
+                <span class="vi-detail-label">Status</span>
+                <span class="vi-detail-value">
+                    {% if camera.status == 'connected' %}
+                        <span class="vi-badge vi-badge-ok">Connected</span>
+                    {% elif camera.status == 'disconnected' %}
+                        <span class="vi-badge vi-badge-error">Disconnected</span>
+                    {% else %}
+                        <span class="vi-badge vi-badge-pending">{{ camera.status|title }}</span>
+                    {% endif %}
+                </span>
+            </div>
+            <div class="vi-detail-row">
+                <span class="vi-detail-label">Resolution</span>
+                <span class="vi-detail-value">{{ camera.resolution|default:"-" }}</span>
+            </div>
+            <div class="vi-detail-row">
+                <span class="vi-detail-label">FPS</span>
+                <span class="vi-detail-value">{{ camera.fps|default:"-" }}</span>
+            </div>
+            <div class="vi-detail-row">
+                <span class="vi-detail-label">Last Ping</span>
+                <span class="vi-detail-value">{{ camera.last_ping|date:"Y-m-d H:i:s"|default:"-" }}</span>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p style="color: var(--vi-text-muted);">No camera status information available.</p>
+    {% endif %}
+</div>
+{% endblock %}

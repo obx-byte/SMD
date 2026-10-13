@@ -1,0 +1,57 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Inspection Presets — VisionInspection{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>Inspection Presets</h2>
+</div>
+
+<div class="vi-card">
+    <form method="get" class="vi-toolbar">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search preset name or part number...">
+        <button type="submit" class="vi-btn vi-btn-primary">Search</button>
+        <a href="{% url 'VisionInspection:ui-presets' %}" class="vi-btn">Reset</a>
+    </form>
+</div>
+
+<div class="vi-card" style="padding: 0; overflow-x: auto;">
+    <table class="vi-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Part Number</th>
+                <th>Version</th>
+                <th>Part Class</th>
+                <th>Confidence</th>
+                <th>Stable Frames</th>
+                <th>Trigger Cooldown</th>
+                <th>Status</th>
+                <th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in presets %}
+            <tr>
+                <td>{{ p.name }}</td>
+                <td>{{ p.part_number }}</td>
+                <td>v{{ p.version }}</td>
+                <td>{{ p.part_class }}</td>
+                <td>{{ p.confidence_threshold }}</td>
+                <td>{{ p.stable_frames }}</td>
+                <td>{{ p.trigger_cooldown }}</td>
+                <td>
+                    <span class="vi-badge {% if p.is_active %}vi-badge-ok{% else %}vi-badge-skip{% endif %}">
+                        {% if p.is_active %}Active{% else %}Inactive{% endif %}
+                    </span>
+                </td>
+                <td>{{ p.created_at|date:"Y-m-d H:i" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="9">No presets found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

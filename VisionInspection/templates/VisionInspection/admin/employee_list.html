@@ -1,0 +1,73 @@
+{% extends 'VisionInspection/admin/base.html' %}
+{% load static %}
+{% block title %}Employees - VisionInspection Admin{% endblock %}
+{% block content %}
+<div class="vi-actions">
+    <a href="{% url 'vision_admin_employee_add' %}" class="vi-btn vi-btn-primary">+ Add Employee</a>
+</div>
+
+<div class="vi-card">
+    <form method="get" class="vi-form-row">
+        <div class="vi-form-group">
+            <label for="id_employee_code">Employee Code</label>
+            <input type="text" name="employee_code" id="id_employee_code" value="{{ request.GET.employee_code|default:'' }}" placeholder="Search code">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_employee_name">Employee Name</label>
+            <input type="text" name="employee_name" id="id_employee_name" value="{{ request.GET.employee_name|default:'' }}" placeholder="Search name">
+        </div>
+        <div class="vi-form-group">
+            <label for="id_is_active">Status</label>
+            <select name="is_active" id="id_is_active">
+                <option value="">All</option>
+                <option value="true" {% if request.GET.is_active == 'true' %}selected{% endif %}>Active</option>
+                <option value="false" {% if request.GET.is_active == 'false' %}selected{% endif %}>Inactive</option>
+            </select>
+        </div>
+        <div class="vi-form-group">
+            <label>&nbsp;</label>
+            <button type="submit" class="vi-btn vi-btn-primary">Search</button>
+        </div>
+    </form>
+</div>
+
+<div class="vi-card">
+    <div class="vi-table-wrap">
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>Employee Code</th>
+                    <th>Employee Name</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for employee in employees %}
+                <tr>
+                    <td>{{ employee.employee_code }}</td>
+                    <td>{{ employee.employee_name }}</td>
+                    <td>{{ employee.role }}</td>
+                    <td>
+                        {% if employee.is_active %}
+                            <span class="vi-badge vi-badge-active">Active</span>
+                        {% else %}
+                            <span class="vi-badge vi-badge-inactive">Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ employee.created_at|date:"Y-m-d" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5" style="text-align:center; color: var(--vi-text-muted);">No employees found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="vi-pagination">
+        Pagination handled by Django ORM in views.
+    </div>
+</div>
+{% endblock %}

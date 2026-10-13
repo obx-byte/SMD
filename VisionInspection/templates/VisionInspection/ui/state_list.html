@@ -1,0 +1,61 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Inspection State — VisionInspection{% endblock %}
+
+{% block content %}
+<div class="vi-page-header">
+    <h2>Inspection State</h2>
+</div>
+
+{% if state %}
+<div class="vi-card">
+    <div class="vi-state-grid">
+        <div class="vi-state-item">
+            <label>Current State</label>
+            <span class="vi-badge vi-badge-active">{{ state.current_state }}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Employee Code</label>
+            <span>{{ state.employee_code|default:"—" }}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Employee Name</label>
+            <span>{{ state.employee_name|default:"—" }}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Part Number</label>
+            <span>{{ state.part_number|default:"—" }}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Preset Name</label>
+            <span>{{ state.preset_name|default:"—" }} v{{ state.preset_version|default:"?" }}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Camera Status</label>
+            <span class="vi-badge {% if state.camera_status == 'ON' %}vi-badge-ok{% elif state.camera_status == 'ERROR' %}vi-badge-error{% else %}vi-badge-skip{% endif %}">{{ state.camera_status }}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Trigger Auto</label>
+            <span class="vi-badge {% if state.trigger_auto %}vi-badge-ok{% else %}vi-badge-skip{% endif %}">{% if state.trigger_auto %}Enabled{% else %}Disabled{% endif %}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Final Result</label>
+            <span class="vi-badge {% if state.final_result == 'OK' %}vi-badge-ok{% elif state.final_result == 'NOT_OK' %}vi-badge-not-ok{% elif state.final_result == 'ERROR' %}vi-badge-error{% else %}vi-badge-skip{% endif %}">{{ state.final_result }}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Last Inspection ID</label>
+            <span>#{{ state.last_inspection_id|default:"—" }}</span>
+        </div>
+        <div class="vi-state-item">
+            <label>Updated At</label>
+            <span>{{ state.updated_at|date:"Y-m-d H:i:s" }}</span>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="vi-card">
+    <p>No inspection state found.</p>
+</div>
+{% endif %}
+{% endblock %}

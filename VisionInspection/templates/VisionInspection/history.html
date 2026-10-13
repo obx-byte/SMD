@@ -1,0 +1,163 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inspection History - Vision Inspection</title>
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/configuration.css' %}">
+</head>
+<body>
+<div class="vi-container">
+    <header class="vi-header">
+        <div class="vi-header-left">
+            <h1 class="vi-title">INSPECTION HISTORY</h1>
+        </div>
+        <div class="vi-header-right">
+            <a href="/vision-inspection/inspection/" class="vi-btn">Back to Inspection</a>
+        </div>
+    </header>
+
+    <section class="vi-history-section">
+        <h2>Inspection Records</h2>
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Timestamp</th>
+                    <th>Employee</th>
+                    <th>Part Number</th>
+                    <th>Preset</th>
+                    <th>YOLO Model</th>
+                    <th>Final Result</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr class="{% if log.result == 'OK' %}vi-row-ok{% elif log.result == 'NOT_OK' %}vi-row-not-ok{% else %}vi-row-error{% endif %}">
+                    <td>#{{ log.pk }}</td>
+                    <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
+                    <td>{{ log.employee_code|default:"—" }}</td>
+                    <td>{{ log.part_number|default:"—" }}</td>
+                    <td>{{ log.preset_name|default:"—" }} v{{ log.preset_version|default:"?" }}</td>
+                    <td>{{ log.yolo_model_name|default:"—" }} v{{ log.yolo_model_version|default:"?" }}</td>
+                    <td>
+                        <span class="vi-badge {% if log.result == 'OK' %}vi-badge-ok{% elif log.result == 'NOT_OK' %}vi-badge-not-ok{% else %}vi-badge-error{% endif %}">
+                            {{ log.get_result_display }}
+                        </span>
+                    </td>
+                    <td>
+                        <a href="/vision-inspection/history/{{ log.id }}/" class="vi-btn vi-btn-sm">View</a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="8">No inspection records found.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    {% if log %}
+    <!-- Detail view section -->
+    <section class="vi-history-detail">
+        <h2>Inspection #{{ log.pk }} Details</h2>
+        <div class="vi-detail-grid">
+            <div class="vi-detail-item">
+                <label>Employee</label>
+                <span>{{ log.employee_code|default:"—" }}</span>
+            </div>
+            <div class="vi-detail-item">
+                <label>Part Number</label>
+                <span>{{ log.part_number|default:"—" }}</span>
+            </div>
+            <div class="vi-detail-item">
+                <label>Preset Version</label>
+                <span>{{ log.preset_name|default:"—" }} v{{ log.preset_version|default:"?" }}</span>
+            </div>
+            <div class="vi-detail-item">
+                <label>YOLO Model</label>
+                <span>{{ log.yolo_model_name|default:"—" }}</span>
+            </div>
+            <div class="vi-detail-item">
+                <label>Timestamp</label>
+                <span>{{ log.timestamp|date:"Y-m-d H:i:s" }}</span>
+            </div>
+            <div class="vi-detail-item">
+                <label>Result</label>
+                <span class="vi-badge {% if log.result == 'OK' %}vi-badge-ok{% elif log.result == 'NOT_OK' %}vi-badge-not-ok{% else %}vi-badge-error{% endif %}">
+                    {{ log.get_result_display }}
+                </span>
+            </div>
+            <div class="vi-detail-item">
+                <label>Stable Frames Used</label>
+                <span>{{ log.stable_frames_used }}</span>
+            </div>
+            <div class="vi-detail-item">
+                <label>Error Details</label>
+                <span>{{ log.error_details|default:"None" }}</span>
+            </div>
+        </div>
+
+        <!-- ROI Results -->
+        <h3>ROI Results</h3>
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>ROI</th>
+                    <th>Result</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in roi_results %}
+                <tr>
+                    <td>{{ r.roi_name|default:"—" }}</td>
+                    <td>
+                        <span class="vi-badge {% if r.result == 'MATCH' %}vi-badge-ok{% elif r.result == 'NOT_MATCH' %}vi-badge-not-ok{% elif r.result == 'SKIPPED' %}vi-badge-skip{% else %}vi-badge-error{% endif %}">
+                            {{ r.result }}
+                        </span>
+                    </td>
+                    <td>{{ r.details|default:"—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Detected Objects -->
+        <h3>Detected Objects</h3>
+        <table class="vi-table">
+            <thead>
+                <tr>
+                    <th>Class</th>
+                    <th>Confidence</th>
+                    <th>BBox (x1, y1, x2, y2)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in detected_objects %}
+                <tr>
+                    <td>{{ d.class|default:"—" }}</td>
+                    <td>{{ d.confidence|floatformat:2 }}</td>
+                    <td>{{ d.x1 }}, {{ d.y1 }}, {{ d.x2 }}, {{ d.y2 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% if log.inspection_image %}
+        <h3>Inspection Image</h3>
+        <img src="{{ log.inspection_image.url }}" class="vi-inspection-image" alt="Inspection Result">
+        {% endif %}
+    </section>
+    {% endif %}
+
+    <div class="vi-back-link">
+        <a href="/vision-inspection/history/">← Back to History List</a>
+    </div>
+</div>
+
+<script src="{% static 'VisionInspection/js/inspection.js' %}"></script>
+</body>
+</html>
