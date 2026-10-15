@@ -127,9 +127,9 @@
         <div class="vi-report-toolbar">
             <h3 class="vi-card-title">Inspection Records</h3>
             <div class="vi-report-tools">
-                <a class="vi-btn vi-btn-success" href="{% url 'VisionInspection:ui-report-export-excel' %}?{{ export_query }}"
+                <a class="vi-btn vi-btn-success" href="{% url 'VisionInspection:ui-report-export-excel' %}{% if export_query %}?{{ export_query }}{% endif %}"
                    title="Export the filtered records as an Excel workbook">&#128196; Export Excel</a>
-                <a class="vi-btn vi-btn-danger" href="{% url 'VisionInspection:ui-report-export-pdf' %}?{{ export_query }}"
+                <a class="vi-btn vi-btn-danger" href="{% url 'VisionInspection:ui-report-export-pdf' %}{% if export_query %}?{{ export_query }}{% endif %}"
                    title="Export the filtered records as a PDF document">&#128196; Export PDF</a>
                 <button type="button" class="vi-btn" id="reportPrintBtn" title="Print the report">&#128424; Print</button>
                 <input type="text" id="reportSearch" class="vi-report-search" placeholder="Search…" aria-label="Search records">
@@ -217,13 +217,13 @@
                     {% for number in page_links %}
                         {% if number %}
                             <a class="vi-btn vi-btn-sm {% if number == page_obj.number %}vi-btn-primary{% endif %}"
-                               href="?page={{ number }}&{{ export_query }}">{{ number }}</a>
+                               href="?page={{ number }}{% if export_query %}&{{ export_query }}{% endif %}">{{ number }}</a>
                         {% else %}
                             <span class="vi-page-ellipsis">…</span>
                         {% endif %}
                     {% endfor %}
                     {% if page_obj.has_next %}
-                        <a class="vi-btn vi-btn-sm" href="?page={{ page_obj.next_page_number }}&{{ export_query }}">Next &raquo;</a>
+                        <a class="vi-btn vi-btn-sm" href="?page={{ page_obj.next_page_number }}{% if export_query %}&{{ export_query }}{% endif %}">Next &raquo;</a>
                     {% endif %}
                 </div>
             {% endif %}

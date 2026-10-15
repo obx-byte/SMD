@@ -1,0 +1,150 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}ROI Setup — {{ part.part_number }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'VisionInspection/css/part_configuration.css' %}?v=20261015-1">
+<link rel="stylesheet" href="{% static 'VisionInspection/css/roi_setup.css' %}?v=20261015-1">
+{% endblock %}
+{% block header_title %}ROI Setup &middot; {{ part.part_number }}{% endblock %}
+
+{% block content %}
+<div class="rs-page" id="roiSetupPage" data-part-id="{{ part.pk }}">
+    <div hidden>{% csrf_token %}</div>
+    <div class="rs-head">
+        <div class="rs-head-main">
+            <h2>{{ part.part_number }} <span>{{ part.part_name }}</span></h2>
+            <p class="rs-note">
+                One common ROI is reused by every enabled model and both inspection sides.
+            </p>
+        </div>
+        <div class="rs-head-actions">
+            <a class="vi-btn" id="rsBackConfig" href="{% url 'VisionInspection:part-vision-configuration' part.pk %}">Back to Configuration</a>
+            {% if configuration %}
+            <span class="rs-tag {{ configuration.status|lower }}" id="rsConfigStatus" data-status="{{ configuration.status }}">
+                {{ configuration.get_status_display }}{% if configuration.version %} &middot; v{{ configuration.version }}{% endif %}
+            </span>
+            {% else %}
+            <span class="rs-tag not-configured">Not Configured</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="rs-grid">
+        <section class="rs-card rs-card-camera">
+            <header class="rs-card-head">
+                <h3>Camera</h3>
+                <span class="rs-badge off" id="rsCamState">OFF</span>
+            </header>
+
+            <div class="rs-fields">
+                <label>Camera source
+                    <select id="rsCameraSource" class="vi-master-control">
+                        {% for src in camera_capabilities.sources %}
+                            {% if src.available %}<option value="{{ src.id }}" {% if src.id == camera_source|lower %}selected{% endif %}>{{ src.label }}</option>
+                            {% else %}<option value="{{ src.id }}" disabled>{{ src.label }} — unavailable on this host</option>{% endif %}
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>Camera index
+                    <input id="rsCameraIndex" class="vi-master-control" type="number" min="0" max="32" value="{{ camera_index }}">
+                </label>
+                <label>Side
+                    <select id="rsSide" class="vi-master-control">
+                        {% if configuration.inspection_mode == 'BACK_ONLY' %}<option value="back" selected>Back</option>
+                        {% else %}<option value="front" selected>Front</option>{% endif %}
+                        {% if configuration.inspection_mode == 'FRONT_BACK' %}<option value="back">Back</option>{% endif %}
+                    </select>
+                </label>
+            </div>
+
+            <div class="rs-actions">
+                <button type="button" class="vi-btn vi-btn-primary" id="rsStartCam">&#9679; Start Camera</button>
+                <button type="button" class="vi-btn" id="rsStopCam" disabled>&#9632; Stop Camera</button>
+            </div>
+
+            <p class="rs-hint" id="rsCameraHint">
+                The camera does not start automatically. Start it to position the part and draw the ROI.
+            </p>
+            {% if camera_compatibility_error %}
+            <p class="rs-compatibility-warning" id="rsCompatibilityWarning" role="alert">
+                {{ camera_compatibility_error }} Return to Part Vision and correct the camera settings.
+                The common ROI cannot be saved until the camera roles match.
+            </p>
+            {% endif %}
+
+            <div class="rs-stage" id="rsStage">
+                <img id="rsFeed" class="rs-feed" alt="Live camera preview" style="display:none">
+                <canvas id="rsCanvas" class="rs-canvas"></canvas>
+                <div class="rs-stage-overlay" id="rsOverlay">Camera stopped</div>
+            </div>
+
+            <div class="rs-coords" id="rsCoords" aria-live="polite">
+                <span>X <b id="rsX">&mdash;</b></span>
+                <span>Y <b id="rsY">&mdash;</b></span>
+                <span>W <b id="rsW">&mdash;</b></span>
+                <span>H <b id="rsH">&mdash;</b></span>
+                <span>Frame <b id="rsRef">&mdash;</b></span>
+            </div>
+
+            <div class="rs-actions">
+                <button type="button" class="vi-btn" id="rsDraw" disabled>&#9998; Draw ROI</button>
+                <button type="button" class="vi-btn" id="rsPreview" disabled title="Preview the selected region">&#128269; Preview Crop</button>
+                <button type="button" class="vi-btn vi-btn-primary" id="rsSave" disabled>&#128190; Save ROI</button>
+                <button type="button" class="vi-btn" id="rsReset">&#8634; Reset</button>
+                <button type="button" class="vi-btn" id="rsCancel">Cancel</button>
+            </div>
+
+            <div class="rs-crop" id="rsCropWrap" style="display:none">
+                <h4>ROI preview</h4>
+                <img id="rsCrop" alt="Selected ROI preview">
+            </div>
+        </section>
+
+        <section class="rs-card">
+            <header class="rs-card-head"><h3>Saved ROI</h3></header>
+            <div id="rsSavedBody" class="rs-saved">
+                <p class="rs-empty" id="rsSavedEmpty">No common ROI has been saved for this part yet.</p>
+            </div>
+
+            <header class="rs-card-head rs-card-head-sub"><h3>How the ROI is used</h3></header>
+            <ul class="rs-facts">
+                <li>Applied to every enabled model of this part — no per-model ROI.</li>
+                <li>Reused for Front and Back images of the same part.</li>
+                <li>Stored in source-frame pixels with the frame size it was drawn against.</li>
+                <li>Inspection is blocked until a valid common ROI exists.</li>
+            </ul>
+
+            <div class="rs-message" id="rsMessage" role="status" aria-live="polite"></div>
+        </section>
+    </div>
+</div>
+
+<script>
+    window.__VI_ROI_SETUP__ = {
+        partId: {{ part.pk }},
+        configurationId: {% if configuration %}{{ configuration.pk }}{% else %}null{% endif %},
+        cameraCompatible: {% if configuration and not camera_compatibility_error %}true{% else %}false{% endif %},
+        cameraCompatibilityError: "{{ camera_compatibility_error|escapejs }}",
+        frontCameraSource: "{{ front_camera_source|lower|escapejs }}",
+        frontCameraIndex: {{ front_camera_index|default:0 }},
+        backCameraSource: "{{ back_camera_source|lower|escapejs }}",
+        backCameraIndex: {{ back_camera_index|default:1 }},
+        cameraSource: "{{ camera_source|lower|escapejs }}",
+        cameraIndex: {{ camera_index|default:0 }},
+        urls: {
+            roiGet: "{% url 'VisionInspection:api-part-vision-roi' part.pk %}{% if configuration %}?configuration_id={{ configuration.pk }}{% endif %}",
+            roiSave: "{% url 'VisionInspection:api-part-vision-roi-save' part.pk %}",
+            configuration: "{% url 'VisionInspection:part-vision-configuration' part.pk %}",
+            cameraStart: "{% url 'VisionInspection:camera-start' %}",
+            cameraStop: "{% url 'VisionInspection:camera-stop' %}",
+            cameraStatus: "{% url 'VisionInspection:camera-status' %}",
+            cameraStream: "{% url 'VisionInspection:camera-stream' %}",
+            cameraCapture: "{% url 'VisionInspection:camera-capture' %}",
+            resolution: "{% url 'VisionInspection:master-camera-resolution' %}"
+        },
+        csrf: document.querySelector('[name="csrfmiddlewaretoken"]')?.value || ""
+    };
+</script>
+<script src="{% static 'VisionInspection/js/roi_setup.js' %}?v=20261015-3" defer></script>
+{% endblock %}

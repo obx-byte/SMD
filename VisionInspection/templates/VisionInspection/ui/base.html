@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="{% url 'favicon' %}" type="image/svg+xml">
     <title>{% block title %}VisionInspection{% endblock %}</title>
     <script>
         // Apply the persisted theme (Purple default, Green optional) before paint.
@@ -27,48 +28,73 @@
         <div class="vi-sidebar-header">
             <span class="vi-sidebar-logo">&#9670;</span>
             <span class="vi-sidebar-title">Vision Inspection</span>
+            <span class="vi-sidebar-subtitle">Airbag Stitch Inspection</span>
         </div>
-        <nav class="vi-sidebar-nav" id="viSidebarNav">
-            <a href="{% url 'VisionInspection:dashboard' %}" class="vi-sidebar-link {% if sidebar_active == 'dashboard' %}active{% endif %}">
-                <span class="vi-sidebar-icon">&#9632;</span> Dashboard
-            </a>
-
-            <!-- Inventory == Part Master (single route, no duplicate) -->
-            <a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}">
-                <span class="vi-sidebar-icon">&#9638;</span>{% if user.is_staff %} Inventory &amp; Parts{% else %} Part Vision Setup{% endif %}
-            </a>
-
+        <nav class="vi-sidebar-nav" id="viSidebarNav" aria-label="Application navigation">
+            <!-- HOME -->
             <div class="vi-sidebar-section">
-                <div class="vi-sidebar-section-title" data-target="section-operations">Operations <span class="vi-caret">&#9656;</span></div>
-                <div class="vi-sidebar-collapse" id="section-operations">
-                    <a href="{% url 'VisionInspection:inspection-master' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection_master' %}active{% endif %}">Inspection Master</a>
-                    <a href="{% url 'VisionInspection:inspection' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection' %}active{% endif %}">Live Inspection</a>
-                    <a href="{% url 'VisionInspection:history' %}" class="vi-sidebar-link {% if sidebar_active == 'history' %}active{% endif %}">History</a>
-                    {% if user.is_staff %}
-                    <a href="{% url 'VisionInspection:ui-logs' %}" class="vi-sidebar-link {% if sidebar_active == 'logs' %}active{% endif %}">Inspection Logs</a>
-                    <a href="{% url 'VisionInspection:ui-rois' %}" class="vi-sidebar-link {% if sidebar_active == 'rois' %}active{% endif %}">ROI</a>
-                    <a href="{% url 'VisionInspection:ui-trigger-zones' %}" class="vi-sidebar-link {% if sidebar_active == 'trigger_zones' %}active{% endif %}">Trigger Zone</a>
-                    {% endif %}
+                <div class="vi-sidebar-section-title" data-target="section-home">Home <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse vi-collapsed" id="section-home">
+                    <a href="{% url 'VisionInspection:dashboard' %}" class="vi-sidebar-link {% if sidebar_active == 'dashboard' %}active{% endif %}"><span class="vi-sidebar-icon">&#9632;</span> Dashboard</a>
                 </div>
             </div>
 
+            <!-- MASTER DATA (privileged) -->
             {% if user.is_staff %}
             <div class="vi-sidebar-section">
-                <div class="vi-sidebar-section-title" data-target="section-masters">Masters <span class="vi-caret">&#9656;</span></div>
-                <div class="vi-sidebar-collapse" id="section-masters">
-                    <a href="{% url 'VisionInspection:ui-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' %}active{% endif %}">Employee Master</a>
-                    <a href="{% url 'VisionInspection:ui-presets' %}" class="vi-sidebar-link {% if sidebar_active == 'presets' %}active{% endif %}">Inspection Presets</a>
+                <div class="vi-sidebar-section-title" data-target="section-master-data">Master Data <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse vi-collapsed" id="section-master-data">
+                    <a href="{% url 'VisionInspection:ui-parts' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}"><span class="vi-sidebar-icon">&#43;</span> Add Part</a>
+                    <a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}"><span class="vi-sidebar-icon">&#9638;</span> View Parts</a>
+                    <a href="{% url 'VisionInspection:ui-employees' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'employees' %}active{% endif %}"><span class="vi-sidebar-icon">&#43;</span> Add Employee</a>
+                    <a href="{% url 'VisionInspection:ui-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' %}active{% endif %}"><span class="vi-sidebar-icon">&#9737;</span> View Employees</a>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- VISION INSPECTION -->
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-vision">Vision Inspection <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse vi-collapsed" id="section-vision">
+                    <a href="{% url 'VisionInspection:inspection' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection' %}active{% endif %}"><span class="vi-sidebar-icon">&#9679;</span> Start Inspection</a>
+                    <a href="{% url 'VisionInspection:history' %}" class="vi-sidebar-link {% if sidebar_active == 'history' %}active{% endif %}"><span class="vi-sidebar-icon">&#8776;</span> Inspection History</a>
+                    {% if user.is_staff %}
+                    <a href="{% url 'VisionInspection:ui-logs' %}" class="vi-sidebar-link {% if sidebar_active == 'logs' %}active{% endif %}"><span class="vi-sidebar-icon">&#9776;</span> Inspection Logs</a>
+                    {% endif %}
+                    <a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}"><span class="vi-sidebar-icon">&#9638;</span> {% if user.is_staff %}View Parts{% else %}Part Vision Setup{% endif %}</a>
+                    <a href="{% url 'VisionInspection:ui-parts' %}?action=roi" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}"><span class="vi-sidebar-icon">&#9639;</span> ROI Setup</a>
+                </div>
+            </div>
+
+            <!-- AI / MODELS -->
+            {% if user.is_staff %}
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-ai">AI / Models <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse vi-collapsed" id="section-ai">
+                    <a href="{% url 'VisionInspection:ui-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' %}active{% endif %}"><span class="vi-sidebar-icon">&#9632;</span> YOLO Models</a>
+                    <a href="{% url 'VisionInspection:ui-training-jobs' %}" class="vi-sidebar-link {% if sidebar_active == 'training_jobs' %}active{% endif %}"><span class="vi-sidebar-icon">&#9776;</span> Training Jobs</a>
                 </div>
             </div>
             {% endif %}
 
             <div class="vi-sidebar-section">
-                <div class="vi-sidebar-section-title" data-target="section-ai">AI Insights <span class="vi-caret">&#9656;</span></div>
-                <div class="vi-sidebar-collapse" id="section-ai">
-                    <a href="{% url 'VisionInspection:ui-traceability' %}" class="vi-sidebar-link {% if sidebar_active == 'traceability' %}active{% endif %}">Inspection Traceability</a>
+                <div class="vi-sidebar-section-title" data-target="section-configuration">Configuration <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse vi-collapsed" id="section-configuration">
+                    <a href="{% url 'VisionInspection:storage-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'storage' %}active{% endif %}"><span class="vi-sidebar-icon">&#9638;</span> Storage Settings</a>
                     {% if user.is_staff %}
-                    <a href="{% url 'VisionInspection:ui-reports' %}" class="vi-sidebar-link {% if sidebar_active == 'reports' %}active{% endif %}">Reports</a>
+                    <a href="{% url 'VisionInspection:inspection-master' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection_master' %}active{% endif %}"><span class="vi-sidebar-icon">&#9679;</span> Camera Setup</a>
+                    <a href="{% url 'VisionInspection:configuration' %}" class="vi-sidebar-link {% if sidebar_active == 'configuration' %}active{% endif %}"><span class="vi-sidebar-icon">&#9881;</span> Model Configuration</a>
+                    <a href="{% url 'VisionInspection:ui-yolo-models' %}?approved=1" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' %}active{% endif %}"><span class="vi-sidebar-icon">&#10003;</span> Approved Models</a>
                     {% endif %}
+                </div>
+            </div>
+
+            <!-- REPORTS -->
+            <div class="vi-sidebar-section">
+                <div class="vi-sidebar-section-title" data-target="section-reports">Reports <span class="vi-caret">&#9656;</span></div>
+                <div class="vi-sidebar-collapse vi-collapsed" id="section-reports">
+                    <a href="{% url 'VisionInspection:ui-reports' %}" class="vi-sidebar-link {% if sidebar_active == 'reports' %}active{% endif %}"><span class="vi-sidebar-icon">&#9776;</span> Inspection Report</a>
+                    <a href="{% url 'VisionInspection:ui-traceability' %}" class="vi-sidebar-link {% if sidebar_active == 'traceability' %}active{% endif %}"><span class="vi-sidebar-icon">&#9776;</span> Traceability</a>
                 </div>
             </div>
 
@@ -84,16 +110,22 @@
 
     <div class="vi-main-wrapper">
         <header class="vi-top-header">
-            <button class="vi-sidebar-toggle" id="viSidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+            <button class="vi-sidebar-toggle" id="viSidebarToggle" aria-label="Toggle sidebar" title="Toggle navigation">&#9776;</button>
+            <div class="vi-brand">
+                <span class="vi-brand-logo" aria-hidden="true">&#9670;</span>
+                <span class="vi-brand-title">Airbag Stitch Inspection</span>
+            </div>
             <h1 class="vi-header-title">{% block header_title %}VisionInspection{% endblock %}</h1>
             <div class="vi-header-actions">
-                <div class="vi-header-search">
-                    <input type="text" id="viNavSearch" placeholder="Search menu…" aria-label="Search navigation">
+                <div class="vi-header-station">
+                    <span class="vi-header-clock" id="viClock">{{ station_id }}</span>
                 </div>
-                <button class="vi-theme-toggle" id="viThemeToggle" type="button" aria-label="Toggle color theme" title="Switch Purple / Green theme">
-                    <span id="viThemeToggleLabel">Green</span>
-                </button>
-                <a href="{% url 'VisionInspection:ui-traceability' %}" class="vi-header-bell" title="Notifications — Inspection Traceability" aria-label="Notifications">&#9873;</a>
+                <a href="{% url 'VisionInspection:dashboard' %}" class="vi-header-home" title="Home dashboard" aria-label="Home dashboard">
+                    <span aria-hidden="true">&#8962;</span>
+                </a>
+                <a href="{% url 'VisionInspection:inspection' %}" class="vi-header-inspect" title="Open the operator inspection screen" aria-label="Inspection">
+                    <span aria-hidden="true">&#9679;</span> Inspection
+                </a>
                 <div class="vi-profile" id="viProfile">
                     <button class="vi-profile-btn" id="viProfileBtn" type="button" aria-haspopup="true" aria-expanded="false">
                         <span class="vi-profile-avatar" id="viProfileAvatar">?</span>
@@ -225,6 +257,25 @@
                 nameEls.forEach(function(el) { if (el) el.textContent = displayName; });
                 var avEls = [document.getElementById('viProfileAvatar'), document.getElementById('viProfileAvatar2')];
                 avEls.forEach(function(el) { if (el) el.textContent = initial; });
+            }
+
+            // Live date/time next to the station identifier.
+            var clock = document.getElementById('viClock');
+            function tick() {
+                if (!clock) return;
+                try {
+                    var now = new Date();
+                    var stamp = now.toLocaleDateString(undefined, {day: '2-digit', month: 'short', year: 'numeric'})
+                        + ' ' + now.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
+                    var station = clock.getAttribute('data-station') || '';
+                    clock.textContent = station ? (stamp + ' · ' + station) : stamp;
+                } catch (e) { /* keep the static text */ }
+            }
+            var stationId = "{{ station_id }}";
+            if (clock) {
+                clock.setAttribute('data-station', stationId);
+                tick();
+                setInterval(tick, 30000);
             }
 
             // Theme toggle (Purple default <-> Green), persisted in localStorage.

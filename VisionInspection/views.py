@@ -25,6 +25,7 @@ import binascii
 import io
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -39,6 +40,7 @@ from django.http import (
     JsonResponse,
     StreamingHttpResponse,
 )
+from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, render
 from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_GET, require_POST
@@ -69,7 +71,13 @@ from VisionInspection.services.camera_service import (
 )
 from VisionInspection.services.continuous_inspection import ContinuousInspectionEngine
 from VisionInspection.services.inspection_workflow import InspectionWorkflow
-from VisionInspection.services.part_configuration import validate_configuration
+from VisionInspection.services.part_configuration import (
+    active_roi,
+    common_roi_camera_error,
+    validate_configuration,
+    validate_data_yaml,
+)
+from VisionInspection.services.model_registry import ModelLoadError, registry
 from VisionInspection.services.yolo_service import YOLOModelService
 
 logger = logging.getLogger(__name__)
@@ -108,7 +116,7 @@ def _clean(value):
 def _as_int(value, default=0):
     try:
         return int(float(value))
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
 
 
@@ -355,6 +363,7 @@ def inspection_view(request):
     context = {
         "sidebar_active": "inspection",
         "station_id": _station_id(),
+        "csrf_token": get_token(request),
         "parts": _parts_for_select(),
         "camera_capabilities": get_camera_capabilities(),
         "active_model": _active_model(),
@@ -457,10 +466,13 @@ def history_view(request):
 def history_detail(request, inspection_id):
     """Inspection history detail — only the evidence that was really stored."""
     log = get_object_or_404(VisionInspectionLog, pk=inspection_id)
+    from VisionInspection.services.storage_service import image_url
+
     context = {
         "sidebar_active": "history",
         "logs": [log],
         "log": log,
+        "inspection_image_url": image_url(log, "inspection_image"),
         "roi_results": _history_roi_rows(log),
         "detected_objects": _history_detection_rows(log),
         "date_from": "",
@@ -1245,13 +1257,42 @@ def camera_start(request):
     """Start the camera capture thread (OpenCV or Picamera2)."""
     source = _clean(request.GET.get("source")) or CAMERA_SOURCES["OPENCV"]
     index = _as_int(request.GET.get("camera_index"), 0)
-    CameraService.start_camera(camera_index=index, source=source)
+    reuse_existing = request.GET.get("reuse_if_active") == "1"
+    started = CameraService.start_camera(
+        camera_index=index,
+        source=source,
+        reuse_existing=reuse_existing,
+    )
+    status = CameraService.get_status()
+    current_source = CameraService.get_source()
+    current_index = CameraService.get_camera_index()
+    if reuse_existing and not started and status in (
+        CAMERA_STATES["ON"],
+        CAMERA_STATES["CONNECTING"],
+    ) and (
+        current_source != source
+        or (
+            source != CAMERA_SOURCES["PICAMERA"]
+            and current_index != index
+        )
+    ):
+        return _error(
+            "The camera is already active with different settings. Stop the "
+            "current workflow before changing its camera source or index.",
+            status=409,
+        )
     return _json_response(
         {
-            "status": CameraService.get_status(),
+            "status": status,
             "state": CameraService.get_state(),
             "error": CameraService.get_error(),
-            "source": CameraService.get_source(),
+            "source": current_source,
+            "camera_index": current_index,
+            "started_by_request": started,
+            "reused": reuse_existing and not started and status in (
+                CAMERA_STATES["ON"],
+                CAMERA_STATES["CONNECTING"],
+            ),
         }
     )
 
@@ -1274,6 +1315,7 @@ def camera_status(request):
             "state": CameraService.get_state(),
             "error": CameraService.get_error(),
             "source": CameraService.get_source(),
+            "camera_index": CameraService.get_camera_index(),
             "width": resolution["width"],
             "height": resolution["height"],
             "model_configured": _active_model() is not None,
@@ -1698,12 +1740,110 @@ def workflow_scan_part(request):
     return _json_response(result, status=200 if result.get("ok") else 400)
 
 
+
+from django.views.decorators.http import require_POST
+from django.core.serializers.json import DjangoJSONEncoder
+from django.http import JsonResponse
+import json
+
+
 @require_POST
 def workflow_validate_model(request):
-    """Step 2 — validate (and load) the inspection model."""
+    """Step 2 — validate and load the inspection model."""
+
     data = _body_json(request)
-    result = _workflow().validate_model(data.get("model_id"))
-    return _json_response(result, status=200 if result.get("ok") else 400)
+    part_number = data.get("part_number")
+    raw_model_id = data.get("model_id")
+    if part_number is not None and not isinstance(part_number, str):
+        return _json_response(
+            {
+                "ok": False,
+                "state": "invalid_request",
+                "error_code": "invalid_part_number",
+                "message": "part_number must be a string barcode.",
+            },
+            status=400,
+        )
+    part_number = part_number.strip() if part_number is not None else None
+    part_number = part_number or None
+    if raw_model_id is not None:
+        try:
+            if isinstance(raw_model_id, bool):
+                raise ValueError
+            if isinstance(raw_model_id, str) and not raw_model_id.isdecimal():
+                raise ValueError
+            if not isinstance(raw_model_id, (int, str)):
+                raise ValueError
+            model_id = int(raw_model_id)
+            if model_id < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return _json_response(
+                {
+                    "ok": False,
+                    "state": "invalid_request",
+                    "error_code": "invalid_model_id",
+                    "message": "model_id must be a positive integer.",
+                },
+                status=400,
+            )
+    else:
+        model_id = None
+    if not _clean(part_number) and model_id is None:
+        return _json_response(
+            {
+                "ok": False,
+                "state": "invalid_request",
+                "error_code": "validation_target_required",
+                "message": "Provide a part_number or model_id to validate.",
+            },
+            status=400,
+        )
+
+    result = _workflow().validate_model(model_id, part_number)
+
+    # Convert the result into JSON-safe data.
+    def make_json_safe(value):
+        if hasattr(value, "_meta"):
+            # Django model instance -> dictionary of database fields.
+            return {
+                field.name: make_json_safe(
+                    getattr(value, field.name)
+                )
+                for field in value._meta.concrete_fields
+            }
+
+        if isinstance(value, dict):
+            return {
+                str(key): make_json_safe(item)
+                for key, item in value.items()
+            }
+
+        if isinstance(value, (list, tuple)):
+            return [make_json_safe(item) for item in value]
+
+        return value
+
+    safe_result = make_json_safe(result)
+
+    # Validate that the response can be serialized.
+    # DjangoJSONEncoder handles dates, decimals, and UUIDs.
+    safe_result = json.loads(
+        json.dumps(safe_result, cls=DjangoJSONEncoder)
+    )
+
+    if not safe_result.get("ok"):
+        safe_result["error_code"] = safe_result.get("state", "model_validation_failed")
+        state = safe_result.get("state")
+        status = 404 if state == "part_not_found" else 422
+    else:
+        status = 200
+
+    return JsonResponse(
+        safe_result,
+        status=status,
+        safe=False,
+    )
 
 
 @require_POST
@@ -1722,6 +1862,18 @@ def workflow_progress(request, session_id):
 
 
 @require_POST
+def workflow_activate_side(request):
+    """Activate the session-configured camera for a side preview."""
+    data = _body_json(request)
+    session_id = data.get("session_id")
+    side = data.get("side")
+    if not session_id:
+        return _error("A session_id is required.")
+    result = _workflow().activate_side(str(session_id), str(side or ""))
+    return _json_response(result, status=200 if result.get("ok") else 400)
+
+
+@require_POST
 def workflow_inspect_side(request, side):
     """Step 4/5 — inspect the front or back side of the submitted part."""
     if side not in ("front", "back"):
@@ -1729,9 +1881,38 @@ def workflow_inspect_side(request, side):
     data = _body_json(request)
     session_id = data.get("session_id")
     if not session_id:
+        logger.warning(
+            "Inspection request rejected: missing session_id (content_type=%s)",
+            request.content_type,
+        )
         return _error("A session_id is required.")
     result = _workflow().run_side(str(session_id), side)
-    return _json_response(result, status=200 if result.get("ok") else 400)
+    if result.get("ok"):
+        return _json_response(result)
+    state = result.get("state")
+    if state == "error":
+        status = 404
+    elif state in (
+        "session_inactive",
+        "side_already_completed",
+        "side_not_required",
+        "incomplete",
+    ):
+        status = 409
+    elif state in ("camera_error", "frame_unavailable"):
+        status = 503
+    elif state in ("model_invalid", "model_task_mismatch", "configuration_invalid"):
+        status = 422
+    else:
+        status = 400
+    logger.warning(
+        "Inspection request failed: session=%s side=%s state=%s message=%s",
+        session_id,
+        side,
+        state,
+        result.get("message", ""),
+    )
+    return _json_response(result, status=status)
 
 
 @require_POST
@@ -1816,6 +1997,7 @@ def api_part_vision_configuration(request, part_id):
                     "name": association.display_name or association.model.name,
                     "version": association.version,
                     "enabled": association.is_enabled,
+                    "task_type": association.task_type,
                     "discovered_classes": association.classes,
                     "classes": [
                         {
@@ -1842,6 +2024,172 @@ def api_part_vision_configuration(request, part_id):
         "configuration": config_data,
         "available_models": models,
     })
+
+
+@require_GET
+def api_part_vision_preview(request, part_id):
+    """Infer and render predictions from the shared camera's latest frame."""
+    part = get_object_or_404(VisionInspectionPart, pk=part_id)
+    side = _clean(request.GET.get("side", "FRONT")).upper()
+    if side not in (VisionPartConfiguration.SIDE_FRONT, VisionPartConfiguration.SIDE_BACK):
+        return _error("side must be FRONT or BACK.")
+    try:
+        confidence_threshold = float(request.GET.get("confidence", "0.50"))
+    except (TypeError, ValueError):
+        return _error("confidence must be a number between 0.10 and 0.95.")
+    if not 0.10 <= confidence_threshold <= 0.95:
+        return _error("confidence must be between 0.10 and 0.95.")
+    show_masks = request.GET.get("show_masks", "1").lower() not in (
+        "0", "false", "no",
+    )
+    show_boxes = request.GET.get("show_boxes", "1").lower() not in (
+        "0", "false", "no",
+    )
+
+    configuration = (
+        VisionPartConfiguration.objects.filter(part=part)
+        .order_by("-version")
+        .first()
+    )
+    if configuration is None:
+        return _error("Save a Part Vision configuration before starting preview.", status=409)
+    if (
+        side == VisionPartConfiguration.SIDE_FRONT
+        and not configuration.requires_front
+    ) or (
+        side == VisionPartConfiguration.SIDE_BACK
+        and not configuration.requires_back
+    ):
+        return _error(f"The {side.title()} side is not enabled in this configuration.", status=409)
+
+    model_id = _as_int(request.GET.get("model_id"), 0)
+    part_models = configuration.part_models.filter(
+        is_enabled=True,
+        task_type=VisionPartModel.TASK_SEGMENT,
+    ).select_related("model")
+    if model_id:
+        part_models = part_models.filter(model_id=model_id)
+    association = part_models.order_by("id").first()
+    if association is None:
+        return _error(
+            "Select an enabled segmentation model for this part configuration.",
+            status=409,
+        )
+
+    expected_source = (
+        configuration.front_camera_source
+        if side == VisionPartConfiguration.SIDE_FRONT
+        else configuration.back_camera_source
+    )
+    expected_index = (
+        configuration.front_camera_index
+        if side == VisionPartConfiguration.SIDE_FRONT
+        else configuration.back_camera_index
+    )
+    source_ids = {
+        VisionPartConfiguration.SOURCE_OPENCV: CAMERA_SOURCES["OPENCV"],
+        VisionPartConfiguration.SOURCE_RPI: CAMERA_SOURCES["PICAMERA"],
+    }
+    camera_state = CameraService.get_state()
+    if camera_state != "RUNNING":
+        return _error(
+            f"The configured camera is {camera_state.lower()}; waiting for it to produce a frame.",
+            status=409,
+        )
+    current_source = CameraService.get_source()
+    current_index = CameraService.get_camera_index()
+    if current_source != source_ids.get(expected_source) or (
+        current_source != CAMERA_SOURCES["PICAMERA"]
+        and current_index != expected_index
+    ):
+        return _error(
+            f"The running camera does not match the configured {side.title()} camera source and index.",
+            status=409,
+        )
+
+    frame_ok, frame, frame_meta = CameraService.get_frame_with_meta()
+    if not frame_ok or frame is None:
+        return _error("The running camera has not produced a frame yet.", status=409)
+    frame_height, frame_width = frame.shape[:2]
+    roi = active_roi(configuration)
+    roi_rect = roi.pixel_rect(frame_width, frame_height) if roi else None
+    offset_x = roi_rect["x"] if roi_rect else 0
+    offset_y = roi_rect["y"] if roi_rect else 0
+    inference_frame = (
+        frame[
+            offset_y : offset_y + roi_rect["height"],
+            offset_x : offset_x + roi_rect["width"],
+        ]
+        if roi_rect
+        else frame
+    )
+
+    try:
+        detections, rendered_roi, inference_ms = registry.predict_segmentation(
+            association.model.model_path,
+            inference_frame,
+            conf=confidence_threshold,
+            show_masks=show_masks,
+            show_boxes=show_boxes,
+        )
+    except ModelLoadError as exc:
+        return _error(str(exc), status=503)
+
+    try:
+        output_frame = frame.copy()
+        if rendered_roi.shape[:2] != inference_frame.shape[:2]:
+            return _error(
+                "The segmentation renderer returned a frame with unexpected dimensions.",
+                status=503,
+            )
+        if roi_rect:
+            output_frame[
+                offset_y : offset_y + roi_rect["height"],
+                offset_x : offset_x + roi_rect["width"],
+            ] = rendered_roi
+        else:
+            output_frame = rendered_roi
+        image = _jpeg_data_url(output_frame, quality=82)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        logger.exception("Could not render segmentation preview for part %s", part.pk)
+        return _error(f"Could not render preview: {exc}", status=503)
+    if image is None:
+        return _error("Could not encode the preview frame.", status=503)
+
+    counts = {}
+    for detection in detections:
+        class_name = str(detection["class"])
+        counts[class_name] = counts.get(class_name, 0) + 1
+    return _json_response(
+        {
+            "ok": True,
+            "configuration_id": configuration.pk,
+            "configuration_version": configuration.version,
+            "model_id": association.model_id,
+            "side": side,
+            "frame_seq": frame_meta.get("seq"),
+            "roi_applied": bool(roi_rect),
+            "image": image,
+            "detection_count": len(detections),
+            "detections": [
+                {
+                    "class": str(detection["class"]),
+                    "class_id": int(detection["class_id"]),
+                    "confidence": float(detection["confidence"]),
+                    "confidence_percent": round(
+                        float(detection["confidence"]) * 100, 1
+                    ),
+                    "x1": int(detection["x1"]) + offset_x,
+                    "y1": int(detection["y1"]) + offset_y,
+                    "x2": int(detection["x2"]) + offset_x,
+                    "y2": int(detection["y2"]) + offset_y,
+                }
+                for index, detection in enumerate(detections)
+            ],
+            "counts_by_class": counts,
+            "inference_ms": inference_ms,
+        }
+    )
 
 
 @require_GET
@@ -2427,3 +2775,252 @@ def _integrity_fields(exc, kind):
     if "name_normalized" in text or "vision_inspection_employee.employee_code" in text:
         return {"employee_name": "An employee with this name already exists."}
     return {}
+
+
+# --------------------------------------------------------------------------- #
+#  Part ROI Setup — the ONE common ROI of a part configuration
+#
+#  A part configuration has a single ROI.  There are no per-model, per-class
+#  or per-side ROI editors: the same rectangle is reused by every enabled
+#  model and for both the Front and Back images.  Coordinates are stored in
+#  the source-frame pixel system with the frame size they were drawn against.
+# --------------------------------------------------------------------------- #
+
+
+def _roi_payload(roi):
+    """JSON view of a saved part ROI (pixel + normalized values)."""
+    if roi is None:
+        return None
+    normalized = roi.normalized
+    return {
+        "id": roi.pk,
+        "configuration_id": roi.configuration_id,
+        "version": roi.version,
+        "x": round(float(roi.x)),
+        "y": round(float(roi.y)),
+        "width": round(float(roi.width)),
+        "height": round(float(roi.height)),
+        "ref_width": roi.ref_width,
+        "ref_height": roi.ref_height,
+        "is_active": roi.is_active,
+        "configured_by": roi.configured_by,
+        "normalized": {
+            "x": normalized["x"],
+            "y": normalized["y"],
+            "width": normalized["width"],
+            "height": normalized["height"],
+        },
+        "created_at": roi.created_at.isoformat() if roi.created_at else None,
+        "updated_at": roi.updated_at.isoformat() if roi.updated_at else None,
+    }
+
+
+def _configuration_for_part(part, configuration_id=None):
+    """The configuration an ROI belongs to (latest version by default)."""
+    configurations = VisionPartConfiguration.objects.filter(part=part).order_by("-version")
+    if configuration_id:
+        return configurations.filter(pk=_as_int(configuration_id, 0)).first()
+    return configurations.first()
+
+
+@require_GET
+def api_part_vision_roi(request, part_id):
+    """Read the single common ROI of a part configuration (or ``saved: false``)."""
+    part = get_object_or_404(VisionInspectionPart, pk=part_id)
+    configuration = _configuration_for_part(part, request.GET.get("configuration_id"))
+    if configuration is None:
+        return _json_response(
+            {
+                "saved": False,
+                "part": {"id": part.pk, "number": part.part_number, "name": part.part_name},
+                "configuration": None,
+                "message": "This part has no vision configuration yet.",
+            }
+        )
+    roi = (
+        VisionPartROI.objects.filter(configuration=configuration, is_active=True)
+        .order_by("-version")
+        .first()
+    )
+    return _json_response(
+        {
+            "saved": roi is not None,
+            "part": {"id": part.pk, "number": part.part_number, "name": part.part_name},
+            "configuration": {
+                "id": configuration.pk,
+                "version": configuration.version,
+                "status": configuration.status,
+                "inspection_mode": configuration.inspection_mode,
+            },
+            "roi": _roi_payload(roi),
+        }
+    )
+
+
+@require_POST
+def api_part_vision_roi_save(request, part_id):
+    """Save (version) the single common ROI of a part configuration."""
+    part = get_object_or_404(VisionInspectionPart, pk=part_id)
+    data = _body_json(request)
+    configuration = _configuration_for_part(part, data.get("configuration_id"))
+    if configuration is None:
+        return _error(
+            "This part has no vision configuration yet. Save the model "
+            "configuration before drawing the ROI.",
+            status=409,
+        )
+
+    ref_width = _as_int(data.get("ref_width"), 0)
+    ref_height = _as_int(data.get("ref_height"), 0)
+    x = _as_float(data.get("x"), 0.0)
+    y = _as_float(data.get("y"), 0.0)
+    width = _as_float(data.get("width"), 0.0)
+    height = _as_float(data.get("height"), 0.0)
+
+    if not all(math.isfinite(value) for value in (x, y, width, height)):
+        return _error("ROI coordinates and dimensions must be finite numbers.")
+    if ref_width <= 0 or ref_height <= 0:
+        return _error(
+            "The camera frame dimensions are required.",
+            {"ref_width": "Start the camera so the frame size is known."},
+        )
+    if width <= 2 or height <= 2:
+        return _error("The ROI is too small — draw a larger region.")
+    if x < 0 or y < 0 or x + width > ref_width or y + height > ref_height:
+        return _error("The ROI extends beyond the camera frame.")
+
+    with transaction.atomic():
+        locked_configuration = (
+            VisionPartConfiguration.objects.select_for_update()
+            .filter(pk=configuration.pk, part=part)
+            .first()
+        )
+        if locked_configuration is None:
+            return _error(
+                "This part has no vision configuration yet. Save the model "
+                "configuration before drawing the ROI.",
+                status=409,
+            )
+        configuration = locked_configuration
+        camera_error = common_roi_camera_error(configuration)
+        if camera_error:
+            return _error(camera_error, status=409)
+
+        previous = (
+            VisionPartROI.objects.select_for_update()
+            .filter(configuration=configuration, is_active=True)
+            .order_by("-version")
+            .first()
+        )
+        last_version = (
+            VisionPartROI.objects.filter(configuration=configuration)
+            .order_by("-version")
+            .values_list("version", flat=True)
+            .first()
+            or 0
+        )
+        version = last_version + 1
+        if previous is not None:
+            previous.is_active = False
+            previous.save(update_fields=["is_active", "updated_at"])
+        roi = VisionPartROI.objects.create(
+            configuration=configuration,
+            version=version,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            ref_width=ref_width,
+            ref_height=ref_height,
+            is_active=True,
+            configured_by=(
+                request.user.get_username()
+                if getattr(request.user, "is_authenticated", False)
+                else _station_id()
+            ),
+        )
+        # The saved ROI keeps the configuration draft until every required
+        # setting validates; the status is refreshed from real validation.
+        errors = validate_configuration(configuration)
+        configuration.validation_errors = errors
+        configuration.status = (
+            VisionPartConfiguration.STATUS_READY
+            if not errors
+            else VisionPartConfiguration.STATUS_VALIDATION_FAILED
+        )
+        configuration.is_active = configuration.is_active or not errors
+        configuration.save(
+            update_fields=["validation_errors", "status", "is_active", "updated_at"]
+        )
+
+    return _json_response(
+        {
+            "ok": True,
+            "saved": True,
+            "message": f"Common ROI v{version} saved for {part.part_number}.",
+            "roi": _roi_payload(roi),
+            "configuration_status": configuration.status,
+        },
+        status=201,
+    )
+
+
+# --------------------------------------------------------------------------- #
+#  data.yaml validation — optional; never replaces the model's own classes
+# --------------------------------------------------------------------------- #
+
+
+@require_POST
+def api_part_data_yaml_validate(request, part_id):
+    """Compare an uploaded ``data.yaml`` with the model's real classes."""
+    part = get_object_or_404(VisionInspectionPart, pk=part_id)
+    upload = request.FILES.get("data_yaml") or request.FILES.get("data_file")
+    if upload is None:
+        return _error(
+            "Choose a data.yaml file to validate.",
+            {"data_yaml": "A data.yaml file is required."},
+        )
+    if not str(upload.name or "").lower().endswith((".yaml", ".yml")):
+        return _error(
+            "Unsupported file type.",
+            {"data_yaml": "Upload a .yaml or .yml dataset file."},
+        )
+    if upload.size > 1024 * 512:
+        return _error("The data.yaml file is too large.", status=413)
+
+    model_id = _as_int(_clean(request.POST.get("model_id")), 0)
+    model = (
+        VisionYOLOModel.objects.filter(pk=model_id).first()
+        if model_id
+        else None
+    )
+    if model is None:
+        return _error("Select the model this data.yaml belongs to.", {"model_id": "Required."})
+
+    try:
+        text = upload.read().decode("utf-8", "replace")
+    except Exception:  # pragma: no cover - defensive
+        return _error("The data.yaml file could not be read.")
+
+    model_classes = _discover_configurable_classes(model)
+    if not model_classes:
+        return _error(
+            "The selected model could not be inspected for class discovery.",
+            status=422,
+        )
+    result = validate_data_yaml(text, model_classes)
+    return _json_response(
+        {
+            "ok": result["ok"],
+            "model": {"id": model.pk, "name": model.name},
+            "model_classes": model_classes,
+            "yaml_classes": result["classes"],
+            "errors": result["errors"],
+            "warnings": result["warnings"],
+            "message": (
+                "data.yaml matches the model classes."
+                if result["ok"]
+                else "data.yaml does not match the model classes."
+            ),
+        }
+    )

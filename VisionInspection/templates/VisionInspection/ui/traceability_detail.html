@@ -34,9 +34,10 @@
 <div class="vi-grid" style="grid-template-columns: 1fr 1fr; align-items:start;">
     <div class="vi-card">
         <div class="vi-card-title">Original Inspection Image</div>
-        {% if evidence.original %}
-            <img src="{{ log.inspection_image.url }}" alt="Original inspection frame"
+        {% if inspection_image_url %}
+            <img src="{{ inspection_image_url }}" alt="Original inspection frame"
                  style="width:100%; border-radius:12px; border:1px solid var(--vi-border);">
+            <a href="{{ inspection_image_url }}?download=1" download>Download image</a>
         {% else %}
             <div class="vi-empty">
                 <div class="vi-empty-icon">&#9632;</div>

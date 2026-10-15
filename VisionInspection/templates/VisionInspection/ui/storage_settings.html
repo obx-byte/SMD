@@ -1,0 +1,159 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Storage Settings — Vision Inspection{% endblock %}
+{% block header_title %}Storage Settings{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'VisionInspection/css/storage_settings.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="storage-page" id="storagePage">
+    <div class="storage-heading">
+        <div>
+            <p class="storage-eyebrow">CONFIGURATION</p>
+            <h2>Image Storage</h2>
+        </div>
+        <div class="storage-active" id="storageActiveBadge" data-state="inactive">No destination active</div>
+    </div>
+
+    <div class="storage-layout">
+        <section class="storage-section storage-config" aria-labelledby="destinationTitle">
+            <header><h3 id="destinationTitle">Destination Configuration</h3></header>
+            <form id="storageDestinationForm">
+                <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+                <div class="storage-fields">
+                    <label>Destination Type
+                        <select name="destination_type" id="storageType">
+                            <option value="WINDOWS">Windows SMB/CIFS Share</option>
+                            <option value="LINUX">Ubuntu Samba Share (SMB/CIFS)</option>
+                            <option value="SMB">Other SMB/CIFS Share</option>
+                            <option value="LOCAL">Local Storage</option>
+                        </select>
+                    </label>
+                    <label data-smb-only>IP Address / Hostname
+                        <input name="ip_address" id="storageHost" maxlength="255" autocomplete="off" placeholder="fileserver or 192.168.1.20">
+                    </label>
+                    <label data-smb-only>SMB Share Name
+                        <input name="share_name" id="storageShare" maxlength="200" autocomplete="off" placeholder="InspectionImages">
+                    </label>
+                    <label>Destination Directory
+                        <input name="destination_directory" id="storageDirectory" maxlength="500" autocomplete="off" placeholder="Airbag/Inspection">
+                    </label>
+                    <label data-smb-only>Username <span class="storage-optional">Optional</span>
+                        <input name="username" id="storageUsername" maxlength="100" autocomplete="username">
+                    </label>
+                    <label data-smb-only>Password <span class="storage-optional">Optional</span>
+                        <input name="password" id="storagePassword" type="password" autocomplete="new-password">
+                    </label>
+                </div>
+                <div class="storage-actions">
+                    <button type="button" class="storage-button storage-secondary" id="storageTestBtn">TEST CONNECTION</button>
+                    <button type="submit" class="storage-button storage-primary" id="storageActivateBtn">ACTIVATE DESTINATION</button>
+                </div>
+            </form>
+            <div class="storage-test" id="storageTestResult" data-state="untested" aria-live="polite">
+                <span class="storage-state-dot"></span>
+                <div><strong id="storageTestStatus">Not Tested</strong><p id="storageTestDetails">Connection and read/write verification results will appear here.</p></div>
+                <time id="storageTestTime">&mdash;</time>
+            </div>
+            <p class="storage-notice" id="storageNotice" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="storage-section storage-summary" aria-labelledby="summaryTitle">
+            <header><h3 id="summaryTitle">Storage Summary</h3></header>
+            <div class="storage-summary-grid">
+                <div><span>Active Destination</span><strong id="summaryDestination">None</strong></div>
+                <div><span>Images Referenced</span><strong id="summaryImageCount">0</strong></div>
+                <div><span>Referenced Image Size</span><strong id="summaryImageBytes">0 B</strong></div>
+                <div><span>Available Space</span><strong id="summaryFreeSpace">Not reported</strong></div>
+            </div>
+            <p class="storage-subnote">Capacity is shown only when the active local filesystem reports it reliably.</p>
+        </section>
+    </div>
+
+    <section class="storage-section storage-automatic" aria-labelledby="automaticTitle">
+        <header><h3 id="automaticTitle">Automatic Storage Transfer</h3></header>
+        <div class="automatic-controls">
+            <label class="storage-checkbox"><input id="automaticEnabled" type="checkbox"> Enable Automatic Transfer</label>
+            <label class="threshold-control">Storage Threshold (%)
+                <div class="threshold-inputs">
+                    <input id="thresholdRange" type="range" min="10" max="95" step="1" value="50">
+                    <input id="thresholdNumber" type="number" min="10" max="95" step="1" value="50" inputmode="numeric" aria-label="Storage threshold percent">
+                </div>
+            </label>
+            <div class="automatic-destination"><span>Transfer Destination</span><strong id="automaticDestination">No validated SMB destination</strong></div>
+            <div class="automatic-policy"><span>Transfer Policy</span><strong>Oldest eligible verified images first</strong></div>
+            <div class="automatic-actions">
+                <button type="button" class="storage-button storage-secondary" id="checkStorageBtn">CHECK STORAGE</button>
+                <button type="button" class="storage-button storage-primary" id="saveAutomaticBtn">SAVE SETTINGS</button>
+            </div>
+        </div>
+        <div class="automatic-status">
+            <div class="automatic-status-heading"><strong>Transfer Status</strong><span id="automaticWarning" role="status"></span></div>
+            <div class="automatic-metrics">
+                <div><span>Current Usage</span><strong id="automaticUsage">Not available</strong></div>
+                <div><span>Configured Threshold</span><strong id="automaticThresholdValue">50%</strong></div>
+                <div><span>Destination Availability</span><strong id="automaticDestinationStatus">Not configured</strong></div>
+                <div><span>Pending Files</span><strong id="automaticPending">0</strong></div>
+                <div><span>Transferred Files</span><strong id="automaticTransferred">0</strong></div>
+                <div><span>Last Transfer Error</span><strong id="automaticLastError">None</strong></div>
+            </div>
+            <div class="threshold-progress" role="img" aria-label="Current local storage usage compared with configured transfer threshold">
+                <div class="threshold-progress-track"><span id="usageBar"></span><i id="thresholdMarker"></i></div>
+                <div class="threshold-progress-labels"><span>0%</span><span id="usageProgressText">Usage not available</span><span>100%</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="storage-section storage-existing" aria-labelledby="existingTitle">
+        <header><h3 id="existingTitle">Existing Destinations</h3><button type="button" class="storage-button storage-small" id="storageRefreshBtn">REFRESH</button></header>
+        <div class="storage-table-wrap">
+            <table class="storage-table">
+                <thead><tr><th>ID</th><th>Type</th><th>Host / Share</th><th>Directory</th><th>Status</th><th>Active</th><th>Created</th><th>Action</th></tr></thead>
+                <tbody id="storageDestinationRows"><tr><td colspan="8">Loading destinations...</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="storage-section storage-migration" aria-labelledby="migrationTitle">
+        <header><h3 id="migrationTitle">Historical Image Migration</h3></header>
+        <div class="storage-migration-form">
+            <label>Source Destination
+                <select id="migrationSource"><option value="">No historical sources</option></select>
+            </label>
+            <label class="storage-checkbox"><input id="migrationDeleteOriginals" type="checkbox"> Delete originals after verified copy</label>
+            <label id="migrationConfirmationWrap" hidden>Type DELETE to confirm
+                <input id="migrationConfirmation" autocomplete="off" disabled>
+            </label>
+            <button type="button" class="storage-button storage-primary" id="migrationStartBtn" disabled>START MIGRATION</button>
+        </div>
+        <div class="storage-migration-progress" id="migrationProgress" aria-live="polite">
+            <div class="storage-progress-track"><span id="migrationProgressBar"></span></div>
+            <p id="migrationProgressText">Migration has not started.</p>
+            <div id="migrationFailureText" class="storage-failure"></div>
+        </div>
+    </section>
+</div>
+{{ storage_state|json_script:"storage-state" }}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+window.__VI_STORAGE__ = {
+    state: JSON.parse(document.getElementById("storage-state").textContent),
+    csrf: document.querySelector('input[name="csrfmiddlewaretoken"]').value,
+    urls: {
+        state: "{% url 'VisionInspection:storage-state' %}",
+        automaticSettings: "{% url 'VisionInspection:storage-automatic-settings' %}",
+        test: "{% url 'VisionInspection:storage-test' %}",
+        activate: "{% url 'VisionInspection:storage-activate' %}",
+        migrate: "{% url 'VisionInspection:storage-migration-start' %}",
+        batchPrefix: "{% url 'VisionInspection:storage-migration-batch' 0 %}".replace("0/batch/", ""),
+        destinationPrefix: "{% url 'VisionInspection:storage-settings' %}"
+    }
+};
+</script>
+<script src="{% static 'VisionInspection/js/storage_settings.js' %}" defer></script>
+{% endblock %}

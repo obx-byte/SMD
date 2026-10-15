@@ -24,7 +24,7 @@ Only the second group asks for a login; the station group never redirects.
 from django.contrib.admin.views.decorators import staff_member_required
 from django.urls import path
 
-from VisionInspection import dashboard_api, ui_views, views
+from VisionInspection import dashboard_api, storage_views, ui_views, views
 
 app_name = "VisionInspection"
 
@@ -47,6 +47,7 @@ urlpatterns = [
     station("", ui_views.dashboard, name="dashboard"),
     station("inspection/", views.inspection_view, name="inspection"),
     station("history/", views.history_view, name="history"),
+    station("storage/image/<int:metadata_id>/", storage_views.image, name="storage-image"),
     station(
         "history/<int:inspection_id>/",
         views.history_detail,
@@ -136,6 +137,7 @@ urlpatterns = [
         views.workflow_progress,
         name="workflow-progress",
     ),
+    station("workflow/activate-side/", views.workflow_activate_side, name="workflow-activate-side"),
     station(
         "workflow/inspect/<str:side>/",
         views.workflow_inspect_side,
@@ -233,10 +235,11 @@ urlpatterns = [
         views.activate_preset,
         name="preset-activate",
     ),
-    admin(
-        "api/part/<str:part_id>/configuration/",
-        views.api_part_configuration,
-        name="api-part-configuration",
+
+    station(
+        "parts/<int:part_id>/roi-setup/",
+        ui_views.part_roi_setup,
+        name="part-roi-setup",
     ),
     station(
         "api/parts/<int:part_id>/vision-configuration/",
@@ -249,11 +252,31 @@ urlpatterns = [
         name="api-part-vision-configuration-save",
     ),
     station(
+        "api/parts/<int:part_id>/vision-preview/",
+        views.api_part_vision_preview,
+        name="api-part-vision-preview",
+    ),
+    station(
         "api/yolo/models/<int:model_id>/classes/",
         views.api_yolo_model_classes,
         name="api-yolo-model-classes",
     ),
     station("api/yolo/models/upload/", views.part_model_upload, name="part-model-upload"),
+    station(
+        "api/parts/<int:part_id>/vision-roi/",
+        views.api_part_vision_roi,
+        name="api-part-vision-roi",
+    ),
+    station(
+        "api/parts/<int:part_id>/vision-roi/save/",
+        views.api_part_vision_roi_save,
+        name="api-part-vision-roi-save",
+    ),
+    station(
+        "api/parts/<int:part_id>/data-yaml/validate/",
+        views.api_part_data_yaml_validate,
+        name="api-part-data-yaml-validate",
+    ),
     admin("preset/<int:preset_id>/", views.preset_detail, name="preset-detail"),
     # ------------------------------------------------------------------ #
     #  YOLO Model registry — staff only (model uploads never public)
@@ -322,4 +345,12 @@ urlpatterns = [
     ),
     admin("reports/", ui_views.reports, name="ui-reports"),
     admin("settings/", ui_views.settings_page, name="ui-settings"),
+    station("settings/storage/", ui_views.storage_settings, name="storage-settings"),
+    station("api/storage/state/", storage_views.state, name="storage-state"),
+    station("api/storage/automatic-settings/", storage_views.automatic_settings, name="storage-automatic-settings"),
+    station("api/storage/test/", storage_views.test_destination, name="storage-test"),
+    station("api/storage/activate/", storage_views.activate_destination, name="storage-activate"),
+    station("api/storage/migration/", storage_views.migration_start, name="storage-migration-start"),
+    station("api/storage/migration/<int:job_id>/batch/", storage_views.migration_batch, name="storage-migration-batch"),
+    station("api/storage/migration/<int:job_id>/", storage_views.migration_status, name="storage-migration-status"),
 ]

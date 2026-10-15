@@ -146,9 +146,10 @@
             </tbody>
         </table>
 
-        {% if log.inspection_image %}
+        {% if inspection_image_url %}
         <h3>Inspection Image</h3>
-        <img src="{{ log.inspection_image.url }}" class="vi-inspection-image" alt="Inspection Result">
+        <img src="{{ inspection_image_url }}" class="vi-inspection-image" alt="Inspection Result">
+        <a href="{{ inspection_image_url }}?download=1" class="vi-btn" download>Download Image</a>
         {% endif %}
     </section>
     {% endif %}

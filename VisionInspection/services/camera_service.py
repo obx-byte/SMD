@@ -197,7 +197,7 @@ class CameraService:
     # ------------------------------------------------------------------ #
 
     @classmethod
-    def start_camera(cls, camera_index=0, target_fps=30, source=None):
+    def start_camera(cls, camera_index=0, target_fps=30, source=None, reuse_existing=False):
         """Start the camera capture thread.
 
         Parameters
@@ -208,6 +208,10 @@ class CameraService:
             Target capture frames-per-second.
         source : str | None
             ``"opencv"`` (default) or ``"picamera"``.
+        reuse_existing : bool
+            Do not restart a live capture. Returns ``False`` when a live camera
+            is reused or has incompatible settings; callers can inspect the
+            current source and index to distinguish those cases.
 
         Returns ``True`` when a capture thread was started, ``False`` when a
         previous thread could not be retired in time (as a restart could race it
@@ -215,6 +219,13 @@ class CameraService:
         """
         service = cls()
         with cls._lock:
+            requested_index = int(camera_index or 0)
+            requested_source = source or CAMERA_SOURCES["OPENCV"]
+            if reuse_existing and service._status in (
+                CAMERA_STATES["ON"],
+                CAMERA_STATES["CONNECTING"],
+            ):
+                return False
             if not service._retire_capture_thread():
                 service._error_message = (
                     "The previous camera thread did not stop; "
@@ -224,10 +235,10 @@ class CameraService:
                 service._state = CAMERA_LIFECYCLE["ERROR"]
                 return False
 
-            service._camera_index = int(camera_index or 0)
+            service._camera_index = requested_index
             service._target_fps = max(1, target_fps)
             service._frame_time = 1.0 / service._target_fps
-            service._source = source or CAMERA_SOURCES["OPENCV"]
+            service._source = requested_source
             service._error_message = None
             service._stop_event = threading.Event()
             service._status = CAMERA_STATES["CONNECTING"]
@@ -285,6 +296,13 @@ class CameraService:
     def get_source(cls):
         """Return the active camera source id ('opencv' / 'picamera')."""
         return cls()._source
+
+    @classmethod
+    def get_camera_index(cls):
+        """Return the index of the active camera source."""
+        service = cls()
+        with cls._lock:
+            return service._camera_index
 
     @classmethod
     def stop_camera(cls):

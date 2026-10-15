@@ -120,7 +120,7 @@
                 </thead>
                 <tbody>
                     {% for row in recent_rows %}
-                        <tr>
+                        <tr data-report-row>
                             <td>{{ forloop.counter }}</td>
                             <td>{{ row.log.timestamp|date:"Y-m-d H:i:s" }}</td>
                             <td>{{ row.log.part_number|default:"—" }}</td>

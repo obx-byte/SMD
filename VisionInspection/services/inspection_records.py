@@ -252,7 +252,11 @@ def build_rows(logs, parts=None, employees=None, sessions=None):
         part_name = parts.get(log.part_number or "", "")
         employee_code = log.employee_code or ""
         employee_name = employee.employee_name if employee else ""
-        unique_number = (session.barcode if session else "") or ""
+        # The unique number is the scanned barcode of the inspected unit —
+        # stored on the record itself when the station saved it, otherwise read
+        # back from the session that produced the record.
+        barcode = getattr(log, "barcode", "") or ""
+        unique_number = barcode or (session.barcode if session else "") or ""
         front = side_result(session, "front")
         back = side_result(session, "back")
         tone = result_tone(log.result)

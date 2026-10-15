@@ -3,7 +3,7 @@
 
 {% block title %}Part Vision Configuration — {{ part.part_number }}{% endblock %}
 {% block extra_head %}
-<link rel="stylesheet" href="{% static 'VisionInspection/css/part_configuration.css' %}">
+<link rel="stylesheet" href="{% static 'VisionInspection/css/part_configuration.css' %}?v=20261015-3">
 {% endblock %}
 {% block header_title %}Part Vision Configuration{% endblock %}
 
@@ -21,7 +21,12 @@
         <span>Current configuration</span>
         <strong id="pcStatus">Loading</strong>
         <span id="pcVersion"></span>
-        <span class="pc-roi" id="pcRoi">Common ROI: checking</span>
+        <span class="pc-roi" id="pcRoi" aria-live="polite">Common ROI: checking</span>
+        {% if configuration %}
+        <a class="vi-btn pc-roi-configure" id="pcConfigureRoi" href="{% url 'VisionInspection:part-roi-setup' part.pk %}">Configure ROI</a>
+        {% else %}
+        <span class="vi-btn pc-roi-configure is-disabled" aria-disabled="true" title="Save a model configuration before configuring its ROI">Configure ROI</span>
+        {% endif %}
     </div>
     <div class="pc-message" id="pcMessage" role="status" aria-live="polite"></div>
 
@@ -91,6 +96,55 @@
             <button class="vi-btn vi-btn-primary" id="pcSave" type="submit">Save Model Configuration</button>
         </div>
     </form>
+
+    <section class="pc-section pc-preview" id="pcLivePreview" data-part-id="{{ part.pk }}">
+        <div class="pc-section-head">
+            <div>
+                <h3>Live Camera YOLO Preview</h3>
+                <p class="pc-note">Starts or reuses the configured camera. Preview results are never saved as inspections.</p>
+            </div>
+            <button class="vi-btn vi-btn-primary" id="pcPreviewToggle" type="button">Start Preview</button>
+        </div>
+        <div class="pc-preview-controls">
+            <label>Inspection side
+                <select id="pcPreviewSide">
+                    <option value="FRONT">Front</option>
+                    <option value="BACK">Back</option>
+                </select>
+            </label>
+            <label>Segmentation model
+                <select id="pcPreviewModel" disabled>
+                    <option value="">Load configuration first</option>
+                </select>
+            </label>
+            <label>Confidence threshold
+                <span class="pc-preview-range">
+                    <input id="pcPreviewConfidence" type="range" min="0.10" max="0.95" step="0.05" value="0.50">
+                    <output id="pcPreviewConfidenceValue" for="pcPreviewConfidence">50%</output>
+                </span>
+            </label>
+            <label class="pc-preview-overlay">
+                <input id="pcPreviewMasks" type="checkbox" checked>
+                Show Masks
+            </label>
+            <label class="pc-preview-overlay">
+                <input id="pcPreviewBoxes" type="checkbox" checked>
+                Show Bounding Boxes
+            </label>
+        </div>
+        <p class="pc-preview-status" id="pcPreviewStatus" role="status" aria-live="polite">Start the preview after opening the configured camera.</p>
+        <div class="pc-preview-layout">
+            <div class="pc-preview-image">
+                <img id="pcPreviewImage" alt="Live camera frame with YOLO segmentation predictions" hidden>
+                <span id="pcPreviewPlaceholder">No live frame yet.</span>
+            </div>
+            <div class="pc-preview-results">
+                <strong id="pcPreviewSummary">Preview stopped</strong>
+                <span>Inference: <b id="pcPreviewInference">—</b></span>
+                <div id="pcPreviewDetections" class="pc-preview-detections" aria-live="polite"></div>
+            </div>
+        </div>
+    </section>
 </div>
 <script>
     window.__VI_PART_CONFIG__ = {
@@ -98,10 +152,13 @@
         urls: {
             read: "{% url 'VisionInspection:api-part-vision-configuration' part.pk %}",
             save: "{% url 'VisionInspection:api-part-vision-configuration-save' part.pk %}",
+            preview: "{% url 'VisionInspection:api-part-vision-preview' part.pk %}",
+            cameraStart: "{% url 'VisionInspection:camera-start' %}",
             classes: "{% url 'VisionInspection:api-yolo-model-classes' 0 %}".replace("/0/classes/", "/__ID__/classes/"),
             upload: "{% url 'VisionInspection:part-model-upload' %}"
         }
     };
 </script>
-<script src="{% static 'VisionInspection/js/part_configuration.js' %}?v=20261011-2" defer></script>
+<script src="{% static 'VisionInspection/js/part_configuration.js' %}?v=20261015-4" defer></script>
+<script src="{% static 'VisionInspection/js/live_prediction_preview.js' %}?v=20261015-2" defer></script>
 {% endblock %}

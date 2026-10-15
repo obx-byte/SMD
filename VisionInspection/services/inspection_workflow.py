@@ -6,6 +6,7 @@ missing rules/mode/camera produce PENDING / INCOMPLETE / ERROR, never a
 fabricated OK or NOT OK.
 """
 
+import base64
 import io
 import logging
 import re
@@ -13,8 +14,7 @@ import threading
 import uuid
 
 from django.conf import settings
-from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from VisionInspection.models import (
@@ -34,6 +34,12 @@ from VisionInspection.services.camera_service import (
     get_camera_capabilities,
 )
 from VisionInspection.services.yolo_service import YOLOModelService
+from VisionInspection.services.model_registry import ModelLoadError, ModelRegistry
+from VisionInspection.services import storage_service
+from VisionInspection.services.part_configuration import (
+    store_validation,
+    validate_configuration,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,19 +71,61 @@ def _encode_jpeg(image, quality=85) -> bytes | None:
 
 
 def _annotate(image, detections):
-    """Return a copy of *image* with detection boxes drawn from real output."""
+    """Return a copy of *image* with real segmentation masks and boxes drawn."""
     import cv2
+    import numpy as np
 
     out = image.copy()
+    mask_layer = out.copy()
+    mask_count = 0
+    for detection in detections:
+        polygon = detection.get("polygon")
+        if not polygon or len(polygon) < 3:
+            continue
+        points = np.asarray(polygon, dtype=np.int32).reshape((-1, 1, 2))
+        cv2.fillPoly(mask_layer, [points], (0, 190, 255))
+        mask_count += 1
+    if mask_count:
+        out = cv2.addWeighted(mask_layer, 0.32, out, 0.68, 0)
+
     for d in detections:
         x1, y1, x2, y2 = d.get("x1", 0), d.get("y1", 0), d.get("x2", 0), d.get("y2", 0)
         label = f"{d.get('class', '?')} {d.get('confidence', 0):.2f}"
+        polygon = d.get("polygon")
+        if polygon and len(polygon) >= 3:
+            points = np.asarray(polygon, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.polylines(out, [points], True, (0, 255, 255), 2, cv2.LINE_AA)
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(
             out, label, (x1, max(0, y1 - 6)),
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA,
         )
     return out
+
+
+def _map_detections_to_frame(detections, offset_x, offset_y, width, height):
+    """Translate crop-local boxes and polygons into source-frame coordinates."""
+    mapped = []
+    for detection in detections:
+        item = dict(detection)
+        for key, offset, limit in (
+            ("x1", offset_x, width - 1),
+            ("x2", offset_x, width - 1),
+            ("y1", offset_y, height - 1),
+            ("y2", offset_y, height - 1),
+        ):
+            if key in item:
+                item[key] = max(0, min(limit, int(item[key]) + offset))
+        if item.get("polygon"):
+            item["polygon"] = [
+                [
+                    max(0, min(width - 1, float(point[0]) + offset_x)),
+                    max(0, min(height - 1, float(point[1]) + offset_y)),
+                ]
+                for point in item["polygon"]
+            ]
+        mapped.append(item)
+    return mapped
 
 
 class InspectionWorkflow:
@@ -99,6 +147,10 @@ class InspectionWorkflow:
         self._ready = True
         self._camera = CameraService()
         self._yolo = YOLOModelService()
+        self._model_registry = ModelRegistry()
+        self._submit_lock = threading.Lock()
+        self._resource_lock = threading.RLock()
+        self._camera_session_id = None
 
     # ------------------------------------------------------------------ #
     #  Step 1 — Part barcode
@@ -121,10 +173,22 @@ class InspectionWorkflow:
         has_model = bool(active_config and active_config.part_models.filter(is_enabled=True).exists())
         if latest_config is None:
             has_model = self._active_model() is not None
+        active_session = (
+            VisionInspectionSession.objects.filter(
+                is_active=True,
+                is_saved=False,
+            )
+            .exclude(stage__in=["saved", "cancelled"])
+            .exclude(front_status=_S.ERROR)
+            .exclude(back_status=_S.ERROR)
+            .order_by("-started_at")
+            .first()
+        )
         return {
             "ok": True,
             "state": "part_identified",
             "part": {
+                "id": part.pk,
                 "part_number": part.part_number,
                 "part_name": part.part_name,
                 "is_active": part.is_active,
@@ -138,6 +202,11 @@ class InspectionWorkflow:
             "inspection_mode": active_config.inspection_mode if active_config else "",
             "front_roi": self._roi_pixels(part.part_number, "front"),
             "back_roi": self._roi_pixels(part.part_number, "back"),
+            "active_session": ({
+                "session_id": str(active_session.session_id),
+                "part_number": active_session.part_number,
+                "stage": active_session.stage,
+            } if active_session else None),
             "message": f"Part identified: {part.part_number}.",
         }
 
@@ -241,15 +310,25 @@ class InspectionWorkflow:
             if part is None:
                 return {"ok": False, "state": "part_not_found", "message": "Part not found."}
             configuration = VisionPartConfiguration.objects.filter(
-                part=part, is_active=True, status=VisionPartConfiguration.STATUS_READY
+                part=part, is_active=True
             ).order_by("-version").first()
             if configuration:
                 return self._validate_part_configuration(configuration)
-            if VisionPartConfiguration.objects.filter(part=part).exists():
+            latest_configuration = VisionPartConfiguration.objects.filter(
+                part=part
+            ).order_by("-version").first()
+            if latest_configuration:
+                validation_errors = list(
+                    latest_configuration.validation_errors or []
+                )
                 return {
                     "ok": False,
                     "state": "configuration_invalid",
-                    "message": "This part has no active, validated vision configuration.",
+                    "configuration_id": latest_configuration.pk,
+                    "configuration_version": latest_configuration.version,
+                    "validation_errors": validation_errors,
+                    "message": " ".join(validation_errors)
+                    or "This part has no active, validated vision configuration.",
                 }
 
         model = (
@@ -314,47 +393,88 @@ class InspectionWorkflow:
         }
 
     def _validate_part_configuration(self, configuration):
+        def configuration_error(state, message):
+            validation_errors = [message]
+            store_validation(configuration, validation_errors)
+            return {
+                "ok": False,
+                "state": state,
+                "configuration_id": configuration.pk,
+                "configuration_version": configuration.version,
+                "message": message,
+                "validation_errors": validation_errors,
+            }
+
         associations = list(
             configuration.part_models.filter(is_enabled=True)
             .select_related("model")
             .prefetch_related("class_configs")
         )
         if not associations:
-            return {"ok": False, "state": "configuration_invalid", "message": "No enabled models are configured for this part."}
+            return configuration_error(
+                "configuration_invalid",
+                "No enabled models are configured for this part.",
+            )
 
         configured_models = []
         class_count = 0
+        discovered_classes = {}
         for association in associations:
-            if not self._yolo.load_model(association.model.model_path):
-                return {
-                    "ok": False,
-                    "state": "model_invalid",
-                    "message": f"Configured model {association.model.name} could not be loaded.",
-                }
-            actual_names = self._yolo.get_class_names() or []
+            try:
+                model_info = self._model_registry.inspect(association.model.model_path)
+            except ModelLoadError as exc:
+                logger.warning(
+                    "Configured model %s failed inspection: %s",
+                    association.model_id,
+                    exc,
+                )
+                return configuration_error(
+                    "model_invalid",
+                    f"Configured model {association.model.name} could not be loaded: {exc}",
+                )
+            if not model_info["ok"]:
+                return configuration_error(
+                    "model_invalid",
+                    f"Configured model {association.model.name} could not be loaded: {model_info['error']}",
+                )
+            actual_task = model_info.get("task", "")
+            task_matches = actual_task == association.task_type or (
+                actual_task == "onnx" and association.task_type == "detect"
+            )
+            if not task_matches:
+                return configuration_error(
+                    "model_task_mismatch",
+                    (
+                        f"Configured model {association.model.name} is marked as "
+                        f"{association.task_type}, but the model file is "
+                        f"{actual_task or 'not an inference-ready model'}. "
+                        "Update the model task or select a compatible model."
+                    ),
+                )
+            actual_names = [item["name"] for item in model_info["classes"]]
+            discovered_classes[association.pk] = actual_names
             saved_classes = association.classes or []
             if len(actual_names) != len(saved_classes) or any(
                 item.get("id") != index or item.get("name") != actual_names[index]
                 for index, item in enumerate(saved_classes)
             ):
-                return {
-                    "ok": False,
-                    "state": "model_classes_missing",
-                    "message": f"Configured classes for {association.model.name} no longer match the model file.",
-                }
+                return configuration_error(
+                    "model_classes_missing",
+                    f"Configured classes for {association.model.name} no longer match the model file.",
+                )
             rules = list(association.class_configs.filter(is_enabled=True).order_by("priority", "class_id"))
             if not rules:
-                return {
-                    "ok": False,
-                    "state": "configuration_invalid",
-                    "message": f"Model {association.model.name} has no enabled class rules.",
-                }
+                return configuration_error(
+                    "configuration_invalid",
+                    f"Model {association.model.name} has no enabled class rules.",
+                )
             class_count += len(rules)
             configured_models.append({
                 "model_id": association.model_id,
                 "name": association.display_name or association.model.name,
                 "version": association.version or association.model.version or "1.0",
                 "path": association.model.model_path,
+                "task_type": association.task_type,
                 "classes": [{"id": index, "name": name} for index, name in enumerate(actual_names)],
                 "rules": [
                     {
@@ -372,6 +492,48 @@ class InspectionWorkflow:
                     for rule in rules
                 ],
             })
+        configuration_errors = validate_configuration(
+            configuration, discovered_classes
+        )
+        store_validation(configuration, configuration_errors)
+        if configuration_errors:
+            rule_diagnostics = [
+                {
+                    "model_id": association.model_id,
+                    "enabled": association.is_enabled,
+                    "class_count": association.class_configs.filter(
+                        is_enabled=True
+                    ).count(),
+                    "rules": list(
+                        association.class_configs.filter(is_enabled=True)
+                        .order_by("priority", "class_id")
+                        .values_list(
+                            "class_name", "is_required", "side"
+                        )
+                    ),
+                }
+                for association in associations
+            ]
+            logger.warning(
+                "Part vision configuration validation failed: part_id=%s "
+                "part_number=%s configuration_id=%s version=%s mode=%s "
+                "models=%s errors=%s",
+                configuration.part_id,
+                configuration.part.part_number,
+                configuration.pk,
+                configuration.version,
+                configuration.inspection_mode,
+                rule_diagnostics,
+                configuration_errors,
+            )
+            return {
+                "ok": False,
+                "state": "configuration_invalid",
+                "configuration_id": configuration.pk,
+                "configuration_version": configuration.version,
+                "message": " ".join(configuration_errors),
+                "validation_errors": configuration_errors,
+            }
         return {
             "ok": True,
             "state": "model_loaded",
@@ -393,15 +555,37 @@ class InspectionWorkflow:
     # ------------------------------------------------------------------ #
     #  Step 3 — Submit (unique session, front starts; single active session)
     # ------------------------------------------------------------------ #
-    @transaction.atomic
     def submit(self, part_number: str, model_id: int | None = None):
+        with self._submit_lock:
+            return self._submit_locked(part_number, model_id)
+
+    @transaction.atomic
+    def _submit_locked(self, part_number: str, model_id: int | None = None):
         part_number = str(part_number or "").strip()
         if not part_number:
             return {"ok": False, "state": "error", "message": "Part number is required."}
 
-        existing = VisionInspectionSession.objects.filter(
-            part_number=part_number, is_active=True, is_saved=False
-        ).exclude(stage__in=["saved", "cancelled"]).first()
+        normalized = _norm(part_number)
+        part = (
+            VisionInspectionPart.objects.filter(part_number__iexact=part_number).first()
+            or VisionInspectionPart.objects.filter(part_number_normalized=normalized).first()
+        )
+        if part is not None:
+            part = VisionInspectionPart.objects.select_for_update().get(pk=part.pk)
+            part_number = part.part_number
+
+        try:
+            storage_service.ensure_evidence_capacity()
+        except storage_service.StorageOperationError as exc:
+            return {"ok": False, "state": "storage_unavailable", "message": str(exc)}
+
+        existing = (
+            VisionInspectionSession.objects.filter(
+                part_number=part_number, is_active=True, is_saved=False
+            )
+            .exclude(stage__in=["saved", "cancelled"])
+            .first()
+        )
         if existing:
             return {
                 "ok": False,
@@ -509,27 +693,42 @@ class InspectionWorkflow:
             if not CameraService.start_camera(camera_index=camera_setting["index"], source=source):
                 return {"ok": False, "state": "camera_error", "message": "The configured camera could not be started."}
 
-        session = VisionInspectionSession.objects.create(
-            part_number=part_number,
-            model=model,
-            model_version=validation["model_version"],
-            model_classes=model_classes,
-            configuration=configuration,
-            config_version=configuration.version if configuration else 0,
-            config_snapshot=snapshot,
-            roi_version=common_roi["version"] if common_roi else 0,
-            stage=first_side,
-            front_status=initial_front_status,
-            back_status=initial_back_status,
-            front_verdict=initial_front_verdict,
-            back_verdict=initial_back_verdict,
-            overall="PENDING",
-            front_roi=None,
-            back_roi=None,
-            front_roi_norm=(front_norm or {}),
-            back_roi_norm=(back_norm or {}),
-            is_active=True,
-        )
+        try:
+            with transaction.atomic():
+                session = VisionInspectionSession.objects.create(
+                    part_number=part_number,
+                    model=model,
+                    model_version=validation["model_version"],
+                    model_classes=model_classes,
+                    configuration=configuration,
+                    config_version=configuration.version if configuration else 0,
+                    config_snapshot=snapshot,
+                    roi_version=common_roi["version"] if common_roi else 0,
+                    stage=first_side,
+                    front_status=initial_front_status,
+                    back_status=initial_back_status,
+                    front_verdict=initial_front_verdict,
+                    back_verdict=initial_back_verdict,
+                    overall="PENDING",
+                    front_roi=None,
+                    back_roi=None,
+                    front_roi_norm=(front_norm or {}),
+                    back_roi_norm=(back_norm or {}),
+                    is_active=True,
+                )
+        except IntegrityError:
+            existing = VisionInspectionSession.objects.filter(
+                part_number=part_number, is_active=True, is_saved=False
+            ).first()
+            if existing is None:
+                raise
+            return {
+                "ok": False,
+                "state": "duplicate_session",
+                "session_id": str(existing.session_id),
+                "message": "An active inspection session already exists for this part.",
+            }
+        self._camera_session_id = str(session.session_id)
         logger.info("Inspection session %s created for %s", session.session_id, part_number)
         return {
             "ok": True,
@@ -546,6 +745,66 @@ class InspectionWorkflow:
         except Exception:
             return None
 
+    def activate_side(self, session_id: str, side: str):
+        with self._resource_lock:
+            return self._activate_side_locked(session_id, side)
+
+    def _activate_side_locked(self, session_id: str, side: str):
+        """Activate the camera frozen in a session without running inference."""
+        if side not in ("front", "back"):
+            return {"ok": False, "state": "error", "message": "Inspection side is invalid."}
+        session = self._get_session(session_id)
+        if session is None:
+            return {"ok": False, "state": "error", "message": "Session not found."}
+        if not session.is_active or session.is_saved or session.stage == "cancelled":
+            return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
+
+        if side == "back" and session.front_status not in (_S.COMPLETED, _S.SKIPPED):
+            return {"ok": False, "state": "incomplete", "message": "Complete the front inspection before activating the back camera."}
+
+        if session.configuration_id:
+            mode = session.config_snapshot.get("inspection_mode")
+            if (side == "front" and mode == VisionPartConfiguration.MODE_BACK_ONLY) or (
+                side == "back" and mode == VisionPartConfiguration.MODE_FRONT_ONLY
+            ):
+                return {"ok": False, "state": "side_not_required", "message": f"{side.title()} inspection is not required."}
+            camera = session.config_snapshot.get("camera", {}).get(side, {})
+            source = "picamera" if camera.get("source") == VisionPartConfiguration.SOURCE_RPI else "opencv"
+            index = int(camera.get("index", 0))
+            capabilities = get_camera_capabilities()
+            if source == "picamera" and not capabilities["sources"][1]["available"]:
+                return {"ok": False, "state": "camera_unavailable", "message": "The configured Raspberry Pi camera is unavailable on this station."}
+            active_camera = CameraService()
+            camera_matches = (
+                CameraService.get_source() == source
+                and active_camera._camera_index == index
+            )
+            camera_status = self._camera.get_status()
+            if not camera_matches or camera_status not in (
+                CAMERA_STATES["ON"], CAMERA_STATES["CONNECTING"]
+            ):
+                CameraService.stop_camera()
+                if not CameraService.start_camera(camera_index=index, source=source):
+                    return {"ok": False, "state": "camera_error", "message": f"The configured {side} camera could not be started."}
+
+        camera_status = self._camera.get_status()
+        camera_ready = camera_status in (
+            CAMERA_STATES["ON"], CAMERA_STATES["CONNECTING"]
+        )
+        if not camera_ready:
+            return {
+                "ok": False,
+                "state": "camera_error",
+                "message": CameraService.get_error() or "Camera is not connected.",
+            }
+        self._camera_session_id = str(session.session_id)
+        return {
+            "ok": True,
+            "state": f"{side}_camera_ready" if camera_status == CAMERA_STATES["ON"] else "camera_connecting",
+            "message": f"{side.title()} camera ready." if camera_status == CAMERA_STATES["ON"] else f"{side.title()} camera is connecting.",
+            "progress": self.get_progress(str(session.session_id)),
+        }
+
     def _configured_side_results(self, session, side, crop):
         detections = []
         results = []
@@ -556,16 +815,66 @@ class InspectionWorkflow:
             ]
             if not rules:
                 continue
-            if not self._yolo.load_model(model_config["path"]):
-                return None, None, f"Configured model {model_config['name']} could not be loaded."
-            actual_classes = self._yolo.get_class_names() or []
+            try:
+                model_info = self._model_registry.inspect(model_config["path"])
+            except ModelLoadError as exc:
+                logger.exception(
+                    "Model inspection failed during %s inference for session %s",
+                    side,
+                    session.session_id,
+                )
+                return None, None, f"Configured model {model_config['name']} could not be loaded: {exc}"
+            if not model_info["ok"]:
+                return None, None, (
+                    f"Configured model {model_config['name']} could not be loaded: "
+                    f"{model_info['error']}"
+                )
+            required_task = model_config.get("task_type", "segment")
+            actual_task = model_info.get("task", "")
+            task_matches = actual_task == required_task or (
+                actual_task == "onnx" and required_task == "detect"
+            )
+            if not task_matches:
+                return None, None, (
+                    f"Configured model {model_config['name']} is marked as "
+                    f"{required_task}, but the model file is "
+                    f"{actual_task or 'not inference-ready'}."
+                )
+            actual_classes = [item["name"] for item in model_info["classes"]]
             if actual_classes != [item["name"] for item in model_config["classes"]]:
                 return None, None, f"Configured classes for {model_config['name']} no longer match the model file."
             threshold = min(
                 float(rule["front_threshold"] if side == "front" else rule["back_threshold"])
                 for rule in rules
             )
-            model_detections = self._yolo.detect(crop, conf=threshold)
+            class_ids = {int(rule["class_id"]) for rule in rules}
+            try:
+                model_detections, inference_time = self._model_registry.predict(
+                    model_config["path"],
+                    crop,
+                    conf=threshold,
+                    classes=class_ids,
+                )
+            except ModelLoadError as exc:
+                logger.exception(
+                    "Model loading failed during %s inference for session %s",
+                    side,
+                    session.session_id,
+                )
+                return None, None, f"Configured model {model_config['name']} could not be loaded: {exc}"
+            if isinstance(inference_time, str):
+                return None, None, (
+                    f"Inference failed for model {model_config['name']}: "
+                    f"{inference_time}"
+                )
+            if required_task == "segment" and any(
+                "polygon" not in detection for detection in model_detections
+            ):
+                return None, None, (
+                    f"Segmentation model {model_config['name']} returned detections "
+                    "without masks. The model output cannot be treated as a valid "
+                    "segmentation result."
+                )
             detections.extend({**detection, "model_id": model_config["model_id"]} for detection in model_detections)
             for rule in rules:
                 threshold = float(rule[f"{side}_threshold"])
@@ -610,10 +919,30 @@ class InspectionWorkflow:
     #  Step 4/5 — Run one side (real camera + YOLO + ROI crop)
     # ------------------------------------------------------------------ #
     def run_side(self, session_id: str, side: str, frame=None):
-        side = "front" if side == "front" else "back"
+        if side not in ("front", "back"):
+            return {"ok": False, "state": "invalid_side", "message": "Inspection side is invalid."}
         session = self._get_session(session_id)
         if session is None:
             return {"ok": False, "state": "error", "message": "Session not found."}
+        if not session.is_active or session.is_saved or session.stage == "cancelled":
+            return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
+        side_status = getattr(session, f"{side}_status")
+        if side_status == _S.COMPLETED:
+            return {
+                "ok": True,
+                "state": f"{side}_completed",
+                "already_completed": True,
+                "message": f"{side.title()} inspection has already completed; stored results were returned.",
+                "detections": [],
+                "results": getattr(session, f"{side}_results"),
+                "progress": self.get_progress(str(session.session_id)),
+            }
+        if side_status == _S.SKIPPED:
+            return {
+                "ok": False,
+                "state": "side_not_required",
+                "message": f"{side.title()} inspection is not required for this part.",
+            }
 
         if session.configuration_id:
             configured_mode = session.config_snapshot.get("inspection_mode")
@@ -652,6 +981,13 @@ class InspectionWorkflow:
             ok, frame = self._camera.get_frame()
             if not ok or frame is None:
                 return self._fail_side(session, side, "No camera frame available.")
+        if (
+            getattr(frame, "ndim", 0) != 3
+            or frame.shape[0] <= 0
+            or frame.shape[1] <= 0
+            or frame.shape[2] not in (3, 4)
+        ):
+            return self._fail_side(session, side, "The camera returned an invalid image frame.")
         if not session.configuration_id and not self._yolo.is_loaded():
             return self._fail_side(session, side, "Inspection model is not loaded.")
 
@@ -672,44 +1008,80 @@ class InspectionWorkflow:
             detections = self._yolo.detect(crop, conf=float(getattr(settings, "VISION_INFERENCE_CONF", 0.5)))
             results = self._per_stitch(detections)
             verdict = self._side_verdict(results)
+        frame_detections = _map_detections_to_frame(
+            detections, px, py, w, h
+        )
+        annotated_frame = _annotate(frame, frame_detections)
+        annotated_jpeg = _encode_jpeg(annotated_frame)
+        logger.info(
+            "Inspection inference completed: session=%s side=%s frame=%sx%s "
+            "roi=%sx%s detections=%s masks=%s verdict=%s",
+            session.session_id,
+            side,
+            w,
+            h,
+            pw,
+            ph,
+            len(frame_detections),
+            sum("polygon" in detection for detection in frame_detections),
+            verdict,
+        )
 
-        # Persist evidence images (original + annotated) — only on inspection.
-        self._save_image(session, side, "image", _encode_jpeg(frame))
-        self._save_image(session, side, "annotated", _encode_jpeg(_annotate(crop, detections)))
+        with transaction.atomic():
+            session = VisionInspectionSession.objects.select_for_update().get(pk=session.pk)
+            if not session.is_active or session.is_saved or session.stage == "cancelled":
+                return {"ok": False, "state": "session_inactive", "message": "This inspection session was reset before inference completed."}
+            if getattr(session, f"{side}_status") in (_S.COMPLETED, _S.SKIPPED):
+                return {"ok": False, "state": "side_already_completed", "message": f"{side.title()} inspection has already completed."}
+            try:
+                self._save_image(session, side, "image", _encode_jpeg(frame))
+                self._save_image(session, side, "annotated", annotated_jpeg)
+            except storage_service.StorageOperationError as exc:
+                return self._fail_side(session, side, f"Inspection evidence could not be persisted: {exc}")
 
-        setattr(session, f"{side}_results", results)
-        setattr(session, f"{side}_verdict", verdict)
-        if session.configuration_id:
-            session.class_results = [
-                row for row in session.class_results if row.get("side") != side.upper()
-            ] + results
-        status = _S.COMPLETED
-        setattr(session, f"{side}_status", status)
-        if side == "front":
-            session.front_completed_at = timezone.now()
-            session.stage = "back" if session.back_status != _S.SKIPPED else "result"
-            if session.back_status == _S.PENDING:
-                session.back_status = _S.PENDING
-        else:
-            session.back_completed_at = timezone.now()
-            session.stage = "result"
-        session.save()
+            setattr(session, f"{side}_results", results)
+            setattr(session, f"{side}_verdict", verdict)
+            if session.configuration_id:
+                session.class_results = [
+                    row for row in session.class_results if row.get("side") != side.upper()
+                ] + results
+            setattr(session, f"{side}_status", _S.COMPLETED)
+            if side == "front":
+                session.front_completed_at = timezone.now()
+                session.stage = "back" if session.back_status != _S.SKIPPED else "result"
+            else:
+                session.back_completed_at = timezone.now()
+                session.stage = "result"
+            session.save()
 
         return {
             "ok": True,
             "state": f"{side}_completed",
-            "detections": detections,
+            "detections": frame_detections,
             "results": results,
+            "mask_count": sum("polygon" in detection for detection in frame_detections),
+            "annotated_frame": (
+                "data:image/jpeg;base64,"
+                + base64.b64encode(annotated_jpeg).decode("ascii")
+                if annotated_jpeg
+                else None
+            ),
             "latency_ms": round((timezone.now() - t0).total_seconds() * 1000, 1),
             "progress": self.get_progress(str(session.session_id)),
         }
 
     def _fail_side(self, session, side, message):
-        setattr(session, f"{side}_status", _S.ERROR)
-        setattr(session, f"{side}_verdict", "ERROR")
-        session.overall = _S.OVERALL_INCOMPLETE
-        session.error_message = message
-        session.save()
+        with transaction.atomic():
+            session = VisionInspectionSession.objects.select_for_update().get(pk=session.pk)
+            if not session.is_active or session.is_saved or session.stage == "cancelled":
+                return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
+            setattr(session, f"{side}_status", _S.ERROR)
+            setattr(session, f"{side}_verdict", "ERROR")
+            session.overall = _S.OVERALL_INCOMPLETE
+            session.error_message = message
+            session.is_active = False
+            session.save()
+        self._stop_camera_for_session(str(session.session_id))
         return {"ok": False, "state": f"{side}_error", "message": message,
                 "progress": self.get_progress(str(session.session_id))}
 
@@ -749,18 +1121,24 @@ class InspectionWorkflow:
 
     def _save_image(self, session, side, kind, jpeg_bytes):
         if not jpeg_bytes:
-            return
-        field = getattr(session, f"{side}_{'annotated' if kind == 'annotated' else 'image'}")
+            raise storage_service.StorageOperationError("The inspection image could not be encoded.")
+        field_name = f"{side}_{'annotated' if kind == 'annotated' else 'image'}"
         name = f"{session.session_id}_{side}_{kind}.jpg"
-        field.save(name, ContentFile(jpeg_bytes), save=False)
+        storage_service.register_image(session, field_name, jpeg_bytes, name)
 
     # ------------------------------------------------------------------ #
     #  Step 6/8 — Overall result (never OK unless both sides truly OK)
     # ------------------------------------------------------------------ #
+    @transaction.atomic
     def compute_result(self, session_id: str):
         session = self._get_session(session_id)
         if session is None:
             return {"ok": False, "state": "error", "message": "Session not found."}
+        if not session.is_active or session.is_saved or session.stage == "cancelled":
+            return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
+        session = VisionInspectionSession.objects.select_for_update().get(pk=session.pk)
+        if not session.is_active or session.is_saved or session.stage == "cancelled":
+            return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
         fv, bv = session.front_verdict, session.back_verdict
         required_statuses = [
             (session.front_status, fv),
@@ -798,12 +1176,15 @@ class InspectionWorkflow:
         session = self._get_session(session_id)
         if session is None:
             return {"ok": False, "state": "error", "message": "Session not found."}
+        session = VisionInspectionSession.objects.select_for_update().get(pk=session.pk)
         if session.is_saved:
             log = VisionInspectionLog.objects.filter(
                 preset_name=f"SESSION#{session.session_id}"
             ).first()
             return {"ok": True, "state": "already_saved", "session_id": str(session.session_id),
                     "inspection_id": log.pk if log else None}
+        if not session.is_active or session.stage == "cancelled":
+            return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
         required_statuses = [session.front_status, session.back_status]
         if session.configuration_id:
             mode = session.config_snapshot.get("inspection_mode")
@@ -841,22 +1222,23 @@ class InspectionWorkflow:
             trigger_zone_polygon=[],
             stable_frames_used=0,
         )
-        # Attach the original front frame as evidence on the history record.
+        # Give the history log a stable reference to the same verified evidence.
         if session.front_image:
             try:
-                session.front_image.open("rb")
-                log.inspection_image.save(
-                    f"{session.session_id}_front.jpg",
-                    ContentFile(session.front_image.read()),
-                    save=True,
+                storage_service.link_image_reference(
+                    session, "front_image", log, "inspection_image"
                 )
-            except Exception:
-                logger.exception("Failed to attach front evidence image")
+            except storage_service.StorageOperationError:
+                logger.exception("Failed to link front evidence image for session %s", session.session_id)
+                raise
         session.is_saved = True
         session.saved_at = timezone.now()
         session.stage = "saved"
         session.is_active = False
         session.save()
+        transaction.on_commit(
+            lambda: self._stop_camera_for_session(str(session.session_id))
+        )
         logger.info("Inspection session %s saved as log %s", session.session_id, log.pk)
         return {"ok": True, "state": "saved", "session_id": str(session.session_id),
                 "inspection_id": log.pk, "overall": session.overall}
@@ -902,17 +1284,56 @@ class InspectionWorkflow:
             "back_verdict": session.back_verdict,
             "overall": session.overall,
             "is_saved": session.is_saved,
+            "is_active": session.is_active,
             "front_results": session.front_results,
             "back_results": session.back_results,
             "stages": out,
         }
 
+    @transaction.atomic
     def cancel(self, session_id: str):
-        session = self._get_session(session_id)
+        session = (
+            VisionInspectionSession.objects.select_for_update()
+            .filter(session_id=session_id)
+            .first()
+        )
         if session is None:
-            return {"ok": False, "message": "Session not found."}
-        if not session.is_saved:
-            session.is_active = False
-            session.stage = "cancelled"
-            session.save()
-        return {"ok": True, "state": "cancelled"}
+            return {"ok": False, "state": "not_found", "message": "Inspection session not found."}
+        if session.is_saved or session.stage == "saved":
+            transaction.on_commit(
+                lambda: self._stop_camera_for_session(str(session.session_id))
+            )
+            return {"ok": True, "state": "already_saved", "session_state": session.stage}
+        if all(status in (_S.COMPLETED, _S.SKIPPED) for status in (
+            session.front_status, session.back_status
+        )):
+            transaction.on_commit(
+                lambda: self._stop_camera_for_session(str(session.session_id))
+            )
+            if session.stage == "cancelled":
+                return {"ok": True, "state": "already_cancelled", "session_state": session.stage}
+            return {
+                "ok": False,
+                "state": "completed",
+                "session_state": session.stage,
+                "message": "This inspection is complete and its results must be saved, not cancelled.",
+            }
+        if session.stage == "cancelled":
+            transaction.on_commit(
+                lambda: self._stop_camera_for_session(str(session.session_id))
+            )
+            return {"ok": True, "state": "already_cancelled", "session_state": session.stage}
+
+        session.is_active = False
+        session.stage = "cancelled"
+        session.save(update_fields=["is_active", "stage"])
+        transaction.on_commit(
+            lambda: self._stop_camera_for_session(str(session.session_id))
+        )
+        return {"ok": True, "state": "cancelled", "session_state": session.stage}
+
+    def _stop_camera_for_session(self, session_id):
+        with self._resource_lock:
+            if self._camera_session_id == session_id:
+                CameraService.stop_camera()
+                self._camera_session_id = None

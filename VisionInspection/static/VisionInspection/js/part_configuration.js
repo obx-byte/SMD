@@ -16,6 +16,9 @@
     const message = document.getElementById("pcMessage");
     let availableModels = [];
     let currentConfiguration = null;
+    let configurationLoaded = false;
+    let editVersion = 0;
+    let refreshVersion = 0;
 
     function csrfToken() {
         const field = form.querySelector('[name="csrfmiddlewaretoken"]');
@@ -39,6 +42,11 @@
     function setMessage(text, success) {
         message.textContent = text || "";
         message.classList.toggle("is-ok", !!success);
+    }
+
+    function markConfigurationDirty() {
+        editVersion += 1;
+        form.dataset.dirty = "true";
     }
 
     function updatePicker() {
@@ -86,6 +94,7 @@
             '</tbody></table></div>';
         card.querySelector(".pc-remove-model").addEventListener("click", () => {
             card.remove();
+            markConfigurationDirty();
             updatePicker();
         });
         modelsRoot.appendChild(card);
@@ -108,6 +117,7 @@
         try {
             const data = await requestJson(cfg.urls.classes.replace("__ID__", modelId));
             addModelCard(model, data.classes || [], []);
+            markConfigurationDirty();
             setMessage("Model classes loaded from the registered model.", true);
         } catch (error) {
             setMessage(error.message, false);
@@ -138,6 +148,7 @@
             });
             availableModels.push(data.model);
             addModelCard(data.model, data.classes || [], [], true);
+            markConfigurationDirty();
             uploadVersion.value = "";
             setMessage(data.message || "Model uploaded and validated.", true);
         } catch (error) {
@@ -150,12 +161,17 @@
     }
 
     function loadConfiguration(data) {
+        configurationLoaded = true;
+        form.dataset.dirty = "false";
         availableModels = data.available_models || [];
         currentConfiguration = data.configuration || null;
         const config = currentConfiguration;
         document.getElementById("pcStatus").textContent = config ? config.status.replaceAll("_", " ") : "Not Configured";
         document.getElementById("pcVersion").textContent = config ? "Version " + config.version : "";
         document.getElementById("pcRoi").textContent = "Common ROI: " + (config && config.roi_configured ? "configured" : "not configured");
+        if (config && Array.isArray(config.validation_errors) && config.validation_errors.length) {
+            setMessage(config.validation_errors.join(" "), false);
+        }
         if (config) {
             document.getElementById("pcMode").value = config.inspection_mode;
             document.getElementById("pcRule").value = config.acceptance_rule;
@@ -213,6 +229,8 @@
             body.configuration_id = currentConfiguration.id;
         }
         const button = document.getElementById("pcSave");
+        const submittedEditVersion = editVersion;
+        refreshVersion += 1;
         button.disabled = true;
         setMessage("Saving model configuration…", false);
         try {
@@ -228,8 +246,23 @@
             const validationErrors = Array.isArray(result.validation_errors) ? result.validation_errors : [];
             const ready = result.status === "READY" && result.is_active === true && validationErrors.length === 0;
             const statusMessage = result.message + " Status: " + String(result.status || "unknown").replaceAll("_", " ") + ".";
+            currentConfiguration = {
+                ...(currentConfiguration || {}),
+                id: result.configuration_id,
+                version: result.version,
+                status: result.status,
+                is_active: result.is_active,
+            };
             setMessage(statusMessage + (validationErrors.length ? " " + validationErrors.join(" ") : ""), ready);
-            await refresh();
+            if (editVersion === submittedEditVersion) {
+                form.dataset.dirty = "false";
+                await refresh();
+            } else {
+                setMessage(
+                    statusMessage + " Newer edits remain unsaved; save again to persist them.",
+                    false
+                );
+            }
         } catch (error) {
             setMessage(error.message, false);
         } finally {
@@ -238,8 +271,18 @@
     }
 
     async function refresh() {
+        const version = ++refreshVersion;
         try {
             const data = await requestJson(cfg.urls.read);
+            if (version !== refreshVersion) return;
+            if (form.dataset.dirty === "true") {
+                if (!currentConfiguration) currentConfiguration = data.configuration || null;
+                setMessage(
+                    "Configuration data was not reloaded because there are newer unsaved edits.",
+                    false
+                );
+                return;
+            }
             loadConfiguration(data);
         } catch (error) {
             setMessage(error.message, false);
@@ -250,5 +293,16 @@
     addRegisteredButton.addEventListener("click", addRegisteredModel);
     modelFile.addEventListener("change", uploadModel);
     form.addEventListener("submit", saveConfiguration);
+    form.addEventListener("input", markConfigurationDirty);
+    form.addEventListener("change", markConfigurationDirty);
+    const configureRoi = document.getElementById("pcConfigureRoi");
+    if (configureRoi) {
+        configureRoi.addEventListener("click", (event) => {
+            if (form.dataset.dirty === "true") {
+                event.preventDefault();
+                setMessage("Save the model and camera configuration before configuring its ROI.", false);
+            }
+        });
+    }
     refresh();
 })();

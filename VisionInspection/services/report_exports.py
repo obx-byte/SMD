@@ -154,9 +154,6 @@ class PdfDocument:
     def _baseline(self, top):
         return self.page_height - top
 
-    def _emit(self, ops, command):
-        ops.append(command)
-
     def text(self, x, top, value, size=9, bold=False, color=_COLOR_TEXT,
              width=None, align="left"):
         """Draw *value* with its baseline at *top* (distance from page top)."""
@@ -173,8 +170,7 @@ class PdfDocument:
                 x += width - _text_width(text, size)
         r, g, b = color
         font = self.FONT_BOLD if bold else self.FONT_REGULAR
-        self._emit(
-            self._ops,
+        self._ops.append(
             "BT /%s %s Tf %.3f %.3f %.3f rg 1 0 0 1 %.2f %.2f Tm (%s) Tj ET\n"
             % (font, _fmt(size), r, g, b, x, self._baseline(top), _escape_pdf(text)),
         )
@@ -182,8 +178,7 @@ class PdfDocument:
     def fill_rect(self, x, top, width, height, color):
         y = self.page_height - top - height
         r, g, b = color
-        self._emit(
-            self._ops,
+        self._ops.append(
             "%.3f %.3f %.3f rg %.2f %.2f %.2f %.2f re f\n"
             % (r, g, b, x, y, width, height),
         )
@@ -192,21 +187,9 @@ class PdfDocument:
                     line_width=0.5):
         y = self.page_height - top - height
         r, g, b = color
-        self._emit(
-            self._ops,
+        self._ops.append(
             "%.3f w %.3f %.3f %.3f RG %.2f %.2f %.2f %.2f re S\n"
             % (line_width, r, g, b, x, y, width, height),
-        )
-
-    def line(self, x1, top1, x2, top2, color=_COLOR_BORDER, line_width=0.5):
-        r, g, b = color
-        self._emit(
-            self._ops,
-            "%.3f w %.3f %.3f %.3f RG %.2f %.2f m %.2f %.2f l S\n"
-            % (
-                line_width, r, g, b, x1, self._baseline(top1),
-                x2, self._baseline(top2),
-            ),
         )
 
     # -- output --------------------------------------------------------- #
@@ -214,12 +197,11 @@ class PdfDocument:
     def render(self):
         """Serialise the document to PDF bytes."""
         objects = {}
-        numbers = {}
         next_number = 5
         page_numbers = []
 
         for ops in self.pages:
-            stream = "".join(ops).encode("latin-1", "replace")
+            stream = "".join(ops).encode("cp1252", "replace")
             content_number = next_number
             next_number += 1
             objects[content_number] = (
@@ -240,7 +222,7 @@ class PdfDocument:
         objects[info_number] = (
             "<< /Title (Vision Inspection Report) /Producer (SMD Vision "
             "Inspection) /Creator (SMD Vision Inspection) >>"
-        ).encode("latin-1", "replace")
+        ).encode("cp1252", "replace")
 
         kids = " ".join("%d 0 R" % number for number in page_numbers)
         objects[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
@@ -299,8 +281,13 @@ def _fit(text, width, size):
 
 
 def _escape_pdf(value):
+    """Escape a PDF string literal for WinAnsi (Windows-1252) text.
+
+    Em dash and friends are part of WinAnsiEncoding, so they survive; anything
+    outside it is replaced instead of corrupting the content stream.
+    """
     text = "" if value is None else str(value)
-    text = text.encode("latin-1", "replace").decode("latin-1")
+    text = text.encode("cp1252", "replace").decode("cp1252")
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 

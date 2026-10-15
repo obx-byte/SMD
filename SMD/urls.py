@@ -17,7 +17,10 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 
+from VisionInspection import ui_views
+
 urlpatterns = [
+    path("favicon.ico", ui_views.favicon, name="favicon"),
     path("vision-inspection/", include("VisionInspection.urls")),
     # Jazzmin ("jazzmin" listed before admin in INSTALLED_APPS) transparently
     # themes the default admin UI; keep the standard admin site URLs.

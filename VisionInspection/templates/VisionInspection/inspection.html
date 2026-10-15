@@ -1,317 +1,115 @@
 {% extends "VisionInspection/ui/base.html" %}
 {% load static %}
-{% csrf_token %}
 
-{% block title %}Airbag Stitch Inspection — VisionInspection{% endblock %}
+{% block title %}Airbag Stitch Inspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_master.css' %}">
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_workspace.css' %}?v=20261011">
+<link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_workspace.css' %}?v=20261015-3">
 {% endblock %}
 
-{# Reference header: logo + bold title, date/time, Home icon, Inspection button. #}
-{% block header_title %}<span class="vi-ins-logo" aria-hidden="true">&#9635;</span> Airbag Stitch Inspection{% endblock %}
-{% block header_actions %}
-    <span class="vi-ins-clock" id="wsClock">&mdash;</span>
-    <a class="vi-ins-home" href="{% url 'VisionInspection:dashboard' %}" title="Home" aria-label="Home">&#8962;</a>
-    <span class="vi-ins-badge" title="Inspection station">
-        &#9873; Inspection{% if station_id %} &middot; {{ station_id }}{% endif %}
-    </span>
-{% endblock %}
+{% block header_title %}Airbag Stitch Inspection{% endblock %}
 
 {% block content %}
 <div class="ws" id="wsApp">
-
-    {# ============ Three-column workspace: 20% / 57% / 23% ============ #}
-    <div class="ws-grid" id="wsWorkspace">
-
-        {# ------------------ LEFT — Part Scan & Model / Part Information ------------------ #}
-        <aside class="ws-col-left">
-
-            {# Part scan & model #}
-            <section class="ws-card">
-                <h3 class="ws-panel-title"><span class="ws-panel-num">1</span> Part Scan &amp; Model</h3>
-
-                <div class="ws-barcode">
-                    <span class="ws-barcode-icon" aria-hidden="true">&#9636;</span>
-                    <input id="wfBarcode" class="vi-master-control" type="text"
-                           placeholder="Scan or type part barcode" autocomplete="off"
-                           aria-label="Part barcode">
-                    <button id="wfScanBtn" class="vi-master-btn" type="button" title="Validate the scanned part">&#10003;</button>
+    <section class="wf-stage wf-scan" id="wfStageScan" aria-labelledby="wfScanTitle">
+        <div class="wf-scan-panel">
+            <div class="wf-kicker">AIRBAG STITCH INSPECTION</div>
+            <h2 id="wfScanTitle">Scan Part</h2>
+            <p class="wf-subtitle">Scan the part barcode to validate its inspection configuration.</p>
+            <form id="wfScanForm" class="wf-scan-form">
+                <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+                <label for="wfBarcode">Part barcode</label>
+                <div class="wf-scan-row">
+                    <input id="wfBarcode" class="vi-master-control" type="text" autocomplete="off" autofocus aria-label="Part barcode">
+                    <button id="wfScanBtn" class="wf-button wf-primary" type="submit">SCAN / VALIDATE</button>
                 </div>
-
-                {# Live scan / model state (never fabricated) #}
-                <div class="ws-scan-flags">
-                    <span class="vi-master-badge STOPPED" id="wfScanState">Waiting for scan</span>
-                    <span class="vi-master-badge STOPPED" id="wfModelState">Model &mdash;</span>
-                </div>
-
-                {# Model status — green only when genuinely validated/loaded #}
-                <div class="ws-model-status is-idle" id="wsModelCard">
-                    <div class="ws-model-status-head">
-                        <span class="ws-dot" aria-hidden="true"></span>
-                        <span id="wsModelCardTitle">Model not validated</span>
-                    </div>
-                    <dl class="ws-model-status-meta">
-                        <dt>Model</dt><dd id="wsModelName">&mdash;</dd>
-                        <dt>Classes</dt><dd id="wsModelClasses">&mdash;</dd>
-                    </dl>
-                </div>
-
-                <div class="ws-scan-actions">
-                    <button id="wfValidateBtn" class="vi-master-btn" type="button" disabled
-                            title="Validate the approved inspection model">&#9881; Validate Model</button>
-                    <button id="wfSubmitBtn" class="vi-master-btn vi-master-btn-primary" type="button" disabled
-                            title="Requires a scanned part and a validated model">&#9654; Submit &amp; Start Inspection</button>
-                </div>
-            </section>
-
-            {# Part information (real model fields only) #}
-            <section class="ws-card">
-                <h3 class="ws-panel-title">Part Information</h3>
-                <table class="ws-info">
-                    <tbody>
-                        <tr><th>Part No</th><td id="wsInfoPart">&mdash;</td></tr>
-                        <tr><th>Model</th><td id="wsInfoModel">&mdash;</td></tr>
-                        <tr><th>Revision</th><td id="wsInfoRevision">&mdash;</td></tr>
-                        <tr><th>Inspection Type</th><td id="wsInfoType">Front + Back</td></tr>
-                    </tbody>
-                </table>
-
-                {# Camera configuration (required by ROI loading / camera start) #}
-                <div class="ws-config">
-                    <div class="ws-field">
-                        <label for="wsPart">Part Number</label>
-                        <select id="wsPart" class="vi-master-control">
-                            <option value="">&mdash; Select &mdash;</option>
-                            {% for p in parts %}
-                            <option value="{{ p.part_number }}">{{ p.part_number }}{% if p.part_desc %} &mdash; {{ p.part_desc }}{% endif %}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="ws-field">
-                        <label for="wsCamSrc">Camera Source</label>
-                        <select id="wsCamSrc" class="vi-master-control">
-                            {% for src in camera_capabilities.sources %}
-                                {% if src.available %}<option value="{{ src.id }}">{{ src.label }}</option>
-                                {% else %}<option value="{{ src.id }}" disabled>{{ src.label }} &mdash; unavailable</option>{% endif %}
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="ws-field" id="wsCamIdxField">
-                        <label for="wsCamIdx">Camera Index</label>
-                        <select id="wsCamIdx" class="vi-master-control">
-                            {% for i in "012345" %}
-                            <option value="{{ forloop.counter0 }}">Cam {{ forloop.counter0 }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-                <p class="ws-hint" id="wfPartInfo" style="margin-top:10px">No part scanned. Scan a barcode to begin.</p>
-            </section>
-        </aside>
-
-        {# ------------------ CENTER — cameras, controls, results ------------------ #}
-        <div class="ws-col-center">
-
-            <div class="ws-cameras">
-                {# FRONT #}
-                <section class="ws-view" data-view="front">
-                    <header class="ws-cam-head">
-                        <span class="ws-cam-head-icon" aria-hidden="true">&#9726;</span>
-                        <span class="ws-cam-head-title">Front Camera View (Live Inspection)</span>
-                        <span class="vi-master-badge OFF" id="badgeFront">OFF</span>
-                        <button class="ws-cam-fs" type="button" data-view="front" title="Fullscreen front camera">&#9974;</button>
-                    </header>
-                    <div class="vi-master-cam" id="camFront">
-                        <img id="feedFront" class="vi-master-feed" alt="Front camera feed" style="display:none" />
-                        <img id="maskFront" class="ws-mask" alt="Front segmentation overlay" style="display:none" />
-                        <canvas id="drawFront" class="vi-master-draw"></canvas>
-                        <div class="vi-master-cam-overlay" id="ovFront">Camera stopped &mdash; press Start</div>
-                        <div class="ws-cam-off" id="offFront" style="display:none">
-                            <div class="ws-cam-off-title">Back view not connected</div>
-                            <div class="ws-cam-off-sub">Single-camera hardware. The live feed is shown on the selected view.</div>
-                        </div>
-                    </div>
-                    {% include "VisionInspection/_ws_roi_panel.html" with view="front" %}
-                </section>
-
-                {# BACK #}
-                <section class="ws-view" data-view="back">
-                    <header class="ws-cam-head">
-                        <span class="ws-cam-head-icon" aria-hidden="true">&#9726;</span>
-                        <span class="ws-cam-head-title">Back Camera View (After Front OK)</span>
-                        <span class="vi-master-badge OFF" id="badgeBack">WAITING</span>
-                        <button class="ws-cam-fs" type="button" data-view="back" title="Fullscreen back camera">&#9974;</button>
-                    </header>
-                    <div class="vi-master-cam" id="camBack">
-                        <img id="feedBack" class="vi-master-feed" alt="Back camera feed" style="display:none" />
-                        <img id="maskBack" class="ws-mask" alt="Back segmentation overlay" style="display:none" />
-                        <canvas id="drawBack" class="vi-master-draw"></canvas>
-                        <div class="vi-master-cam-overlay" id="ovBack">Waiting &mdash; front inspection must pass first</div>
-                        <div class="ws-cam-off" id="offBack">
-                            <div class="ws-cam-off-title">Back view not connected</div>
-                            <div class="ws-cam-off-sub">Reposition the part, then use
-                                <b>Reposition &amp; Capture Back</b> after the front inspection passes.</div>
-                        </div>
-                    </div>
-                    {% include "VisionInspection/_ws_roi_panel.html" with view="back" %}
-                </section>
+            </form>
+            <div class="wf-scan-actions">
+                <button id="wfStartInspectionBtn" class="wf-button wf-primary" type="button" disabled>START INSPECTION</button>
+                <button id="wfReturnToInspectionBtn" class="wf-button" type="button" hidden>RETURN TO CURRENT INSPECTION</button>
+                <a id="wfPartConfigLink" class="wf-button wf-config-link" href="#" hidden>EDIT PART VISION SETTINGS</a>
             </div>
-
-            {# Single-camera view switch + guidance line #}
-            <div class="ws-view-switch">
-                <span class="ws-hint" id="wsHint">Select a part, then start the camera.</span>
-                <span class="ws-view-toggle">
-                    <button type="button" class="active" data-view="front">Front</button>
-                    <button type="button" data-view="back">Back</button>
-                </span>
+            <div class="wf-validation" aria-live="polite">
+                <div><span class="wf-indicator" id="wfScanDot"></span><span>Part</span><strong id="wfScanState">Waiting for scan</strong></div>
+                <div><span class="wf-indicator" id="wfModelDot"></span><span>Model</span><strong id="wfModelState">Waiting for part</strong></div>
             </div>
-
-            {# Camera control toolbar #}
-            <div class="ws-toolbar">
-                <button id="wsCapture" class="vi-master-btn vi-master-btn-solid" type="button" disabled
-                        title="Capture a single frame">&#128247; Capture</button>
-                <button id="wsStopCam" class="vi-master-btn" type="button" disabled>&#9632; Stop</button>
-                <button id="wsLightUp" class="vi-master-btn" type="button" disabled
-                        title="Illumination control &mdash; not supported by the connected hardware">&#9728; Light +</button>
-                <button id="wsLightDn" class="vi-master-btn" type="button" disabled
-                        title="Illumination control &mdash; not supported by the connected hardware">&#9728; Light -</button>
-                <button id="wsFullscreen" class="vi-master-btn ws-toolbar-spacer" type="button">&#9974; Fullscreen</button>
-            </div>
-
-            {# Camera metrics + start control #}
-            <div class="ws-cam-metrics">
-                <span class="vi-master-badge OFF" id="wsCamState">OFF</span>
-                <button id="wsStartCam" class="vi-master-btn vi-master-btn-primary" type="button">&#9679; Start</button>
-                <span class="ws-metric">FPS <b id="wsFps">&mdash;</b></span>
-                <span class="ws-metric">Inference <b id="wsLatency">&mdash;</b></span>
-                <span class="ws-metric">End-to-end <b id="wsE2E">&mdash;</b></span>
-                <span class="ws-metric">Frame age <b id="wsFrameAge">&mdash;</b></span>
-                <span class="ws-metric">Front ROI <b id="wsRoiFront">not set</b></span>
-                <span class="ws-metric">Back ROI <b id="wsRoiBack">not set</b></span>
-                <span class="ws-metric">Live inspection <b><span class="vi-master-badge STOPPED" id="wsInspState">STOPPED</span></b></span>
-            </div>
-
-            {# Inspection result + overall result #}
-            <div class="ws-results">
-                <section class="ws-result-card">
-                    <h3 class="ws-panel-title">Inspection Result</h3>
-                    <div class="ws-sides">
-                        <div class="ws-side" id="wsFrontSide" data-state="WAITING">
-                            <span class="ws-side-label">Front Side</span>
-                            <span class="ws-side-icon" id="wsFrontSideIcon">&#9711;</span>
-                            <span class="ws-side-value" id="wsFrontSideValue">Waiting</span>
-                        </div>
-                        <div class="ws-sides-divider" aria-hidden="true"></div>
-                        <div class="ws-side" id="wsBackSide" data-state="WAITING">
-                            <span class="ws-side-label">Back Side</span>
-                            <span class="ws-side-icon" id="wsBackSideIcon">&#8987;</span>
-                            <span class="ws-side-value" id="wsBackSideValue">Waiting...</span>
-                        </div>
-                    </div>
-                    <div class="ws-card-inline-actions">
-                        <button id="wfBackBtn" class="vi-master-btn" type="button" disabled>&#8635; Reposition &amp; Capture Back</button>
-                        <button id="wfSaveBtn" class="vi-master-btn vi-master-btn-primary" type="button" disabled>&#128190; Save Result</button>
-                        <button id="wfCancelBtn" class="vi-master-btn vi-master-btn-danger" type="button" disabled>&#10005; Cancel</button>
-                    </div>
-                </section>
-
-                <section class="ws-result-card">
-                    <h3 class="ws-panel-title">Overall Result</h3>
-                    <div class="ws-result state-WAITING" id="wfResult">
-                        <div class="ws-result-icon" id="wfResultIcon">&#8987;</div>
-                        <div class="ws-result-state" id="wfResultState">PENDING</div>
-                        <div class="ws-result-note" id="wfResultNote">Scan a part and Submit to begin inspection.</div>
-                    </div>
-                </section>
-            </div>
+            <p class="wf-message" id="wfPartInfo" aria-live="polite">Ready to scan.</p>
+            <p class="wf-model-detail" id="wfModelDetail" role="status" aria-live="polite" hidden></p>
         </div>
+    </section>
 
-        {# ------------------ RIGHT — progress + detections + legend ------------------ #}
-        <aside class="ws-col-right">
-            <section class="ws-card">
-                <h3 class="ws-panel-title">Inspection Progress</h3>
-                <div class="ws-progress-rows" id="wfProgressRows">
-                    <div class="ws-progress-row" data-step="scan">
-                        <span class="ws-progress-num">1</span><span class="ws-progress-label">Part Scanned</span>
-                        <span class="ws-progress-state">Pending</span>
-                    </div>
-                    <div class="ws-progress-row" data-step="model">
-                        <span class="ws-progress-num">2</span><span class="ws-progress-label">Model Loaded</span>
-                        <span class="ws-progress-state">Pending</span>
-                    </div>
-                    <div class="ws-progress-row" data-step="front">
-                        <span class="ws-progress-num">3</span><span class="ws-progress-label">Front Inspection</span>
-                        <span class="ws-progress-state">Pending</span>
-                    </div>
-                    <div class="ws-progress-row" data-step="back">
-                        <span class="ws-progress-num">4</span><span class="ws-progress-label">Back Inspection</span>
-                        <span class="ws-progress-state">Pending</span>
-                    </div>
-                    <div class="ws-progress-row" data-step="result">
-                        <span class="ws-progress-num">5</span><span class="ws-progress-label">Final Result</span>
-                        <span class="ws-progress-state">Pending</span>
-                    </div>
-                    <div class="ws-progress-row" data-step="saved">
-                        <span class="ws-progress-num">6</span><span class="ws-progress-label">Save to Database</span>
-                        <span class="ws-progress-state">Pending</span>
-                    </div>
-                </div>
-                <p class="ws-hint" id="wfProgress">Scan a part, validate the model, then Submit.</p>
-                <div class="ws-progress-meta">
-                    <div class="vi-master-stat"><span class="k">Model state</span><span class="v"><span class="vi-master-badge STOPPED" id="wsModelState">NOT CONFIGURED</span></span></div>
-                </div>
-            </section>
+    <section class="wf-stage wf-inspection" id="wfStageFront" hidden aria-labelledby="wfFrontTitle">
+        <header class="wf-stage-head">
+            <div><div class="wf-kicker">FRONT INSPECTION</div><h2 id="wfFrontTitle">Front Camera</h2></div>
+            <div class="wf-session-meta"><span>PART <b id="wfFrontPart">&mdash;</b></span><span>SESSION <b id="wfFrontSession">&mdash;</b></span></div>
+            <button id="wfFrontNextPartBtn" class="wf-button wf-change-part" type="button">CHANGE PART</button>
+            <span class="wf-camera-status" id="wfFrontCameraStatus"><i></i> CONNECTING</span>
+        </header>
+        <div class="wf-camera-frame">
+            <img id="feedFront" alt="Configured front camera live feed">
+            <div class="wf-camera-overlay" id="ovFront">Connecting to configured front camera...</div>
+        </div>
+        <footer class="wf-stage-foot">
+            <div class="wf-stage-result">
+                <strong id="wfFrontResult">RESULT PENDING</strong>
+                <p id="wfFrontMessage">Live camera ready for front inspection.</p>
+                <div class="wf-detections" id="wfFrontDetections" aria-live="polite">Segmentation results will appear after inspection.</div>
+            </div>
+            <button id="wfFrontRetryCamera" class="wf-button wf-retry" type="button" hidden>RETRY CAMERA</button>
+            <button id="wfFrontSubmitBtn" class="wf-button wf-primary wf-submit" type="button" disabled>SUBMIT FRONT</button>
+        </footer>
+    </section>
 
-            <section class="ws-card">
-                <h3 class="ws-panel-title">Stitch Detection (Front)</h3>
-                <div class="ws-table-wrap">
-                    <table class="ws-table">
-                        <thead><tr><th>Stitch Type</th><th>Conf.</th><th>Status</th></tr></thead>
-                        <tbody id="wfDetFront"><tr><td colspan="3" class="ws-empty">Waiting for front inspection.</td></tr></tbody>
-                    </table>
-                </div>
-            </section>
+    <section class="wf-stage wf-inspection" id="wfStageBack" hidden aria-labelledby="wfBackTitle">
+        <header class="wf-stage-head">
+            <div><div class="wf-kicker">BACK INSPECTION</div><h2 id="wfBackTitle">Back Camera</h2></div>
+            <div class="wf-session-meta"><span>PART <b id="wfBackPart">&mdash;</b></span><span>SESSION <b id="wfBackSession">&mdash;</b></span><span>FRONT <b id="wfBackFrontResult">&mdash;</b></span></div>
+            <button id="wfBackNextPartBtn" class="wf-button wf-change-part" type="button">CHANGE PART</button>
+            <span class="wf-camera-status" id="wfBackCameraStatus"><i></i> CONNECTING</span>
+        </header>
+        <div class="wf-camera-frame">
+            <img id="feedBack" alt="Configured back camera live feed">
+            <div class="wf-camera-overlay" id="ovBack">Connecting to configured back camera...</div>
+        </div>
+        <footer class="wf-stage-foot">
+            <div class="wf-stage-result">
+                <strong id="wfBackResult">RESULT PENDING</strong>
+                <p id="wfBackMessage">Live camera ready for back inspection.</p>
+                <div class="wf-detections" id="wfBackDetections" aria-live="polite">Segmentation results will appear after inspection.</div>
+            </div>
+            <button id="wfBackRetryCamera" class="wf-button wf-retry" type="button" hidden>RETRY CAMERA</button>
+            <button id="wfBackSubmitBtn" class="wf-button wf-primary wf-submit" type="button" disabled>SUBMIT BACK &amp; FINISH</button>
+        </footer>
+    </section>
 
-            <section class="ws-card">
-                <h3 class="ws-panel-title">Stitch Detection (Back)</h3>
-                <div class="ws-table-wrap">
-                    <table class="ws-table">
-                        <thead><tr><th>Stitch Type</th><th>Conf.</th><th>Status</th></tr></thead>
-                        <tbody id="wfDetBack"><tr><td colspan="3" class="ws-empty">Waiting for back inspection.</td></tr></tbody>
-                    </table>
-                </div>
-            </section>
+    <section class="wf-stage wf-saving" id="wfStageSaving" hidden aria-live="polite">
+        <div class="wf-final-panel">
+            <div class="wf-kicker">PERSISTING INSPECTION</div>
+            <h2 id="wfSavingTitle">Saving results</h2>
+            <p id="wfSavingMessage">The backend is finalizing this inspection session.</p>
+            <button id="wfRetrySaveBtn" class="wf-button wf-primary" type="button" hidden>RETRY SAVE</button>
+        </div>
+    </section>
 
-            {# Segmentation legend — real configured classes only #}
-            <section class="ws-card">
-                <h3 class="ws-panel-title">Segmentation Legend</h3>
-                {% if active_model %}
-                    <div class="ws-legend">
-                        <div class="ws-legend-item">
-                            <span class="ws-legend-swatch" style="background:linear-gradient(160deg,var(--ws-blue),var(--ws-violet))"></span>
-                            <span><b>{{ active_model.name }}</b>{% if active_model.version %} v{{ active_model.version }}{% endif %}
-                                &mdash; {{ active_model.num_classes|default:0 }} classes</span>
-                        </div>
-                        {% if active_model.part_class %}
-                        <div class="ws-legend-item">
-                            <span class="ws-legend-swatch" style="background:var(--ws-blue)"></span>
-                            <span>Expected class: <b>{{ active_model.part_class }}</b></span>
-                        </div>
-                        {% endif %}
-                    </div>
-                    <p class="ws-hint" style="margin-top:8px">Only classes the configured model declares are listed.
-                        Overlay colours come from real inference output.</p>
-                {% else %}
-                    <div class="ws-empty">No inspection model configured. Register a YOLO segmentation model to enable
-                        detections and the legend.</div>
-                {% endif %}
-            </section>
+    <section class="wf-stage wf-final" id="wfStageFinal" hidden aria-labelledby="wfFinalTitle">
+        <div class="wf-final-panel">
+            <div class="wf-kicker">INSPECTION COMPLETE</div>
+            <h2 class="wf-verdict" id="wfFinalTitle">&mdash;</h2>
+            <div class="wf-final-meta">
+                <div><span>PART NUMBER</span><strong id="wfFinalPart">&mdash;</strong></div>
+                <div><span>INSPECTION ID</span><strong id="wfFinalId">&mdash;</strong></div>
+                <div><span>TIME</span><strong id="wfFinalTime">&mdash;</strong></div>
+                <div><span>FRONT</span><strong id="wfFinalFront">&mdash;</strong></div>
+                <div><span>BACK</span><strong id="wfFinalBack">&mdash;</strong></div>
+                <div><span>PERSISTENCE</span><strong id="wfFinalSaved">&mdash;</strong></div>
+            </div>
+            <p class="wf-message" id="wfFinalMessage" aria-live="polite"></p>
+            <button id="wfNewInspectionBtn" class="wf-button wf-primary" type="button">NEXT INSPECTION CYCLE — SAME PART</button>
+            <button id="wfChangePartBtn" class="wf-button" type="button">CHANGE PART</button>
+        </div>
+    </section>
 
-            <div class="vi-master-alert" id="wsError"></div>
-        </aside>
-    </div>
+    <div class="wf-error" id="wsError" role="alert" aria-live="assertive"></div>
 </div>
 {% endblock %}
 
@@ -320,35 +118,25 @@
 <script>
     window.__VI_WS__ = {
         capabilities: JSON.parse(document.getElementById("ws-cam-caps").textContent),
-        modelConfigured: {% if active_model %}true{% else %}false{% endif %},
-        modelName: {% if active_model %}"{{ active_model.name|escapejs }}"{% else %}""{% endif %},
-        modelVersion: {% if active_model %}"{{ active_model.version|default:''|escapejs }}"{% else %}""{% endif %},
-        modelClasses: {% if active_model %}{{ active_model.num_classes|default:0 }}{% else %}0{% endif %},
         urls: {
-            cameraStart: "{% url 'VisionInspection:camera-start' %}",
             cameraStop: "{% url 'VisionInspection:camera-stop' %}",
             cameraStatus: "{% url 'VisionInspection:camera-status' %}",
             cameraStream: "{% url 'VisionInspection:camera-stream' %}",
-            cameraCapture: "{% url 'VisionInspection:camera-capture' %}",
-            resolution: "{% url 'VisionInspection:master-camera-resolution' %}",
-            roiSave: "{% url 'VisionInspection:master-roi-save' %}",
-            roiGet: "{% url 'VisionInspection:master-roi-get' %}",
-            start: "{% url 'VisionInspection:master-inspection-start' %}",
-            stop: "{% url 'VisionInspection:master-inspection-stop' %}",
-            status: "{% url 'VisionInspection:master-inspection-status' %}",
             wfScan: "{% url 'VisionInspection:workflow-scan-part' %}",
             wfValidate: "{% url 'VisionInspection:workflow-validate-model' %}",
+            partVisionPreview: "{% url 'VisionInspection:api-part-vision-preview' 0 %}".replace("/0/vision-preview/", "/__PART_ID__/vision-preview/"),
+            partVisionConfig: "{% url 'VisionInspection:part-vision-configuration' 0 %}".replace("/0/vision-configuration/", "/__PART_ID__/vision-configuration/"),
             wfSubmit: "{% url 'VisionInspection:workflow-submit' %}",
-            wfSession: "/vision-inspection/workflow/session/",
+            wfSession: "{% url 'VisionInspection:workflow-progress' '00000000-0000-0000-0000-000000000000' %}".replace("00000000-0000-0000-0000-000000000000/", ""),
+            wfActivateSide: "{% url 'VisionInspection:workflow-activate-side' %}",
             wfInspectFront: "{% url 'VisionInspection:workflow-inspect-side' 'front' %}",
             wfInspectBack: "{% url 'VisionInspection:workflow-inspect-side' 'back' %}",
             wfCompute: "{% url 'VisionInspection:workflow-compute-result' %}",
             wfSave: "{% url 'VisionInspection:workflow-save' %}",
             wfCancel: "{% url 'VisionInspection:workflow-cancel' %}"
         },
-        csrf: (document.cookie.split("; ").find(c => c.startsWith("csrftoken=")) || "").split("=")[1] || ""
+        csrf: (document.cookie.split("; ").find(function (c) { return c.indexOf("csrftoken=") === 0; }) || "").split("=")[1] || ""
     };
 </script>
-<script src="{% static 'VisionInspection/js/inspection_workspace.js' %}" defer></script>
-<script src="{% static 'VisionInspection/js/inspection_workflow_ui.js' %}" defer></script>
+<script src="{% static 'VisionInspection/js/inspection_workflow_ui.js' %}?v=20261015-5" defer></script>
 {% endblock %}

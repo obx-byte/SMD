@@ -10,6 +10,7 @@ from datetime import datetime
 from django.conf import settings
 from django.core.paginator import Paginator
 from django.db.models import Q
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
 
 from VisionInspection.models import (
@@ -26,8 +27,20 @@ from VisionInspection.models import (
 )
 from VisionInspection.services import inspection_records as records
 from VisionInspection.services import report_exports
+from VisionInspection.services.part_configuration import common_roi_camera_error
 
 logger = logging.getLogger(__name__)
+
+
+def favicon(request):
+    """Serve the station's compact brand mark for browsers requesting /favicon.ico."""
+    return HttpResponse(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+        '<rect width="32" height="32" rx="6" fill="#0b1c3d"/>'
+        '<path d="M16 5 27 16 16 27 5 16Z" fill="#60a5fa"/>'
+        "</svg>",
+        content_type="image/svg+xml",
+    )
 
 
 def _parts_for_filter():
@@ -115,7 +128,7 @@ def part_vision_configuration(request, part_id):
     part = get_object_or_404(VisionInspectionPart, pk=part_id)
     configuration = (
         VisionPartConfiguration.objects.filter(part=part)
-        .order_by("-is_active", "-version")
+        .order_by("-version")
         .first()
     )
     return render(
@@ -125,6 +138,57 @@ def part_vision_configuration(request, part_id):
             "part": part,
             "configuration": configuration,
             "sidebar_active": "parts",
+        },
+    )
+
+
+def part_roi_setup(request, part_id):
+    """Dedicated ROI setup screen for the ONE common ROI of a part.
+
+    This is the only place where an ROI can be drawn or changed.  The operator
+    Inspection screen never shows ROI editing controls or coordinates.
+    """
+    part = get_object_or_404(VisionInspectionPart, pk=part_id)
+    configuration = (
+        VisionPartConfiguration.objects.filter(part=part)
+        .order_by("-version")
+        .first()
+    )
+    from VisionInspection.services.camera_service import get_camera_capabilities
+    from VisionInspection.services.part_configuration import active_roi
+
+    capabilities = get_camera_capabilities()
+    # Camera defaults come from the configuration itself (never invented).
+    front_source = getattr(configuration, "front_camera_source", "OPENCV")
+    back_source = getattr(configuration, "back_camera_source", "OPENCV")
+    back_only = bool(configuration and configuration.requires_back and not configuration.requires_front)
+    compatibility_error = common_roi_camera_error(configuration)
+    if configuration is None:
+        compatibility_error = (
+            "Save a model configuration before configuring a common ROI."
+        )
+    selected_source = back_source if back_only else front_source
+    selected_index = (
+        getattr(configuration, "back_camera_index", 1)
+        if back_only
+        else getattr(configuration, "front_camera_index", 0)
+    )
+    return render(
+        request,
+        "VisionInspection/ui/roi_setup.html",
+        {
+            "part": part,
+            "configuration": configuration,
+            "roi": active_roi(configuration),
+            "sidebar_active": "roi_setup",
+            "camera_capabilities": capabilities,
+            "camera_source": selected_source,
+            "camera_index": selected_index,
+            "front_camera_source": front_source,
+            "front_camera_index": getattr(configuration, "front_camera_index", 0),
+            "back_camera_source": back_source,
+            "back_camera_index": getattr(configuration, "back_camera_index", 1),
+            "camera_compatibility_error": compatibility_error,
         },
     )
 
@@ -447,6 +511,18 @@ def settings_page(request):
     return render(request, "VisionInspection/ui/settings.html", context)
 
 
+def storage_settings(request):
+    """Storage destination and historical image migration controls."""
+    from django.middleware.csrf import get_token
+    from VisionInspection.services.storage_service import storage_state
+
+    return render(
+        request,
+        "VisionInspection/ui/storage_settings.html",
+        {"sidebar_active": "storage", "storage_state": storage_state(), "csrf_token": get_token(request)},
+    )
+
+
 def _django_version():
     try:
         import django
@@ -529,6 +605,7 @@ def traceability_detail(request, inspection_id):
     absence is stated plainly rather than substituting another image.
     """
     log = get_object_or_404(VisionInspectionLog, pk=inspection_id)
+    from VisionInspection.services.storage_service import image_url
 
     # ROI configuration snapshot preserved with this record.
     roi_config = []
@@ -555,6 +632,7 @@ def traceability_detail(request, inspection_id):
     context = {
         "sidebar_active": "traceability",
         "log": log,
+        "inspection_image_url": image_url(log, "inspection_image"),
         "result_badge": _RESULT_BADGE.get(log.result, "vi-badge-skip"),
         "roi_config": roi_config,
         "detections": detections,
@@ -565,6 +643,3 @@ def traceability_detail(request, inspection_id):
         "trigger_zone": log.trigger_zone_polygon,
     }
     return render(request, "VisionInspection/ui/traceability_detail.html", context)
-
-
-

@@ -1,4 +1,4 @@
-"""Tests for Employee Master and Part Master duplicate prevention.
+﻿"""Tests for Employee Master and Part Master duplicate prevention.
 
 These exercise the real model constraints (normalized-unique columns) and the
 CRUD API validation (create/update with self-exclusion on edit).
@@ -69,7 +69,7 @@ class EmployeeModelTests(TestCase):
 
 
 class EmployeeApiTests(TestCase):
-    """Employee master is administration — a staff (Django) account is required.
+    """Employee master is administration â€” a staff (Django) account is required.
 
     The inspection station itself stays anonymous: these routes are not part of
     the operator workflow (see ``StationAccessTests``).
@@ -167,7 +167,7 @@ class PartModelTests(TestCase):
 
 
 class PartApiTests(TestCase):
-    """Part master is administration — a staff (Django) account is required."""
+    """Part master is administration â€” a staff (Django) account is required."""
 
     def setUp(self):
         self.client_obj, self.admin = _staff_client()
@@ -305,6 +305,23 @@ class CameraBufferTests(TestCase):
         ok2, again, _meta = svc.get_frame_with_meta()
         self.assertTrue(np.array_equal(again, src))
 
+    def test_reuse_existing_camera_does_not_restart_capture(self):
+        service = CameraService()
+        service._status = "ON"
+        service._source = "opencv"
+        service._camera_index = 2
+
+        with mock.patch.object(service, "_retire_capture_thread") as retire:
+            started = CameraService.start_camera(
+                camera_index=2,
+                source="opencv",
+                reuse_existing=True,
+            )
+
+        self.assertFalse(started)
+        retire.assert_not_called()
+        self.assertEqual(CameraService.get_status(), "ON")
+
 
 class ContinuousROIDSATests(TestCase):
     """O(1) ROI cache keyed per part, view-based cropping, single-loop guard."""
@@ -355,7 +372,7 @@ class ContinuousROIDSATests(TestCase):
     def test_start_without_camera_does_not_spawn_worker(self):
         eng = self._engine()
         eng.configure("PART-A", 10, 10, 100, 100, 1280, 720)
-        status = eng.start(part_number="PART-A")   # camera is OFF → error path
+        status = eng.start(part_number="PART-A")   # camera is OFF â†’ error path
         self.assertEqual(status["state"], "ERROR")
         self.assertTrue(eng._worker is None or not eng._worker.is_alive())
 
@@ -387,6 +404,11 @@ import json  # noqa: E402
 from django.test import override_settings  # noqa: E402
 from unittest import mock  # noqa: E402
 from VisionInspection.models import (  # noqa: E402
+    StorageConfiguration,
+    StorageDestination,
+    StorageImageMetadata,
+    StorageMigrationJob,
+    StorageTransferHistory,
     VisionInspectionSession,
     VisionInspectionLog,
     VisionInspectionCameraConfig,
@@ -394,6 +416,7 @@ from VisionInspection.models import (  # noqa: E402
     VisionYOLOModel,
 )
 from VisionInspection.services.inspection_workflow import InspectionWorkflow  # noqa: E402
+from VisionInspection.services import storage_service  # noqa: E402
 from VisionInspection.services.yolo_service import YOLOModelService  # noqa: E402
 
 
@@ -441,12 +464,130 @@ class InspectionWorkflowTests(TestCase):
         r2 = self.wf.scan_part("")
         self.assertFalse(r2["ok"])
         self.assertEqual(r2["state"], "waiting")
+        self.assertEqual(VisionInspectionSession.objects.count(), 0)
 
     def test_scan_valid_barcode_case_insensitive(self):
         r = self.wf.scan_part("ab-100")
         self.assertTrue(r["ok"])
         self.assertEqual(r["state"], "part_identified")
         self.assertEqual(r["part"]["part_number"], "AB-100")
+        self.assertIsNone(r["active_session"])
+        self.assertEqual(VisionInspectionSession.objects.count(), 0)
+
+    def test_scan_of_different_part_exposes_prior_active_session_for_reset(self):
+        VisionInspectionPart.objects.create(part_number="AB-200", part_name="Second Airbag")
+        session = self._session(stage="front", front_status="IN_PROGRESS")
+
+        result = self.wf.scan_part("AB-200")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["part"]["part_number"], "AB-200")
+        self.assertEqual(result["active_session"]["session_id"], str(session.session_id))
+        self.assertEqual(result["active_session"]["part_number"], "AB-100")
+        self.assertEqual(VisionInspectionSession.objects.count(), 1)
+
+    def test_different_part_can_be_validated_after_prior_session_is_cancelled(self):
+        VisionInspectionPart.objects.create(part_number="AB-200", part_name="Second Airbag")
+        previous = self._session(stage="front", front_status="IN_PROGRESS")
+
+        first_scan = self.wf.scan_part("AB-200")
+        self.assertEqual(first_scan["active_session"]["session_id"], str(previous.session_id))
+        self.assertEqual(self.wf.cancel(str(previous.session_id))["state"], "cancelled")
+        second_scan = self.wf.scan_part("AB-200")
+
+        self.assertTrue(second_scan["ok"])
+        self.assertEqual(second_scan["part"]["part_number"], "AB-200")
+        self.assertIsNone(second_scan["active_session"])
+        previous.refresh_from_db()
+        self.assertEqual(previous.stage, "cancelled")
+        self.assertEqual(VisionInspectionSession.objects.count(), 1)
+
+    def test_repeated_barcode_validation_does_not_create_sessions(self):
+        first = self.wf.scan_part("AB-100")
+        second = self.wf.scan_part("AB-100")
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(VisionInspectionSession.objects.count(), 0)
+
+    def test_failed_camera_start_does_not_create_an_inspection_session(self):
+        model = self._model_obj()
+        self._roi("front")
+        validation = {
+            "ok": True,
+            "model_id": model.pk,
+            "model_version": "1",
+            "classes": ["perimeter"],
+            "num_classes": 1,
+        }
+        with mock.patch.object(self.wf, "validate_model", return_value=validation) as validate_model, \
+                mock.patch.object(self.wf._camera, "get_status", return_value="OFF"), \
+                mock.patch("VisionInspection.services.inspection_workflow.CameraService.get_source", return_value="opencv"), \
+                mock.patch("VisionInspection.services.inspection_workflow.CameraService.stop_camera"), \
+                mock.patch("VisionInspection.services.inspection_workflow.CameraService.start_camera", return_value=False):
+            result = self.wf.submit("AB-100")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "camera_error")
+        self.assertEqual(VisionInspectionSession.objects.count(), 0)
+
+    def test_cancel_is_idempotent_and_preserves_session_evidence(self):
+        session = self._session(
+            stage="front",
+            front_status="IN_PROGRESS",
+            front_image="vision_inspection/sessions/front/retained.jpg",
+        )
+
+        first = self.wf.cancel(str(session.session_id))
+        second = self.wf.cancel(str(session.session_id))
+
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["state"], "cancelled")
+        self.assertTrue(second["ok"])
+        self.assertEqual(second["state"], "already_cancelled")
+        session.refresh_from_db()
+        self.assertFalse(session.is_active)
+        self.assertEqual(session.stage, "cancelled")
+        self.assertEqual(session.front_image.name, "vision_inspection/sessions/front/retained.jpg")
+
+    def test_cancel_does_not_discard_completed_inspection(self):
+        session = self._session(
+            stage="result",
+            front_status="COMPLETED",
+            back_status="COMPLETED",
+            front_image="vision_inspection/sessions/front/completed.jpg",
+        )
+
+        result = self.wf.cancel(str(session.session_id))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "completed")
+        session.refresh_from_db()
+        self.assertTrue(session.is_active)
+        self.assertEqual(session.stage, "result")
+        self.assertEqual(session.front_image.name, "vision_inspection/sessions/front/completed.jpg")
+
+    def test_cancelled_inference_worker_cannot_write_late_results(self):
+        session = self._session(
+            stage="front",
+            front_status="IN_PROGRESS",
+            model=self._model_obj(),
+            front_roi=self._roi("front"),
+        )
+
+        def cancel_during_inference(*args, **kwargs):
+            self.assertTrue(self.wf.cancel(str(session.session_id))["ok"])
+            return [{"class": "perimeter", "confidence": 0.91, "x1": 10, "y1": 10, "x2": 60, "y2": 60}]
+
+        with mock.patch.object(self.wf._yolo, "detect", side_effect=cancel_during_inference):
+            result = self.wf.run_side(str(session.session_id), "front", frame=_fake_frame())
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "session_inactive")
+        session.refresh_from_db()
+        self.assertEqual(session.stage, "cancelled")
+        self.assertEqual(session.front_results, [])
+        self.assertFalse(session.front_image)
 
     # ---- Step 2: model validation (honest failures) ---- #
     def test_validate_model_missing(self):
@@ -458,7 +599,7 @@ class InspectionWorkflowTests(TestCase):
         VisionYOLOModel.objects.create(
             name="m", model_path="/nonexistent/best.pt", is_active=True, num_classes=2
         )
-        self.wf._yolo = YOLOModelService()  # real loader → path check fails
+        self.wf._yolo = YOLOModelService()  # real loader â†’ path check fails
         r = self.wf.validate_model()
         self.assertFalse(r["ok"])
         self.assertEqual(r["state"], "model_invalid")
@@ -466,13 +607,26 @@ class InspectionWorkflowTests(TestCase):
 
     def test_submit_blocked_by_model(self):
         r = self.wf.submit("AB-100")
-        self.assertFalse(r["ok"])  # no model → blocked, no session created
+        self.assertFalse(r["ok"])  # no model â†’ blocked, no session created
         self.assertEqual(VisionInspectionSession.objects.count(), 0)
+
+    def test_back_camera_activation_requires_completed_front(self):
+        session = self._session(front_status="PENDING", back_status="PENDING", stage="front")
+        result = self.wf.activate_side(str(session.session_id), "back")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "incomplete")
+
+    def test_camera_activation_accepts_matching_connecting_camera(self):
+        session = self._session(front_status="IN_PROGRESS", stage="front")
+        with mock.patch.object(self.wf._camera, "get_status", return_value="CONNECTING"):
+            result = self.wf.activate_side(str(session.session_id), "front")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["state"], "camera_connecting")
 
     def test_submit_blocked_by_missing_roi(self):
         model = VisionYOLOModel.objects.create(
             name="m", model_path=__file__, is_active=True, num_classes=2
-        )  # existing file → load will still fail (not a .pt), but validate_model path exists
+        )  # existing file â†’ load will still fail (not a .pt), but validate_model path exists
         with mock.patch.object(InspectionWorkflow, "validate_model",
                                return_value={"ok": True, "model_id": model.id,
                                              "model_version": "1", "classes": ["x"], "num_classes": 1}):
@@ -488,6 +642,11 @@ class InspectionWorkflowTests(TestCase):
         self.assertEqual(r["state"], "front_error")
         s.refresh_from_db()
         self.assertEqual(s.front_status, "ERROR")
+        self.assertFalse(s.is_active)
+        reset = self.wf.cancel(str(s.session_id))
+        self.assertEqual(reset["state"], "cancelled")
+        s.refresh_from_db()
+        self.assertEqual(s.stage, "cancelled")
 
     def test_run_side_success_stores_evidence_and_indeterminate(self):
         model = self._model_obj()
@@ -498,12 +657,153 @@ class InspectionWorkflowTests(TestCase):
         self.assertEqual(r["state"], "front_completed")
         s.refresh_from_db()
         self.assertEqual(s.front_status, "COMPLETED")
-        self.assertEqual(s.front_verdict, "INDETERMINATE")  # no acceptance rule → not OK
+        self.assertEqual(s.front_verdict, "INDETERMINATE")  # no acceptance rule â†’ not OK
         self.assertEqual(s.stage, "back")
         self.assertTrue(bool(s.front_image))
         self.assertTrue(bool(s.front_annotated))
         self.assertEqual(s.front_results[0]["stitch"], "perimeter")
         self.assertEqual(s.front_results[0]["status"], "NO_RULE")
+
+    def test_completed_side_retry_returns_stored_state_without_rerunning_inference(self):
+        session = self._session(
+            stage="back",
+            front_status="COMPLETED",
+            front_verdict="INDETERMINATE",
+            front_results=[{"stitch": "front stitch", "actual_count": 0}],
+            back_status="IN_PROGRESS",
+        )
+        with mock.patch.object(self.wf._model_registry, "predict") as predict:
+            result = self.wf.run_side(str(session.session_id), "front", frame=_fake_frame())
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["already_completed"])
+        self.assertEqual(result["results"], session.front_results)
+        predict.assert_not_called()
+
+        with mock.patch("VisionInspection.views._workflow", return_value=self.wf):
+            response = self.client.post(
+                reverse(
+                    "VisionInspection:workflow-inspect-side",
+                    kwargs={"side": "front"},
+                ),
+                data=json.dumps({"session_id": str(session.session_id)}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["already_completed"])
+
+    def test_configured_segmentation_uses_masks_and_returns_frame_overlay(self):
+        from VisionInspection.models import (
+            VisionClassConfiguration,
+            VisionPartConfiguration,
+            VisionPartModel,
+        )
+
+        configuration = VisionPartConfiguration.objects.create(
+            part=self.part,
+            version=1,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_ONLY,
+            status=VisionPartConfiguration.STATUS_READY,
+            is_active=True,
+        )
+        model = self._model_obj()
+        association = VisionPartModel.objects.create(
+            configuration=configuration,
+            model=model,
+            task_type=VisionPartModel.TASK_SEGMENT,
+            classes=[{"id": 0, "name": "perimeter"}],
+            num_classes=1,
+            is_approved=True,
+        )
+        VisionClassConfiguration.objects.create(
+            part_model=association,
+            class_id=0,
+            class_name="perimeter",
+            side=VisionPartConfiguration.SIDE_FRONT,
+            expected_front=1,
+            expected_back=0,
+            front_threshold=0.5,
+            is_required=True,
+            acceptance_rule="count",
+        )
+        detection = {
+            "class": "perimeter",
+            "class_id": 0,
+            "confidence": 0.91,
+            "x1": 10,
+            "y1": 20,
+            "x2": 40,
+            "y2": 50,
+            "polygon": [[10, 20], [40, 20], [40, 50], [10, 50]],
+        }
+        session = self._session(
+            configuration=configuration,
+            stage="front",
+            front_status="IN_PROGRESS",
+            back_status="SKIPPED",
+            front_roi_norm={"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5},
+            config_snapshot={
+                "inspection_mode": VisionPartConfiguration.MODE_FRONT_ONLY,
+                "camera": {"front": {"source": "OPENCV", "index": 0}},
+                "models": [{
+                    "model_id": model.id,
+                    "name": "Configured segmentation",
+                    "path": "segmentation.pt",
+                    "task_type": "segment",
+                    "classes": [{"id": 0, "name": "perimeter"}],
+                    "rules": [{
+                        "class_id": 0,
+                        "class_name": "perimeter",
+                        "side": "FRONT",
+                        "front_threshold": 0.5,
+                        "back_threshold": 0.5,
+                        "expected_front": 1,
+                        "required": True,
+                        "acceptance_rule": "count",
+                        "priority": 1,
+                    }],
+                }],
+            },
+        )
+        with mock.patch.object(self.wf._camera, "get_status", return_value="ON"), \
+                mock.patch(
+                    "VisionInspection.services.inspection_workflow.CameraService.get_source",
+                    return_value="opencv",
+                ), \
+                mock.patch.object(
+                    self.wf._model_registry,
+                    "inspect",
+                    return_value={
+                        "ok": True,
+                        "task": "segment",
+                        "classes": [{"id": 0, "name": "perimeter"}],
+                    },
+                ), \
+                mock.patch.object(
+                    self.wf._model_registry,
+                    "predict",
+                    return_value=([detection], 4.2),
+                ) as predict, \
+                mock.patch(
+                    "VisionInspection.services.inspection_workflow._encode_jpeg",
+                    return_value=b"jpeg",
+                ):
+            result = self.wf.run_side(
+                str(session.session_id), "front", frame=_fake_frame()
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["mask_count"], 1)
+        self.assertTrue(result["annotated_frame"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(result["detections"][0]["x1"], 138)
+        self.assertEqual(result["detections"][0]["y1"], 92)
+        self.assertEqual(result["detections"][0]["polygon"][0], [138.0, 92.0])
+        self.assertEqual(result["progress"]["front_verdict"], "OK")
+        predicted_crop = predict.call_args.args[1]
+        self.assertEqual(predicted_crop.shape[:2], (360, 640))
+        session.refresh_from_db()
+        self.assertEqual(session.front_results[0]["stitch"], "perimeter")
+        self.assertEqual(session.front_results[0]["status"], "OK")
 
     # ---- Step 8: overall result matrix ---- #
     def test_result_ok_only_when_both_ok(self):
@@ -535,7 +835,7 @@ class InspectionWorkflowTests(TestCase):
         self.assertTrue(r1["ok"], r1)
         self.assertIn("inspection_id", r1)
         self.assertEqual(VisionInspectionLog.objects.count(), 1)
-        r2 = self.wf.save(str(s.session_id))  # repeated save → no duplicate
+        r2 = self.wf.save(str(s.session_id))  # repeated save â†’ no duplicate
         self.assertTrue(r2["ok"])
         self.assertEqual(r2["state"], "already_saved")
         self.assertEqual(VisionInspectionLog.objects.count(), 1)
@@ -615,6 +915,95 @@ class CameraConfigWorkflowTests(TestCase):
         # Crop matches the configured ROI height.
         self.assertEqual(out["detections"][0]["class"], "perimeter")
 
+    def test_saved_cycles_create_fresh_sessions_for_the_same_part(self):
+        model = self._model_obj()
+        for view in ("front", "back"):
+            VisionInspectionMasterROI.objects.create(
+                part_number="AB-100",
+                view=view,
+                x=0.1,
+                y=0.1,
+                width=0.4,
+                height=0.4,
+                ref_width=1280,
+                ref_height=720,
+            )
+        validation = {
+            "ok": True,
+            "model_id": model.pk,
+            "model_version": "1",
+            "classes": ["perimeter"],
+            "num_classes": 1,
+        }
+        with mock.patch.object(
+            self.wf, "validate_model", return_value=validation
+        ) as validate_model, \
+                mock.patch.object(self.wf._camera, "get_status", return_value="ON"), \
+                mock.patch(
+                    "VisionInspection.services.inspection_workflow.CameraService.get_source",
+                    return_value="opencv",
+                ), \
+                mock.patch(
+                    "VisionInspection.services.inspection_workflow.CameraService.start_camera",
+                    return_value=True,
+                ), \
+                mock.patch(
+                    "VisionInspection.services.inspection_workflow.CameraService.stop_camera"
+                ):
+            first = self.wf.submit("AB-100")
+            self.assertTrue(first["ok"], first)
+            first_session = VisionInspectionSession.objects.get(
+                session_id=first["session_id"]
+            )
+            first_session.front_status = "COMPLETED"
+            first_session.back_status = "COMPLETED"
+            first_session.front_verdict = "OK"
+            first_session.back_verdict = "OK"
+            first_session.overall = "OK"
+            first_session.stage = "result"
+            first_session.save()
+            saved = self.wf.save(str(first_session.session_id))
+            self.assertTrue(saved["ok"], saved)
+
+            second = self.wf.submit("AB-100")
+            self.assertTrue(second["ok"], second)
+            second_session = VisionInspectionSession.objects.get(
+                session_id=second["session_id"]
+            )
+            second_session.front_status = "COMPLETED"
+            second_session.back_status = "COMPLETED"
+            second_session.front_verdict = "OK"
+            second_session.back_verdict = "OK"
+            second_session.overall = "OK"
+            second_session.stage = "result"
+            second_session.save()
+            second_saved = self.wf.save(str(second_session.session_id))
+            self.assertTrue(second_saved["ok"], second_saved)
+
+            third = self.wf.submit("AB-100")
+
+        self.assertEqual(validate_model.call_count, 3)
+        self.assertTrue(third["ok"], third)
+        self.assertEqual(
+            len({first["session_id"], second["session_id"], third["session_id"]}),
+            3,
+        )
+        self.assertEqual(
+            VisionInspectionSession.objects.filter(part_number="AB-100").count(),
+            3,
+        )
+        self.assertTrue(VisionInspectionSession.objects.get(
+            session_id=first["session_id"]
+        ).is_saved)
+        self.assertTrue(VisionInspectionSession.objects.get(
+            session_id=second["session_id"]
+        ).is_saved)
+        self.assertTrue(
+            VisionInspectionSession.objects.get(
+                session_id=third["session_id"]
+            ).is_active
+        )
+
     def test_submit_blocked_without_any_roi(self):
         model = self._model_obj()
         with mock.patch.object(self.wf, "validate_model", return_value={
@@ -651,7 +1040,7 @@ class CameraConfigWorkflowTests(TestCase):
 
 
 # ---------------------------------------------------------------------------
-#  Station deployment — no login
+#  Station deployment â€” no login
 #
 #  The inspection station serves its operator routes anonymously.  No route in
 #  the inspection workflow may redirect to a login page, and privileged admin /
@@ -694,7 +1083,7 @@ class StationAccessTests(TestCase):
             self.assertEqual(r.status_code, 200)
 
     def test_station_stays_anonymous(self):
-        """No session is created — no user identity is invented."""
+        """No session is created â€” no user identity is invented."""
         self.client.get("/vision-inspection/")
         self.assertEqual(self.client.session.get("_auth_user_id"), None)
 
@@ -702,6 +1091,28 @@ class StationAccessTests(TestCase):
         r = self.client.get(reverse("VisionInspection:inspection"))
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "wfBarcode")  # barcode scan step of the workflow
+
+    def test_operator_page_starts_with_scan_and_no_active_camera_stream(self):
+        r = self.client.get(reverse("VisionInspection:inspection"))
+        self.assertContains(r, 'id="wfStageScan"')
+        self.assertContains(r, 'id="wfStageFront" hidden')
+        self.assertContains(r, 'id="wfStageBack" hidden')
+        self.assertContains(r, 'name="csrfmiddlewaretoken"')
+        self.assertNotContains(r, 'id="wfProgressRows"')
+        self.assertNotContains(r, 'id="wfDetFront"')
+        self.assertNotContains(r, 'id="mxSaveRoiBtn"')
+
+    def test_storage_settings_is_available_to_station_users(self):
+        response = self.client.get(reverse("VisionInspection:storage-settings"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Destination Configuration")
+        self.assertContains(response, "TEST CONNECTION")
+        self.assertContains(response, "Automatic Storage Transfer")
+        self.assertContains(response, "Historical Image Migration")
+        self.assertContains(response, 'name="csrfmiddlewaretoken"')
+        self.assertContains(response, reverse("VisionInspection:storage-settings"))
+        state = self.client.get(reverse("VisionInspection:storage-state"))
+        self.assertEqual(state.status_code, 200)
 
     def test_part_setup_and_part_configuration_need_no_login(self):
         part = VisionInspectionPart.objects.create(
@@ -731,10 +1142,11 @@ class StationAccessTests(TestCase):
             self.assertEqual(r.status_code, 200, name)
 
     def test_station_shows_configured_station_id(self):
+        """The configured station identifier is shown on the station pages."""
         from django.test import override_settings
 
         with override_settings(VISION_INSPECTION_STATION_ID="ST-42"):
-            r = self.client.get("/vision-inspection/")
+            r = self.client.get(reverse("VisionInspection:inspection-master"))
             self.assertContains(r, "ST-42")
 
     def test_station_hides_admin_entry_points_for_anonymous(self):
@@ -752,6 +1164,209 @@ class StationApiTests(TestCase):
             part_number="AB-100", part_name="Airbag"
         )
 
+    def test_validate_model_uses_structured_validation_statuses(self):
+        from unittest.mock import patch
+
+        url = reverse("VisionInspection:workflow-validate-model")
+        invalid_result = {
+            "ok": False,
+            "state": "configuration_invalid",
+            "message": "No required Front class rule is configured.",
+            "validation_errors": ["No enabled class rule is assigned to Front."],
+        }
+        with patch("VisionInspection.views._workflow") as workflow:
+            workflow.return_value.validate_model.return_value = invalid_result
+            response = _post(self.client, url, {"part_number": self.part.part_number})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error_code"], "configuration_invalid")
+        self.assertEqual(response.json()["validation_errors"], invalid_result["validation_errors"])
+
+        missing_target = _post(self.client, url, {})
+        self.assertEqual(missing_target.status_code, 400)
+        self.assertEqual(missing_target.json()["error_code"], "validation_target_required")
+
+    def test_validate_model_rejects_malformed_identifiers(self):
+        url = reverse("VisionInspection:workflow-validate-model")
+        for payload, error_code in (
+            ({"part_number": ["AB-100"]}, "invalid_part_number"),
+            ({"model_id": 1.5}, "invalid_model_id"),
+            ({"model_id": True}, "invalid_model_id"),
+        ):
+            with self.subTest(payload=payload):
+                response = _post(self.client, url, payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()["error_code"], error_code)
+
+    def test_presence_rules_with_zero_counts_save_reload_and_validate(self):
+        from unittest.mock import patch
+
+        from VisionInspection.models import (
+            VisionClassConfiguration,
+            VisionPartConfiguration,
+            VisionPartModel,
+            VisionYOLOModel,
+        )
+
+        model = VisionYOLOModel.objects.create(
+            name="Presence model",
+            model_path=__file__,
+            num_classes=2,
+        )
+        payload = {
+            "confirm_changes": True,
+            "inspection_mode": "FRONT_BACK",
+            "acceptance_rule": "presence",
+            "front_camera_source": "OPENCV",
+            "front_camera_index": 0,
+            "back_camera_source": "OPENCV",
+            "back_camera_index": 1,
+            "models": [{
+                "model_id": model.pk,
+                "enabled": True,
+                "classes": [
+                    {
+                        "class_id": 0,
+                        "class_name": "front-stitch",
+                        "enabled": True,
+                        "required": True,
+                        "side": "FRONT",
+                        "expected_front": 0,
+                        "expected_back": 0,
+                        "priority": 1,
+                        "acceptance_rule": "presence",
+                    },
+                    {
+                        "class_id": 1,
+                        "class_name": "back-stitch",
+                        "enabled": True,
+                        "required": True,
+                        "side": "BACK",
+                        "expected_front": 0,
+                        "expected_back": 0,
+                        "priority": 2,
+                        "acceptance_rule": "presence",
+                    },
+                ],
+            }],
+        }
+        discovered = [
+            {"id": 0, "name": "front-stitch"},
+            {"id": 1, "name": "back-stitch"},
+        ]
+        save_url = reverse(
+            "VisionInspection:api-part-vision-configuration-save",
+            args=[self.part.pk],
+        )
+        with patch(
+            "VisionInspection.views._discover_configurable_classes",
+            return_value=discovered,
+        ):
+            saved = _post(self.client, save_url, payload)
+
+        self.assertEqual(saved.status_code, 201, saved.content)
+        self.assertEqual(saved.json()["status"], VisionPartConfiguration.STATUS_READY)
+        self.assertTrue(saved.json()["is_active"])
+        configuration_id = saved.json()["configuration_id"]
+
+        association = VisionPartModel.objects.get(
+            configuration_id=configuration_id,
+            model=model,
+        )
+        persisted = list(
+            VisionClassConfiguration.objects.filter(part_model=association)
+            .order_by("class_id")
+            .values(
+                "class_name",
+                "is_enabled",
+                "is_required",
+                "side",
+                "expected_front",
+                "expected_back",
+                "acceptance_rule",
+            )
+        )
+        self.assertEqual(
+            persisted,
+            [
+                {
+                    "class_name": "front-stitch",
+                    "is_enabled": True,
+                    "is_required": True,
+                    "side": "FRONT",
+                    "expected_front": 0,
+                    "expected_back": 0,
+                    "acceptance_rule": "presence",
+                },
+                {
+                    "class_name": "back-stitch",
+                    "is_enabled": True,
+                    "is_required": True,
+                    "side": "BACK",
+                    "expected_front": 0,
+                    "expected_back": 0,
+                    "acceptance_rule": "presence",
+                },
+            ],
+        )
+
+        reloaded = self.client.get(
+            reverse(
+                "VisionInspection:api-part-vision-configuration",
+                args=[self.part.pk],
+            )
+        )
+        self.assertEqual(reloaded.status_code, 200)
+        api_config = reloaded.json()["configuration"]
+        self.assertEqual(api_config["id"], configuration_id)
+        api_rules = {
+            rule["class_name"]: rule
+            for configured_model in api_config["models"]
+            for rule in configured_model["classes"]
+        }
+        self.assertTrue(api_rules["front-stitch"]["required"])
+        self.assertEqual(api_rules["front-stitch"]["side"], "FRONT")
+        self.assertTrue(api_rules["back-stitch"]["required"])
+        self.assertEqual(api_rules["back-stitch"]["side"], "BACK")
+
+        with patch(
+            "VisionInspection.services.inspection_workflow.ModelRegistry.inspect",
+            return_value={
+                "ok": True,
+                "task": "segment",
+                "classes": discovered,
+            },
+        ):
+            validation = _post(
+                self.client,
+                reverse("VisionInspection:workflow-validate-model"),
+                {"part_number": self.part.part_number},
+            )
+
+        self.assertEqual(validation.status_code, 200, validation.content)
+        self.assertTrue(validation.json()["ok"])
+        self.assertEqual(validation.json()["configuration_id"], configuration_id)
+
+    def test_validate_model_returns_200_only_after_success(self):
+        from unittest.mock import patch
+
+        with patch("VisionInspection.views._workflow") as workflow:
+            workflow.return_value.validate_model.return_value = {
+                "ok": True,
+                "state": "model_loaded",
+                "model_id": 42,
+                "message": "Model and part configuration are valid.",
+            }
+            response = _post(
+                self.client,
+                reverse("VisionInspection:workflow-validate-model"),
+                {"part_number": self.part.part_number},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["model_id"], 42)
+
     def test_camera_status_api_needs_no_login(self):
         r = self.client.get(reverse("VisionInspection:camera-status"))
         self.assertEqual(r.status_code, 200)
@@ -760,6 +1375,74 @@ class StationApiTests(TestCase):
     def test_camera_stop_api_needs_no_login(self):
         r = self.client.get(reverse("VisionInspection:camera-stop"))
         self.assertEqual(r.status_code, 200)
+
+    def test_roi_camera_start_reuses_matching_active_camera(self):
+        with mock.patch(
+            "VisionInspection.views.CameraService.start_camera", return_value=False
+        ) as start, mock.patch(
+            "VisionInspection.views.CameraService.get_status", return_value="ON"
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_source", return_value="opencv"
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_camera_index", return_value=2
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_state", return_value="RUNNING"
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_error", return_value=None
+        ):
+            response = self.client.get(
+                reverse("VisionInspection:camera-start"),
+                {"source": "opencv", "camera_index": 2, "reuse_if_active": "1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["reused"])
+        self.assertFalse(response.json()["started_by_request"])
+        start.assert_called_once_with(
+            camera_index=2,
+            source="opencv",
+            reuse_existing=True,
+        )
+
+    def test_roi_camera_start_refuses_to_replace_a_different_active_camera(self):
+        with mock.patch(
+            "VisionInspection.views.CameraService.start_camera", return_value=False
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_status", return_value="ON"
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_source", return_value="opencv"
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_camera_index", return_value=2
+        ):
+            response = self.client.get(
+                reverse("VisionInspection:camera-start"),
+                {"source": "opencv", "camera_index": 0, "reuse_if_active": "1"},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("already active", response.json()["error"])
+
+    def test_roi_camera_start_ignores_index_for_shared_picamera_source(self):
+        with mock.patch(
+            "VisionInspection.views.CameraService.start_camera", return_value=False
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_status", return_value="ON"
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_source", return_value="picamera"
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_camera_index", return_value=0
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_state", return_value="RUNNING"
+        ), mock.patch(
+            "VisionInspection.views.CameraService.get_error", return_value=None
+        ):
+            response = self.client.get(
+                reverse("VisionInspection:camera-start"),
+                {"source": "picamera", "camera_index": 1, "reuse_if_active": "1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["reused"])
 
     def test_part_validation_needs_no_login(self):
         r = self.client.post(
@@ -791,6 +1474,213 @@ class StationApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, reverse("VisionInspection:part-model-upload"))
+        self.assertContains(response, 'class="vi-btn pc-roi-configure is-disabled"')
+
+    def test_configured_part_page_links_to_roi_editor_for_latest_version(self):
+        from VisionInspection.models import VisionPartConfiguration
+
+        old = VisionPartConfiguration.objects.create(
+            part=self.part,
+            version=1,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_ONLY,
+            is_active=True,
+        )
+        latest = VisionPartConfiguration.objects.create(
+            part=self.part,
+            version=2,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_ONLY,
+        )
+        self.assertNotEqual(old.pk, latest.pk)
+
+        page = self.client.get(
+            reverse("VisionInspection:part-vision-configuration", args=[self.part.pk])
+        )
+        self.assertContains(page, 'id="pcConfigureRoi"')
+        self.assertContains(page, reverse("VisionInspection:part-roi-setup", args=[self.part.pk]))
+        roi_page = self.client.get(
+            reverse("VisionInspection:part-roi-setup", args=[self.part.pk])
+        )
+        self.assertEqual(roi_page.status_code, 200)
+        self.assertContains(roi_page, "configurationId: " + str(latest.pk))
+        self.assertContains(roi_page, "?configuration_id=" + str(latest.pk))
+        self.assertContains(roi_page, 'id="rsCancel"')
+        self.assertContains(roi_page, 'name="csrfmiddlewaretoken"')
+
+    def test_roi_save_versions_existing_roi_and_rejects_out_of_bounds(self):
+        from VisionInspection.models import VisionPartConfiguration, VisionPartROI
+
+        configuration = VisionPartConfiguration.objects.create(
+            part=self.part,
+            version=1,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_ONLY,
+        )
+        url = reverse("VisionInspection:api-part-vision-roi-save", args=[self.part.pk])
+        payload = {
+            "configuration_id": configuration.pk,
+            "x": 10,
+            "y": 20,
+            "width": 100,
+            "height": 80,
+            "ref_width": 640,
+            "ref_height": 480,
+        }
+        first = _post(self.client, url, payload)
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertTrue(first.json()["saved"])
+        self.assertFalse(configuration.__class__.objects.get(pk=configuration.pk).is_active)
+
+        second_payload = dict(payload, x=30, y=40)
+        second = _post(self.client, url, second_payload)
+        self.assertEqual(second.status_code, 201, second.content)
+        self.assertEqual(second.json()["roi"]["version"], 2)
+        self.assertEqual(
+            list(VisionPartROI.objects.filter(configuration=configuration, is_active=True).values_list("version", flat=True)),
+            [2],
+        )
+
+        invalid = _post(self.client, url, dict(payload, x=630))
+        self.assertEqual(invalid.status_code, 400)
+        for invalid_coordinates in (
+            dict(payload, x=float("nan")),
+            dict(payload, width=float("inf")),
+            dict(payload, ref_width=float("inf")),
+        ):
+            with self.subTest(payload=invalid_coordinates):
+                response = _post(self.client, url, invalid_coordinates)
+                self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            VisionPartROI.objects.filter(configuration=configuration, is_active=True).get().version,
+            2,
+        )
+
+    def test_roi_save_activates_only_a_valid_configuration(self):
+        from VisionInspection.models import (
+            VisionClassConfiguration,
+            VisionPartConfiguration,
+            VisionPartModel,
+        )
+
+        configuration = VisionPartConfiguration.objects.create(
+            part=self.part,
+            version=1,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_ONLY,
+            acceptance_rule="count",
+        )
+        model = VisionYOLOModel.objects.create(
+            name="ROI validation model", model_path=__file__, num_classes=1
+        )
+        association = VisionPartModel.objects.create(
+            configuration=configuration,
+            model=model,
+            classes=[{"id": 0, "name": "stitch"}],
+            num_classes=1,
+            is_approved=True,
+            validation_status="VALID",
+        )
+        VisionClassConfiguration.objects.create(
+            part_model=association,
+            class_id=0,
+            class_name="stitch",
+            side=VisionPartConfiguration.SIDE_FRONT,
+            expected_front=1,
+            priority=1,
+            acceptance_rule="count",
+        )
+
+        response = _post(
+            self.client,
+            reverse("VisionInspection:api-part-vision-roi-save", args=[self.part.pk]),
+            {
+                "configuration_id": configuration.pk,
+                "x": 10,
+                "y": 10,
+                "width": 100,
+                "height": 80,
+                "ref_width": 640,
+                "ref_height": 480,
+            },
+        )
+        configuration.refresh_from_db()
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(configuration.status, VisionPartConfiguration.STATUS_READY)
+        self.assertTrue(configuration.is_active)
+        status = self.client.get(
+            reverse("VisionInspection:api-part-vision-configuration", args=[self.part.pk])
+        )
+        self.assertTrue(status.json()["configuration"]["roi_configured"])
+
+    def test_roi_save_refuses_different_front_and_back_cameras_without_overwriting(self):
+        from VisionInspection.models import VisionPartConfiguration, VisionPartROI
+
+        configuration = VisionPartConfiguration.objects.create(
+            part=self.part,
+            version=1,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_BACK,
+            front_camera_index=0,
+            back_camera_index=1,
+        )
+        old_roi = VisionPartROI.objects.create(
+            configuration=configuration,
+            version=1,
+            x=10,
+            y=10,
+            width=100,
+            height=80,
+            ref_width=640,
+            ref_height=480,
+        )
+        response = _post(
+            self.client,
+            reverse("VisionInspection:api-part-vision-roi-save", args=[self.part.pk]),
+            {
+                "configuration_id": configuration.pk,
+                "x": 20,
+                "y": 20,
+                "width": 100,
+                "height": 80,
+                "ref_width": 640,
+                "ref_height": 480,
+            },
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("same camera source", response.json()["error"])
+        old_roi.refresh_from_db()
+        self.assertTrue(old_roi.is_active)
+        self.assertEqual(VisionPartROI.objects.filter(configuration=configuration).count(), 1)
+
+    def test_roi_save_requires_csrf(self):
+        from django.test import Client
+        from VisionInspection.models import VisionPartConfiguration
+
+        configuration = VisionPartConfiguration.objects.create(
+            part=self.part,
+            version=1,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_ONLY,
+        )
+        client = Client(enforce_csrf_checks=True)
+        response = _post(
+            client,
+            reverse("VisionInspection:api-part-vision-roi-save", args=[self.part.pk]),
+            {
+                "configuration_id": configuration.pk,
+                "x": 10,
+                "y": 10,
+                "width": 100,
+                "height": 80,
+                "ref_width": 640,
+                "ref_height": 480,
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_roi_save_reports_missing_configuration_before_frame_validation(self):
+        response = _post(
+            self.client,
+            reverse("VisionInspection:api-part-vision-roi-save", args=[self.part.pk]),
+            {},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Save the model configuration", response.json()["error"])
 
     def test_model_picker_includes_registered_inactive_models(self):
         model = VisionYOLOModel.objects.create(
@@ -902,6 +1792,264 @@ class StationApiTests(TestCase):
         self.assertTrue(configuration.is_active)
         self.assertEqual(configuration.status, VisionPartConfiguration.STATUS_READY)
         self.assertTrue(response.json()["is_active"])
+        saved_rule = configuration.part_models.get(model=model).class_configs.get(class_id=0)
+        self.assertTrue(saved_rule.is_required)
+        self.assertEqual(saved_rule.side, "FRONT")
+
+    def test_configuration_save_and_reload_preserves_class_rule_values(self):
+        from unittest.mock import patch
+
+        from VisionInspection.models import (
+            VisionClassConfiguration,
+            VisionPartConfiguration,
+            VisionPartModel,
+        )
+
+        model = VisionYOLOModel.objects.create(
+            name="Registered model", model_path=__file__, is_active=False, num_classes=2
+        )
+        save_url = reverse(
+            "VisionInspection:api-part-vision-configuration-save",
+            args=[self.part.pk],
+        )
+        base_payload = {
+            "confirm_changes": True,
+            "inspection_mode": "FRONT_BACK",
+            "acceptance_rule": "count_confidence",
+            "front_camera_source": "OPENCV",
+            "front_camera_index": 0,
+            "back_camera_source": "OPENCV",
+            "back_camera_index": 1,
+            "models": [{
+                "model_id": model.pk,
+                "enabled": True,
+                "classes": [
+                    {
+                        "class_id": 0, "class_name": "front-stitch",
+                        "enabled": True, "side": "FRONT",
+                        "expected_front": 2, "expected_back": 0,
+                        "front_threshold": 0.72, "back_threshold": 0.51,
+                        "priority": 1, "required": False,
+                        "acceptance_rule": "count",
+                    },
+                    {
+                        "class_id": 1, "class_name": "back-stitch",
+                        "enabled": True, "side": "BACK",
+                        "expected_front": 0, "expected_back": 3,
+                        "front_threshold": 0.62, "back_threshold": 0.81,
+                        "priority": 2, "required": False,
+                        "acceptance_rule": "presence",
+                    },
+                ],
+            }],
+        }
+        classes = [
+            {"id": 0, "name": "front-stitch"},
+            {"id": 1, "name": "back-stitch"},
+        ]
+        with patch(
+            "VisionInspection.views._discover_configurable_classes",
+            return_value=classes,
+        ):
+            first = _post(self.client, save_url, base_payload)
+            self.assertEqual(first.status_code, 201, first.content)
+            configuration_id = first.json()["configuration_id"]
+            self.assertFalse(first.json()["is_active"])
+            association = VisionPartModel.objects.get(
+                configuration_id=configuration_id,
+                model=model,
+            )
+            self.assertFalse(
+                VisionClassConfiguration.objects.get(
+                    part_model=association,
+                    class_id=0,
+                ).is_required
+            )
+            initially_saved = self.client.get(
+                reverse(
+                    "VisionInspection:api-part-vision-configuration",
+                    args=[self.part.pk],
+                )
+            ).json()["configuration"]
+            initially_saved_rules = {
+                rule["class_id"]: rule
+                for saved_model in initially_saved["models"]
+                for rule in saved_model["classes"]
+            }
+            self.assertFalse(initially_saved_rules[0]["required"])
+            self.assertTrue(any(
+                "all optional" in error
+                for error in first.json()["validation_errors"]
+            ))
+            from VisionInspection.services.inspection_workflow import InspectionWorkflow
+
+            workflow = InspectionWorkflow()
+            with patch.object(
+                workflow._model_registry,
+                "inspect",
+                return_value={
+                    "ok": True,
+                    "task": "segment",
+                    "classes": [
+                        {"id": 0, "name": "front-stitch"},
+                        {"id": 1, "name": "back-stitch"},
+                    ],
+                },
+            ):
+                optional_validation = _post(
+                    self.client,
+                    reverse("VisionInspection:workflow-validate-model"),
+                    {"part_number": self.part.part_number},
+                )
+            self.assertEqual(optional_validation.status_code, 422)
+            self.assertTrue(any(
+                "all optional" in error
+                for error in optional_validation.json()["validation_errors"]
+            ))
+
+            corrected_payload = {
+                **base_payload,
+                "configuration_id": configuration_id,
+                "models": [{
+                    **base_payload["models"][0],
+                    "classes": [
+                        {
+                            **base_payload["models"][0]["classes"][0],
+                            "required": True,
+                        },
+                        {
+                            **base_payload["models"][0]["classes"][1],
+                            "side": "BACK",
+                            "expected_back": 3,
+                            "required": True,
+                            "acceptance_rule": "presence",
+                        },
+                    ],
+                }],
+            }
+            second = _post(self.client, save_url, corrected_payload)
+
+        self.assertEqual(second.status_code, 201, second.content)
+        self.assertEqual(second.json()["configuration_id"], configuration_id)
+        self.assertTrue(second.json()["is_active"])
+        self.assertEqual(
+            VisionPartConfiguration.objects.filter(part=self.part).count(),
+            1,
+        )
+        association = VisionPartModel.objects.get(
+            configuration_id=configuration_id,
+            model=model,
+        )
+        self.assertEqual(association.class_configs.count(), 2)
+        self.assertEqual(
+            VisionClassConfiguration.objects.filter(
+                part_model=association,
+                class_id=0,
+            ).values(
+                "class_name",
+                "is_enabled",
+                "side",
+                "expected_front",
+                "expected_back",
+                "is_required",
+                "acceptance_rule",
+            ).get(),
+            {
+                "class_name": "front-stitch",
+                "is_enabled": True,
+                "side": "FRONT",
+                "expected_front": 2,
+                "expected_back": 0,
+                "is_required": True,
+                "acceptance_rule": "count",
+            },
+        )
+        self.assertEqual(
+            VisionClassConfiguration.objects.filter(
+                part_model=association,
+                class_id=1,
+            ).values(
+                "class_name",
+                "is_enabled",
+                "side",
+                "expected_front",
+                "expected_back",
+                "front_threshold",
+                "back_threshold",
+                "priority",
+                "is_required",
+                "acceptance_rule",
+            ).get(),
+            {
+                "class_name": "back-stitch",
+                "is_enabled": True,
+                "side": "BACK",
+                "expected_front": 0,
+                "expected_back": 3,
+                "front_threshold": 0.62,
+                "back_threshold": 0.81,
+                "priority": 2,
+                "is_required": True,
+                "acceptance_rule": "presence",
+            },
+        )
+
+        saved = self.client.get(
+            reverse(
+                "VisionInspection:api-part-vision-configuration",
+                args=[self.part.pk],
+            )
+        ).json()["configuration"]
+        saved_rules = {
+            rule["class_id"]: rule
+            for saved_model in saved["models"]
+            for rule in saved_model["classes"]
+        }
+        self.assertEqual(saved["id"], configuration_id)
+        self.assertEqual(saved["status"], VisionPartConfiguration.STATUS_READY)
+        self.assertEqual(saved_rules[0]["side"], "FRONT")
+        self.assertTrue(saved_rules[0]["required"])
+        self.assertEqual(saved_rules[0]["expected_front"], 2)
+        self.assertEqual(saved_rules[0]["front_threshold"], 0.72)
+        self.assertEqual(saved_rules[0]["acceptance_rule"], "count")
+        self.assertEqual(saved_rules[1]["side"], "BACK")
+        self.assertTrue(saved_rules[1]["required"])
+        self.assertEqual(saved_rules[1]["expected_back"], 3)
+        self.assertEqual(saved_rules[1]["back_threshold"], 0.81)
+        self.assertEqual(saved_rules[1]["acceptance_rule"], "presence")
+
+        workflow = InspectionWorkflow()
+        with patch.object(
+            workflow._model_registry,
+            "inspect",
+            return_value={
+                "ok": True,
+                "task": "segment",
+                "classes": [
+                    {"id": 0, "name": "front-stitch"},
+                    {"id": 1, "name": "back-stitch"},
+                ],
+            },
+        ):
+            service_result = workflow.validate_model(
+                part_number=self.part.part_number
+            )
+            self.assertTrue(service_result["ok"], service_result)
+            self.assertEqual(
+                service_result["configuration_id"],
+                configuration_id,
+            )
+            validation = _post(
+                self.client,
+                reverse("VisionInspection:workflow-validate-model"),
+                {"part_number": self.part.part_number},
+            )
+        self.assertEqual(validation.status_code, 200, validation.content)
+        self.assertTrue(validation.json()["ok"])
+        self.assertEqual(
+            validation.json()["configuration_id"],
+            configuration_id,
+        )
 
     def test_configuration_save_requires_csrf(self):
         from django.test import Client
@@ -929,7 +2077,44 @@ class StationApiTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(r.status_code, 400)
-        self.assertFalse(r.json()["ok"])
+        self.assertEqual(r.json(), {
+            "ok": False,
+            "state": "part_not_found",
+            "message": "Part not found for this barcode.",
+        })
+
+    def test_workflow_scan_empty_barcode_is_rejected_with_specific_message(self):
+        r = self.client.post(
+            reverse("VisionInspection:workflow-scan-part"),
+            data=json.dumps({"barcode": ""}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json(), {
+            "ok": False,
+            "state": "waiting",
+            "message": "Scan a part barcode.",
+        })
+
+    def test_workflow_cancel_requires_csrf(self):
+        from django.test import Client
+
+        strict_client = Client(enforce_csrf_checks=True)
+        response = strict_client.post(
+            reverse("VisionInspection:workflow-cancel"),
+            data=json.dumps({"session_id": "00000000-0000-0000-0000-000000000000"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_workflow_submit_accepts_post_only(self):
+        from django.test import Client
+
+        client = Client()
+        self.assertEqual(
+            client.get(reverse("VisionInspection:workflow-submit")).status_code,
+            405,
+        )
 
     def test_workflow_submit_without_session_is_idempotent_safe(self):
         """Duplicate submissions are refused on the server."""
@@ -938,9 +2123,249 @@ class StationApiTests(TestCase):
             data=json.dumps({"part_number": "AB-100"}),
             content_type="application/json",
         )
-        # No approved model configured → the server refuses (never fabricated OK).
+        # No approved model configured â†’ the server refuses (never fabricated OK).
         self.assertEqual(r.status_code, 400)
         self.assertFalse(r.json()["ok"])
+
+
+class SegmentationPreviewRegistryTests(TestCase):
+    def test_pt_and_onnx_models_are_cached_and_use_ultralytics_predict(self):
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import ModelRegistry, registry
+
+        class Frame:
+            def copy(self):
+                return self
+
+        class Box:
+            cls = [2]
+            conf = [0.876]
+            xyxy = [[1, 2, 30, 40]]
+
+        class Result:
+            names = {2: "actual-class"}
+            boxes = [Box()]
+            masks = object()
+
+            def __init__(self, source, plot_calls):
+                self.source = source
+                self.plot_calls = plot_calls
+
+            def plot(self, **kwargs):
+                self.plot_calls.append(kwargs)
+                return self.source
+
+        class FakeYOLO:
+            loads = []
+
+            def __init__(self, path, task=None):
+                self.task = task or "segment"
+                self.predict_calls = []
+                self.plot_calls = []
+                self.__class__.loads.append((path, task, self))
+
+            def predict(self, **kwargs):
+                self.predict_calls.append(kwargs)
+                return [Result(kwargs["source"], self.plot_calls)]
+
+        frame = Frame()
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".pt", ".onnx"):
+                path = os.path.join(directory, f"preview{suffix}")
+                with open(path, "wb") as model_file:
+                    model_file.write(b"test model placeholder")
+                FakeYOLO.loads.clear()
+
+                with patch.object(
+                    ModelRegistry,
+                    "_import_ultralytics",
+                    return_value=FakeYOLO,
+                ):
+                    first = registry.predict_segmentation(
+                        path,
+                        frame,
+                        conf=0.70,
+                        show_masks=False,
+                        show_boxes=True,
+                    )
+                    second = registry.predict_segmentation(
+                        path,
+                        frame,
+                        conf=0.50,
+                        show_masks=True,
+                        show_boxes=False,
+                    )
+
+                self.assertEqual(len(FakeYOLO.loads), 1)
+                loaded_path, loaded_task, model = FakeYOLO.loads[0]
+                self.assertEqual(loaded_path, path)
+                if suffix == ".onnx":
+                    self.assertEqual(loaded_task, "segment")
+                else:
+                    self.assertIsNone(loaded_task)
+                self.assertEqual(
+                    model.predict_calls[0],
+                    {
+                        "source": frame,
+                        "conf": 0.70,
+                        "task": "segment",
+                        "verbose": False,
+                    },
+                )
+                self.assertEqual(model.predict_calls[1]["conf"], 0.50)
+                self.assertEqual(
+                    model.plot_calls,
+                    [
+                        {
+                            "masks": False,
+                            "boxes": True,
+                            "labels": True,
+                            "conf": True,
+                        },
+                        {
+                            "masks": True,
+                            "boxes": False,
+                            "labels": False,
+                            "conf": False,
+                        },
+                    ],
+                )
+                self.assertEqual(first[0][0]["class"], "actual-class")
+                self.assertEqual(first[0][0]["class_id"], 2)
+                self.assertEqual(first[0][0]["confidence"], 0.876)
+                self.assertEqual(first[0][0]["x1"], 1)
+                self.assertIs(first[1], frame)
+                self.assertGreaterEqual(first[2], 0)
+                self.assertEqual(second[0], first[0])
+
+
+class SegmentationPreviewApiTests(TestCase):
+    def setUp(self):
+        from VisionInspection.models import (
+            VisionPartConfiguration,
+            VisionPartModel,
+            VisionYOLOModel,
+        )
+
+        self.part = VisionInspectionPart.objects.create(
+            part_number="PREVIEW-001",
+            part_name="Preview test part",
+        )
+        self.configuration = VisionPartConfiguration.objects.create(
+            part=self.part,
+            version=1,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_ONLY,
+        )
+        self.model = VisionYOLOModel.objects.create(
+            name="Preview segmentation model",
+            model_path=__file__,
+            num_classes=1,
+        )
+        self.association = VisionPartModel.objects.create(
+            configuration=self.configuration,
+            model=self.model,
+            task_type=VisionPartModel.TASK_SEGMENT,
+            is_enabled=True,
+        )
+
+    def test_preview_uses_roi_and_returns_coordinates_for_same_frame(self):
+        import numpy as np
+        from unittest.mock import patch
+
+        from VisionInspection.models import VisionPartROI, VisionInspectionSession
+
+        VisionPartROI.objects.create(
+            configuration=self.configuration,
+            version=1,
+            x=20,
+            y=10,
+            width=40,
+            height=30,
+            ref_width=120,
+            ref_height=100,
+        )
+        frame = np.zeros((100, 120, 3), dtype=np.uint8)
+        detections = [{
+            "class_id": 0,
+            "class": "real-class",
+            "confidence": 0.876,
+            "x1": 1,
+            "y1": 2,
+            "x2": 11,
+            "y2": 12,
+        }]
+        with patch("VisionInspection.views.CameraService.get_state", return_value="RUNNING"), \
+                patch("VisionInspection.views.CameraService.get_source", return_value="opencv"), \
+                patch("VisionInspection.views.CameraService.get_camera_index", return_value=0), \
+                patch(
+                    "VisionInspection.views.CameraService.get_frame_with_meta",
+                    return_value=(True, frame, {"seq": 12, "age_ms": 10, "dropped": 0}),
+                ), \
+                patch(
+                    "VisionInspection.views.registry.predict_segmentation",
+                    return_value=(detections, frame[10:40, 20:60].copy(), 42.5),
+                ) as predict, \
+                patch(
+                    "VisionInspection.views._jpeg_data_url",
+                    return_value="data:image/jpeg;base64,frame",
+                ):
+            response = self.client.get(
+                reverse(
+                    "VisionInspection:api-part-vision-preview",
+                    args=[self.part.pk],
+                ),
+                {
+                    "side": "FRONT",
+                    "model_id": self.model.pk,
+                    "confidence": "0.65",
+                    "show_masks": "0",
+                    "show_boxes": "1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["frame_seq"], 12)
+        self.assertTrue(payload["roi_applied"])
+        self.assertEqual(payload["image"], "data:image/jpeg;base64,frame")
+        self.assertEqual(payload["inference_ms"], 42.5)
+        self.assertEqual(payload["detection_count"], 1)
+        self.assertEqual(payload["detections"][0]["class"], "real-class")
+        self.assertEqual(payload["detections"][0]["confidence_percent"], 87.6)
+        self.assertEqual(
+            [payload["detections"][0][key] for key in ("x1", "y1", "x2", "y2")],
+            [21, 12, 31, 22],
+        )
+        self.assertEqual(VisionInspectionSession.objects.count(), 0)
+        args, kwargs = predict.call_args
+        self.assertEqual(args[0], self.model.model_path)
+        self.assertEqual(args[1].shape, (30, 40, 3))
+        self.assertEqual(kwargs, {
+            "conf": 0.65,
+            "show_masks": False,
+            "show_boxes": True,
+        })
+
+    def test_preview_rejects_a_stopped_camera_without_creating_records(self):
+        from unittest.mock import patch
+
+        from VisionInspection.models import VisionInspectionSession
+
+        with patch(
+            "VisionInspection.views.CameraService.get_state",
+            return_value="STOPPED",
+        ):
+            response = self.client.get(
+                reverse(
+                    "VisionInspection:api-part-vision-preview",
+                    args=[self.part.pk],
+                ),
+                {"side": "FRONT", "model_id": self.model.pk},
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("camera is stopped", response.json()["error"])
+        self.assertEqual(VisionInspectionSession.objects.count(), 0)
 
 
 class AdminProtectionTests(TestCase):
@@ -1085,40 +2510,24 @@ class StationTraceabilityTests(TestCase):
 
 
 class InspectionWorkspaceUiTests(TestCase):
-    """Regression guards for the redesigned Airbag Stitch Inspection page.
-
-    The JavaScript is bound to element ids; renaming one silently breaks the
-    operator workflow.  These tests pin the contract that matters: the page
-    renders (no login), every id the JS looks up is present, the layout is
-    built from grid/flex rules rather than absolute positioning, and the
-    camera containers keep the image inside their box.
-    """
+    """Regression guards for the staged Airbag Stitch operator page."""
 
     URL = "/vision-inspection/inspection/"
 
-    # Ids read by inspection_workspace.js / inspection_workflow_ui.js.
-    TOOLBAR_IDS = [
-        "wsApp", "wsPart", "wsCamSrc", "wsCamIdx", "wsCamIdxField", "wsCapture",
-        "wsStartCam", "wsStopCam", "wsLightUp", "wsLightDn", "wsFullscreen",
-        "wsClock", "wsWorkspace", "wsHint", "wsError",
-    ]
+    # Ids read by inspection_workflow_ui.js.
+    TOOLBAR_IDS = ["wsApp", "wsError"]
     WORKFLOW_IDS = [
-        "wfBarcode", "wfScanBtn", "wfValidateBtn", "wfSubmitBtn", "wfScanState",
-        "wfModelState", "wfPartInfo", "wfProgress",
-        "wfResult", "wfResultIcon", "wfResultState", "wfResultNote", "wfDetFront",
-        "wfDetBack", "wfBackBtn", "wfSaveBtn", "wfCancelBtn",
-    ]
-    VIEW_IDS = ["cam", "feed", "draw", "ov", "off", "badge", "mask"]
-    ROI_SUFFIXES = ["X", "Y", "W", "H", "Ref", "Save", "Edit", "Reset"]
-    SIDEBAR_IDS = [
-        "wsCamState", "wsModelState", "wsRoiFront", "wsRoiBack",
-        "wsFps", "wsLatency", "wsE2E", "wsFrameAge",
-    ]
-    PANEL_IDS = [
-        "wsModelCard", "wsModelCardTitle", "wsModelName", "wsModelClasses",
-        "wsInfoPart", "wsInfoModel", "wsInfoRevision",
-        "wsInfoType", "wfProgressRows", "wsFrontSide", "wsBackSide",
-        "wsFrontSideIcon", "wsFrontSideValue", "wsBackSideIcon", "wsBackSideValue",
+        "wfScanForm", "wfBarcode", "wfScanBtn", "wfStartInspectionBtn",
+        "wfReturnToInspectionBtn", "wfFrontNextPartBtn", "wfBackNextPartBtn",
+        "wfScanState", "wfScanDot", "wfPartConfigLink",
+        "wfModelState", "wfModelDot", "wfModelDetail", "wfPartInfo", "wfStageScan", "wfStageFront",
+        "wfStageBack", "wfStageSaving", "wfStageFinal", "wfFrontPart", "wfFrontSession",
+        "wfFrontCameraStatus", "feedFront", "ovFront", "wfFrontResult", "wfFrontMessage",
+        "wfFrontRetryCamera", "wfFrontSubmitBtn", "wfBackPart", "wfBackSession", "wfBackFrontResult", "wfBackCameraStatus",
+        "feedBack", "ovBack", "wfBackResult", "wfBackMessage", "wfBackRetryCamera", "wfBackSubmitBtn",
+        "wfSavingTitle", "wfSavingMessage", "wfRetrySaveBtn", "wfFinalTitle", "wfFinalPart",
+        "wfFinalId", "wfFinalTime", "wfFinalFront", "wfFinalBack", "wfFinalSaved",
+        "wfFinalMessage", "wfNewInspectionBtn", "wfChangePartBtn",
     ]
 
     def _page(self):
@@ -1127,17 +2536,16 @@ class InspectionWorkspaceUiTests(TestCase):
         return response.content.decode("utf-8")
 
     def _all_ids(self):
-        ids = list(self.TOOLBAR_IDS) + list(self.WORKFLOW_IDS) + list(self.SIDEBAR_IDS)
-        ids += list(self.PANEL_IDS)
-        for view in ("front", "back"):
-            for stem in self.VIEW_IDS:
-                ids.append(stem + view.capitalize())
-            for suffix in self.ROI_SUFFIXES:
-                ids.append("ro" + view.capitalize() + suffix)
-        return ids
+        return list(self.TOOLBAR_IDS) + list(self.WORKFLOW_IDS)
 
     def test_page_renders_without_login(self):
         self.assertEqual(self.client.get(self.URL).status_code, 200)
+
+    def test_favicon_is_served_at_site_root(self):
+        response = self.client.get(reverse("favicon"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/svg+xml")
+        self.assertIn(b"<svg", response.content)
 
     def test_all_javascript_bound_ids_are_present(self):
         html = self._page()
@@ -1153,13 +2561,58 @@ class InspectionWorkspaceUiTests(TestCase):
             "duplicate ids break per-view camera state",
         )
 
+    def test_next_cycle_revalidates_and_preserves_same_part(self):
+        from django.conf import settings
+
+        html = self._page()
+        script = (
+            __import__("pathlib").Path(settings.BASE_DIR)
+            / "VisionInspection"
+            / "static"
+            / "VisionInspection"
+            / "js"
+            / "inspection_workflow_ui.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("NEXT INSPECTION CYCLE", html)
+        self.assertIn('id="wfChangePartBtn"', html)
+        self.assertIn('part_number: state.partNumber', script)
+        self.assertIn('await startInspection(button);', script)
+        self.assertIn('changePart(byId("wfChangePartBtn"))', script)
+        self.assertIn('submitButton.dataset.completed = "false"', script)
+
+    def test_scan_validation_starts_inspection_after_model_validation(self):
+        from django.conf import settings
+
+        html = self._page()
+        script = (
+            __import__("pathlib").Path(settings.BASE_DIR)
+            / "VisionInspection"
+            / "static"
+            / "VisionInspection"
+            / "js"
+            / "inspection_workflow_ui.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn('id="wfStartInspectionBtn" class="wf-button wf-primary" type="button" disabled', html)
+        self.assertIn('addEventListener("submit", scan)', script)
+        self.assertIn('addEventListener("click", startInspection)', script)
+        self.assertIn("partData.ok !== true", script)
+        self.assertIn("modelData.ok !== true", script)
+        self.assertIn("await startInspection(byId(\"wfStartInspectionBtn\"));", script)
+        self.assertIn("partVisionPreview", html)
+        self.assertIn("confidence=0.50", script)
+        self.assertIn("No detections | Total: 0", script)
+        self.assertIn("async function cameraStatusRequest()", script)
+        self.assertIn("var data = await cameraStatusRequest();", script)
+        self.assertNotIn('jsonRequest(URL.cameraStatus, "GET")', script)
+        self.assertIn("inspection_workflow_ui.js?v=20261015-5", html)
+        self.assertIn("state.requestVersion", script)
+
     def test_layout_uses_grid_and_flex_not_absolute_positioning(self):
         html = self._page()
-        # No inline absolute positioning: layout must come from the stylesheet.
         self.assertNotIn("position:absolute", html.lower())
-        # Exactly one camera card per view (a second one would duplicate every id).
-        self.assertEqual(html.count('<section class="ws-view" data-view="front"'), 1)
-        self.assertEqual(html.count('<section class="ws-view" data-view="back"'), 1)
+        self.assertIn('id="wfStageFront" hidden', html)
+        self.assertIn('id="wfStageBack" hidden', html)
+        self.assertEqual(html.count('class="wf-camera-frame"'), 2)
 
     def test_application_flow_is_removed_completely(self):
         """The Application Flow section is not part of the Inspection screen."""
@@ -1206,7 +2659,7 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertNotIn("transform: scale", css)
 
     def test_camera_panels_are_prominent(self):
-        """Camera frames must dominate, not shrink to a thumbnail."""
+        """The active camera takes the remaining stage space."""
         from django.conf import settings
 
         path = os.path.join(
@@ -1215,9 +2668,8 @@ class InspectionWorkspaceUiTests(TestCase):
         )
         with open(path, encoding="utf-8") as handle:
             css = handle.read()
-        self.assertIn("--ws-cam-max-h: 52vh", css)
-        # Both camera panels share one equal-width grid track.
-        self.assertIn("repeat(2, minmax(0, 1fr))", css)
+        self.assertIn(".wf-camera-frame", css)
+        self.assertIn("flex: 1 1 auto", css)
 
     def test_stylesheets_declare_layout_foundations(self):
         """The rules that fix overflow/scrolling must actually exist."""
@@ -1247,7 +2699,7 @@ class InspectionWorkspaceUiTests(TestCase):
             self.assertIn(declaration, css, "%s is missing" % declaration)
 
     def test_camera_frame_is_bounded(self):
-        """Camera frames must clip their content and never stretch."""
+        """Camera feeds stay contained by the active stage frame."""
         from django.conf import settings
 
         path = os.path.join(
@@ -1256,46 +2708,44 @@ class InspectionWorkspaceUiTests(TestCase):
         )
         with open(path, encoding="utf-8") as handle:
             css = handle.read()
-        cam = re.search(r"\.ws \.vi-master-cam \{(.*?)\}", css, re.S)
+        cam = re.search(r"\.wf-camera-frame \{(.*?)\}", css, re.S)
         self.assertIsNotNone(cam)
         self.assertIn("overflow: hidden", cam.group(1))
-        self.assertIn("aspect-ratio", cam.group(1))
 
-        feed = re.search(r"\.ws \.vi-master-cam img\.vi-master-feed \{(.*?)\}", css, re.S)
+        feed = re.search(r"\.wf-camera-frame img \{(.*?)\}", css, re.S)
         self.assertIsNotNone(feed)
         self.assertIn("object-fit: contain", feed.group(1))
 
     def test_light_controls_are_disabled_by_default(self):
-        """Illumination hardware is absent, so those actions must read as off."""
+        """Unrelated illumination controls are removed from the operator page."""
         html = self._page()
         for element_id in ("wsLightUp", "wsLightDn"):
-            self.assertRegex(html, r'id="%s"[^>]*disabled' % element_id)
+            self.assertNotIn('id="%s"' % element_id, html)
 
     def test_submit_is_disabled_until_validation(self):
-        """Submit must not be clickable before a part is scanned and validated."""
+        """Side submissions remain disabled until their camera is ready."""
         html = self._page()
-        self.assertRegex(html, r'id="wfSubmitBtn"[^>]*disabled')
-        self.assertNotIn('id="wsStartCam"[^>]*disabled', html)
+        self.assertRegex(html, r'id="wfFrontSubmitBtn"[^>]*disabled')
+        self.assertRegex(html, r'id="wfBackSubmitBtn"[^>]*disabled')
 
     def test_application_flow_steps_are_present(self):
         html = self._page()
-        for step in ("scan", "model", "front", "back", "result", "saved"):
-            self.assertIn('data-step="%s"' % step, html)
+        for stage in ("Scan", "Front", "Back", "Saving", "Final"):
+            self.assertIn('id="wfStage%s"' % stage, html)
 
     def test_legend_shows_no_unconfigured_classes(self):
-        """Without a model the legend must not invent class colours."""
+        """Model legends and detection tables do not take space from the feed."""
         html = self._page()
-        self.assertIn("No inspection model configured", html)
+        self.assertNotIn("Segmentation Legend", html)
+        self.assertNotIn('id="wfDetFront"', html)
+        self.assertNotIn('id="wfDetBack"', html)
 
     def test_reference_layout_regions_are_present(self):
-        """The reference station's regions and headings must exist."""
+        """The operator sees only controls for the requested workflow stages."""
         html = self._page()
         for text in (
-            "Part Information", "Inspection Result", "Overall Result",
-            "Inspection Progress", "Stitch Detection (Front)",
-            "Stitch Detection (Back)",
-            "Front Camera View (Live Inspection)",
-            "Back Camera View (After Front OK)",
+            "Scan Part", "Front Camera", "Back Camera", "SUBMIT FRONT",
+            "SUBMIT BACK &amp; FINISH", "NEXT INSPECTION CYCLE",
         ):
             self.assertIn(text, html, text)
 
@@ -1304,7 +2754,7 @@ class InspectionWorkspaceUiTests(TestCase):
 
         Multi-line ``{# ... #}`` comments are not stripped by this Django
         version, so they render as literal text inside the page.  Any comment
-        therefore has to be single-line — this guards the whole app.
+        therefore has to be single-line â€” this guards the whole app.
         """
         import glob
         import os
@@ -1334,7 +2784,7 @@ class InspectionWorkspaceUiTests(TestCase):
 
 
 class PartConfigurationValidationTests(TestCase):
-    def _configuration(self, mode="FRONT_BACK", side="FRONT"):
+    def _configuration(self, mode="FRONT_BACK", side="BOTH"):
         from VisionInspection.models import (
             VisionClassConfiguration,
             VisionPartConfiguration,
@@ -1350,6 +2800,8 @@ class PartConfigurationValidationTests(TestCase):
             part=part,
             version=1,
             inspection_mode=mode,
+            front_camera_index=0,
+            back_camera_index=0,
             status=VisionPartConfiguration.STATUS_READY,
             is_active=True,
         )
@@ -1372,6 +2824,7 @@ class PartConfigurationValidationTests(TestCase):
             expected_front=1,
             expected_back=1,
             priority=1,
+            is_required=True,
             acceptance_rule="count",
         )
         VisionPartROI.objects.create(
@@ -1407,6 +2860,217 @@ class PartConfigurationValidationTests(TestCase):
         configuration = self._configuration(mode="FRONT_ONLY", side="BACK")
         errors = validate_configuration(configuration, {1: ["stitch"]})
         self.assertTrue(any("requires Back" in error for error in errors))
+
+    def test_rejects_common_roi_across_different_camera_roles(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration()
+        configuration.back_camera_index = 1
+        configuration.save(update_fields=["back_camera_index"])
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+        self.assertTrue(any("same camera source" in error for error in errors))
+
+    def test_common_rpi_roi_does_not_depend_on_opencv_index(self):
+        from VisionInspection.models import VisionPartConfiguration
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration()
+        configuration.front_camera_source = VisionPartConfiguration.SOURCE_RPI
+        configuration.back_camera_source = VisionPartConfiguration.SOURCE_RPI
+        configuration.back_camera_index = configuration.front_camera_index + 1
+        configuration.save(
+            update_fields=["front_camera_source", "back_camera_source", "back_camera_index"]
+        )
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+        self.assertFalse(any("common ROI requires" in error for error in errors))
+
+    def test_rejects_required_side_without_a_required_class_rule(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration()
+        rule = configuration.part_models.first().class_configs.first()
+        rule.is_required = False
+        rule.save(update_fields=["is_required"])
+
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertTrue(any("required stitch class" in error for error in errors))
+
+    def test_required_presence_rule_allows_zero_expected_count_for_both_sides(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration(mode="FRONT_BACK", side="BOTH")
+        configuration.acceptance_rule = "presence"
+        configuration.save(update_fields=["acceptance_rule"])
+        rule = configuration.part_models.first().class_configs.first()
+        rule.acceptance_rule = "presence"
+        rule.expected_front = 0
+        rule.expected_back = 0
+        rule.save(update_fields=["acceptance_rule", "expected_front", "expected_back"])
+
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertEqual(errors, [])
+
+    def test_required_count_rule_still_rejects_zero_expected_count(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration(mode="FRONT_BACK", side="BOTH")
+        rule = configuration.part_models.first().class_configs.first()
+        rule.acceptance_rule = "count"
+        rule.expected_front = 0
+        rule.expected_back = 0
+        rule.save(update_fields=["acceptance_rule", "expected_front", "expected_back"])
+
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertFalse(any("all optional" in error for error in errors))
+        self.assertTrue(any("no expected count for the front side" in error for error in errors))
+        self.assertTrue(any("no expected count for the back side" in error for error in errors))
+
+    def test_front_only_requires_front_but_not_back(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration(mode="FRONT_ONLY", side="FRONT")
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertFalse(any("Back inspection" in error for error in errors))
+
+    def test_back_only_requires_back_but_not_front(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration(mode="BACK_ONLY", side="BACK")
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertFalse(any("Front inspection" in error for error in errors))
+
+    def test_front_back_requires_both_sides(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration(mode="FRONT_BACK", side="BOTH")
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertEqual(errors, [])
+
+    def test_front_back_error_names_missing_back_assignment(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration(mode="FRONT_BACK", side="FRONT")
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertTrue(any(
+            "No enabled class rule is assigned to the Back inspection" in error
+            and "stitch" in error
+            for error in errors
+        ))
+
+    def test_optional_front_rule_error_names_class_and_action(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration(mode="FRONT_ONLY", side="FRONT")
+        rule = configuration.part_models.first().class_configs.first()
+        rule.is_required = False
+        rule.save(update_fields=["is_required"])
+
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertTrue(any(
+            "'stitch'" in error and "mark at least one Front or Both class as Required" in error
+            for error in errors
+        ))
+
+    def test_disabled_model_does_not_satisfy_required_side(self):
+        from VisionInspection.services.part_configuration import validate_configuration
+
+        configuration = self._configuration(mode="FRONT_ONLY", side="FRONT")
+        part_model = configuration.part_models.first()
+        part_model.is_enabled = False
+        part_model.save(update_fields=["is_enabled"])
+
+        errors = validate_configuration(configuration, {1: ["stitch"]})
+
+        self.assertTrue(any("At least one enabled model" in error for error in errors))
+        self.assertTrue(any("No enabled class rule is assigned to the Front" in error for error in errors))
+
+    def test_workflow_returns_persisted_mode_aware_configuration_errors(self):
+        from VisionInspection.services.inspection_workflow import InspectionWorkflow
+
+        configuration = self._configuration(mode="FRONT_BACK", side="FRONT")
+        workflow = InspectionWorkflow()
+        with mock.patch.object(
+            workflow._model_registry,
+            "inspect",
+            return_value={
+                "ok": True,
+                "task": "segment",
+                "classes": [{"id": 0, "name": "stitch"}],
+            },
+        ):
+            result = workflow.validate_model(part_number=configuration.part.part_number)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "configuration_invalid")
+        self.assertEqual(result["configuration_id"], configuration.pk)
+        self.assertEqual(result["configuration_version"], configuration.version)
+        self.assertTrue(any("Back inspection" in error for error in result["validation_errors"]))
+        configuration.refresh_from_db()
+        self.assertEqual(
+            configuration.status,
+            configuration.STATUS_VALIDATION_FAILED,
+        )
+        self.assertFalse(configuration.is_active)
+        self.assertEqual(configuration.validation_errors, result["validation_errors"])
+        repeated = workflow.validate_model(
+            part_number=configuration.part.part_number
+        )
+        self.assertFalse(repeated["ok"])
+        self.assertEqual(repeated["state"], "configuration_invalid")
+        self.assertEqual(
+            repeated["configuration_version"],
+            configuration.version,
+        )
+        self.assertEqual(
+            repeated["validation_errors"],
+            result["validation_errors"],
+        )
+        response = self.client.get(
+            reverse(
+                "VisionInspection:api-part-vision-configuration",
+                args=[configuration.part_id],
+            )
+        )
+        self.assertEqual(
+            response.json()["configuration"]["validation_errors"],
+            result["validation_errors"],
+        )
+
+    def test_workflow_validates_active_configuration_not_a_newer_draft(self):
+        from VisionInspection.models import VisionPartConfiguration
+        from VisionInspection.services.inspection_workflow import InspectionWorkflow
+
+        active = self._configuration(mode="FRONT_BACK", side="BOTH")
+        VisionPartConfiguration.objects.create(
+            part=active.part,
+            version=active.version + 1,
+            inspection_mode=VisionPartConfiguration.MODE_FRONT_BACK,
+            status=VisionPartConfiguration.STATUS_VALIDATION_FAILED,
+            is_active=False,
+        )
+        workflow = InspectionWorkflow()
+        with mock.patch.object(
+            workflow._model_registry,
+            "inspect",
+            return_value={
+                "ok": True,
+                "task": "segment",
+                "classes": [{"id": 0, "name": "stitch"}],
+            },
+        ):
+            result = workflow.validate_model(part_number=active.part.part_number)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["configuration_id"], active.pk)
+        self.assertEqual(result["configuration_version"], active.version)
 
 
 class StationDuplicateSubmissionTests(TestCase):
@@ -1447,7 +3111,7 @@ class StationDuplicateSubmissionTests(TestCase):
                 self.assertEqual(first.status_code, 200)
                 self.assertTrue(first.json()["ok"])
 
-                # A second submit for the same part is refused — no duplicate
+                # A second submit for the same part is refused â€” no duplicate
                 # inspection record is created.
                 second = self._submit(self.client)
                 self.assertEqual(second.status_code, 400)
@@ -1491,4 +3155,723 @@ class StationDuplicateSubmissionTests(TestCase):
         self.assertTrue(model)
 
 
+# =========================================================================== #
+#  Dashboard + Inspection Report — content served from real database records
+# =========================================================================== #
 
+from datetime import datetime, timedelta, timezone as dt_timezone  # noqa: E402
+from django.test import Client  # noqa: E402
+
+from VisionInspection.models import VisionInspectionSession  # noqa: E402
+
+
+def _record(part_number="P-1", result="OK", employee_code="E001", **kw):
+    """One stored inspection record (the only data source of both pages)."""
+    defaults = dict(
+        part_number=part_number,
+        employee_code=employee_code,
+        preset_name="Preset A",
+        preset_version=1,
+        result=result,
+        roi_results=[],
+        detected_objects=[],
+    )
+    defaults.update(kw)
+    return VisionInspectionLog.objects.create(**defaults)
+
+
+def _records(part_numbers, results, employee_code="E001", base=None, **kw):
+    """Records with predictable timestamps — the newest one is created last."""
+    created = []
+    if base is None:
+        base = datetime(2026, 6, 24, 9, 0, tzinfo=dt_timezone.utc)
+    for index, (part_number, result) in enumerate(zip(part_numbers, results)):
+        record = _record(
+            part_number=part_number,
+            result=result,
+            employee_code=employee_code,
+            **kw,
+        )
+        VisionInspectionLog.objects.filter(pk=record.pk).update(
+            timestamp=base + timedelta(minutes=index)
+        )
+        record.refresh_from_db()
+        created.append(record)
+    return created
+
+
+def _card_values(html, body_marker):
+    """``{card label: value}`` of the summary cards of one page body."""
+    start = html.index(body_marker)
+    block = html[start:]
+    values = {}
+    for match in re.finditer(
+        r'vi-kpi-value">([^<]+)</div>\s*<div class="vi-kpi-label">([^<]+)</div>',
+        block,
+    ):
+        values[match.group(2).strip()] = match.group(1).strip()
+    return values
+
+
+def _row_parts(html):
+    """Part numbers of the rendered record rows, in document order."""
+    return [
+        match.group(1)
+        for match in re.finditer(r'data-report-row[\s\S]*?<td>(P-\d+)</td>', html)
+    ]
+
+
+class DashboardPageTests(TestCase):
+    """Acceptance — the Dashboard shows the real records, sidebar unchanged."""
+
+    def setUp(self):
+        VisionInspectionPart.objects.create(part_number="P-1", part_name="Airbag Front")
+        VisionInspectionPart.objects.create(part_number="P-2", part_name="Airbag Rear")
+        self.records = _records(
+            ["P-1", "P-2", "P-1", "P-2"],
+            ["OK", "OK", "NOT_OK", "ERROR"],
+        )
+
+    def test_heading_and_sidebar_stay_unchanged(self):
+        r = self.client.get(reverse("VisionInspection:dashboard"))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Airbag Stitch Inspection Overview")
+        # The shared chrome is rendered by ui/base.html, not by this page:
+        # sidebar (with Dashboard highlighted), top navigation and workspace link.
+        self.assertContains(r, 'id="viSidebar"')
+        self.assertContains(r, 'class="vi-sidebar-toggle"')
+        self.assertContains(r, 'class="vi-header-title"')
+        self.assertContains(
+            r, 'href="/vision-inspection/" class="vi-sidebar-link active"'
+        )
+        self.assertContains(r, 'href="/vision-inspection/inspection/"')
+
+    def test_summary_cards_use_database_counts(self):
+        r = self.client.get(reverse("VisionInspection:dashboard"))
+        values = _card_values(r.content.decode(), "vi-dash")
+        self.assertEqual(values["Total Inspections"], "4")
+        self.assertEqual(values["Total OK"], "2")
+        self.assertEqual(values["Total NOT OK"], "1")
+        self.assertEqual(values["Incomplete / Error"], "1")
+
+    def test_part_filter_restricts_cards_and_rows(self):
+        r = self.client.get(reverse("VisionInspection:dashboard"), {"part": "P-1"})
+        self.assertEqual(r.status_code, 200)
+        values = _card_values(r.content.decode(), "vi-dash")
+        self.assertEqual(values["Total Inspections"], "2")
+        self.assertEqual(values["Total OK"], "1")
+        self.assertEqual(values["Total NOT OK"], "1")
+        self.assertEqual(values["Incomplete / Error"], "0")
+        self.assertEqual(_row_parts(r.content.decode()), ["P-1", "P-1"])
+        self.assertContains(r, "Showing records for part P-1")
+
+        reset = self.client.get(reverse("VisionInspection:dashboard"))
+        self.assertEqual(
+            _card_values(reset.content.decode(), "vi-dash")["Total Inspections"],
+            "4",
+        )
+
+    def test_recent_results_show_the_latest_six(self):
+        _records(
+            ["P-1", "P-1"], ["OK", "NOT_OK"],
+            base=datetime(2026, 6, 24, 10, 0, tzinfo=dt_timezone.utc),
+        )                                                          # two more, newer
+        r = self.client.get(reverse("VisionInspection:dashboard"))
+        rows = _row_parts(r.content.decode())
+        self.assertEqual(len(rows), 6)
+        # Newest first: the two newer records lead, the oldest two are gone.
+        self.assertEqual(rows, ["P-1", "P-1", "P-2", "P-1", "P-2", "P-1"])
+        newest = VisionInspectionLog.objects.order_by("-timestamp").first()
+        self.assertContains(
+            r, reverse("VisionInspection:history-detail", args=[newest.pk])
+        )
+        self.assertContains(r, reverse("VisionInspection:history"))   # View All
+
+    def test_part_dropdown_lists_database_parts(self):
+        r = self.client.get(reverse("VisionInspection:dashboard"))
+        self.assertContains(r, ">All Parts</option>")
+        self.assertContains(r, "P-1 — Airbag Front")
+        self.assertContains(r, "P-2 — Airbag Rear")
+
+    def test_removed_analytics_are_gone(self):
+        r = self.client.get(reverse("VisionInspection:dashboard"))
+        for removed in (
+            "viDashRoot", "viDashTrend", "viDashDonut", "viDashAlerts",
+            "Real-Time Inspection Flow", "AI Inspection Results", "Quick Actions",
+            "System Status", "Welcome back",
+        ):
+            self.assertNotContains(r, removed)
+
+    def test_empty_state_without_records(self):
+        VisionInspectionLog.objects.all().delete()
+        r = self.client.get(reverse("VisionInspection:dashboard"))
+        self.assertContains(r, "No inspection records yet")
+
+
+class InspectionReportTests(TestCase):
+    """Acceptance — the Inspection Report filters, paginates and exports."""
+
+    def setUp(self):
+        self.client, _user = _staff_client()
+        self.part_one = VisionInspectionPart.objects.create(
+            part_number="P-1", part_name="Airbag Front"
+        )
+        self.part_two = VisionInspectionPart.objects.create(
+            part_number="P-2", part_name="Cover Panel"
+        )
+        # 12 records (8 OK / 4 NOT OK) + 1 session record below = 13 records.
+        self.records = _records(
+            ["P-1"] * 6 + ["P-2"] * 6,
+            ["OK", "OK", "NOT_OK"] * 4,
+        )
+        # Session-derived record: per-side verdicts and a scanned unique number.
+        self.session = VisionInspectionSession.objects.create(
+            part_number="P-1", barcode="U-000123"
+        )
+        self.session.front_verdict = "OK"
+        self.session.back_verdict = "NOT_OK"
+        self.session.front_status = "COMPLETED"
+        self.session.back_status = "COMPLETED"
+        self.session.save()
+        self.session_record = _record(
+            part_number="P-1", preset_name=f"SESSION#{self.session.session_id}"
+        )
+        VisionInspectionLog.objects.filter(pk=self.session_record.pk).update(
+            timestamp=datetime(2026, 6, 24, 9, 12, tzinfo=dt_timezone.utc)
+        )
+        self.session_record.refresh_from_db()
+
+    # -- page ----------------------------------------------------------- #
+
+    def test_anonymous_access_is_redirected(self):
+        r = Client().get(reverse("VisionInspection:ui-reports"))
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/admin/login/", r.url)
+
+    def test_report_shows_header_filters_and_cards(self):
+        r = self.client.get(reverse("VisionInspection:ui-reports"))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Inspection Report")
+        self.assertContains(r, "View and export Airbag Stitch Inspection records.")
+        for field in (
+            "date_from", "date_to", "part", "employee", "result",
+            "part_number", "part_name", "unique_number",
+        ):
+            self.assertContains(r, 'name="%s"' % field)
+        values = _card_values(r.content.decode(), "vi-report")
+        self.assertEqual(values["Total Inspections"], "13")
+        self.assertEqual(values["Total OK"], "9")
+        self.assertEqual(values["Total NOT OK"], "4")
+        self.assertEqual(values["Incomplete / Error"], "0")
+
+    def test_first_page_is_paginated_with_serial_numbers(self):
+        r = self.client.get(reverse("VisionInspection:ui-reports"))
+        self.assertContains(r, "Showing 1 to 10 of 13 entries")
+        rows = re.findall(r'data-report-row[\s\S]*?<td>(\d+)</td>',
+                          r.content.decode())
+        self.assertEqual(rows, [str(n) for n in range(1, 11)])
+
+    def test_page_two_continues_the_serial_numbers(self):
+        r = self.client.get(reverse("VisionInspection:ui-reports"), {"page": 2})
+        self.assertContains(r, "Showing 11 to 13 of 13 entries")
+        rows = re.findall(r'data-report-row[\s\S]*?<td>(\d+)</td>',
+                          r.content.decode())
+        self.assertEqual(rows, ["11", "12", "13"])
+
+    def test_newest_record_comes_first(self):
+        r = self.client.get(reverse("VisionInspection:ui-reports"))
+        first_row = re.search(
+            r'<tr data-report-row>[\s\S]*?</tr>', r.content.decode()
+        ).group(0)
+        self.assertIn(str(self.session_record.pk), first_row)
+        self.assertContains(r, "U-000123")                       # unique number
+        self.assertIn("vi-badge-ok", first_row)                  # front verdict OK
+        self.assertContains(r, "NOT OK")                          # back verdict
+
+    def test_eye_icon_opens_inspection_details(self):
+        r = self.client.get(reverse("VisionInspection:ui-reports"))
+        self.assertContains(
+            r, reverse("VisionInspection:history-detail", args=[self.session_record.pk])
+        )
+
+    def test_filters_are_applied_on_the_backend(self):
+        cases = [
+            ("full listing", {}, "13"),
+            ("part dropdown", {"part": "P-2"}, "6"),
+            ("part number search", {"part_number": "P-1"}, "7"),
+            ("part name search", {"part_name": "Cover"}, "6"),
+            ("employee dropdown", {"employee": "E001"}, "13"),
+            ("result dropdown", {"result": "NOT_OK"}, "4"),
+            ("unique number", {"unique_number": "U-000123"}, "1"),
+            ("date from", {"date_from": "2026-06-24"}, "13"),
+            ("date to", {"date_to": "2026-06-23"}, "0"),
+            ("no match", {"part_number": "NO-SUCH-PART"}, "0"),
+        ]
+        for label, params, expected in cases:
+            with self.subTest(label=label):
+                r = self.client.get(reverse("VisionInspection:ui-reports"), params)
+                self.assertEqual(r.status_code, 200)
+                values = _card_values(r.content.decode(), "vi-report")
+                self.assertEqual(values["Total Inspections"], expected)
+
+    def test_result_filter_counts_match_the_table(self):
+        r = self.client.get(reverse("VisionInspection:ui-reports"), {"result": "NOT_OK"})
+        values = _card_values(r.content.decode(), "vi-report")
+        self.assertEqual(values["Total NOT OK"], "4")
+        self.assertEqual(values["Total OK"], "0")
+        self.assertEqual(
+            len(re.findall(r'data-report-row[\s\S]*?</tr>', r.content.decode())), 4
+        )
+
+    def test_page_size_selection(self):
+        r = self.client.get(reverse("VisionInspection:ui-reports"), {"page_size": 25})
+        self.assertContains(r, "Showing 1 to 13 of 13 entries")
+        self.assertEqual(
+            len(re.findall(r'data-report-row', r.content.decode())), 13
+        )
+
+    def test_reset_link_restores_the_full_listing(self):
+        filtered = self.client.get(
+            reverse("VisionInspection:ui-reports"), {"part": "P-1"}
+        )
+        self.assertContains(filtered, "Filters applied")
+        self.assertContains(filtered, 'href="/vision-inspection/reports/"')
+
+    def test_empty_state_when_nothing_matches(self):
+        r = self.client.get(
+            reverse("VisionInspection:ui-reports"), {"part_number": "NO-SUCH-PART"}
+        )
+        self.assertContains(r, "No inspection records found")
+        self.assertEqual(
+            _card_values(r.content.decode(), "vi-report")["Total Inspections"], "0"
+        )
+
+
+class InspectionReportExportTests(TestCase):
+    """Acceptance — exports contain exactly the filtered records."""
+
+    def setUp(self):
+        self.client, _user = _staff_client()
+        VisionInspectionPart.objects.create(part_number="P-1", part_name="Airbag")
+        VisionInspectionPart.objects.create(part_number="P-2", part_name="Cover")
+        _records(["P-1"] * 2 + ["P-2"] * 2, ["OK", "NOT_OK"] * 2)
+        self.export_url = reverse("VisionInspection:ui-report-export-excel")
+        self.pdf_url = reverse("VisionInspection:ui-report-export-pdf")
+
+    def test_exports_need_staff_login(self):
+        for url in (self.export_url, self.pdf_url):
+            with self.subTest(url=url):
+                r = Client().get(url)
+                self.assertEqual(r.status_code, 302)
+                self.assertIn("/admin/login/", r.url)
+
+    def test_excel_export_contains_the_filtered_records(self):
+        r = self.client.get(self.export_url, {"part": "P-1"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Content-Type"], "application/vnd.ms-excel")
+        self.assertIn("Inspection_Report_", r["Content-Disposition"])
+        body = r.content.decode()
+        self.assertIn("Inspection Report", body)
+        self.assertIn("P-1", body)
+        self.assertNotIn("P-2", body)
+        self.assertIn("Date &amp; Time", body)
+
+    def test_pdf_export_is_a_valid_pdf_of_the_filtered_records(self):
+        r = self.client.get(self.pdf_url, {"part": "P-2"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Content-Type"], "application/pdf")
+        pdf = r.content
+        self.assertTrue(pdf.startswith(b"%PDF-1.4"))
+        self.assertTrue(pdf.rstrip().endswith(b"%%EOF"))
+        self.assertIn(b"P-2", pdf)                     # WinAnsi encoded cell text
+        self.assertNotIn(b"P-1", pdf)                  # no other part leaked
+        self.assertIn(b"/Type /Page", pdf)
+
+        # The xref table must point at the object headers it declares.
+        tail = pdf.rstrip()
+        start_xref = int(tail[tail.rfind(b"startxref") + 10:].split()[0])
+        self.assertIn(b"xref", pdf[start_xref:start_xref + 4])
+        for match in re.finditer(rb"(\d{10}) (\d{5}) n", pdf[start_xref:]):
+            offset = int(match.group(1))
+            self.assertIn(b" obj", pdf[offset:offset + 40])
+
+    def test_pdf_export_is_paginated_for_many_records(self):
+        _records(["P-1"] * 40, ["OK"] * 40)
+        r = self.client.get(self.pdf_url)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content.count(b"/Type /Page "), 2)   # 44 rows, 26/page
+        self.assertIn(b"/Type /Pages /Count 2", r.content)
+        self.assertIn(b"Page 1 of 2", r.content)
+
+
+    def test_exports_ignore_an_invalid_result_value(self):
+        r = self.client.get(self.export_url, {"result": "DROP"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("P-1", r.content.decode())
+        self.assertIn("P-2", r.content.decode())
+
+
+class StorageServiceTests(TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.media_root = os.path.join(self.temp.name, "media")
+        self.local_root = os.path.join(self.temp.name, "managed")
+
+    def _local_destination(self, name, directory):
+        return StorageDestination.objects.create(
+            name=name,
+            destination_type=StorageDestination.DEST_TYPE_LOCAL,
+            destination_directory=directory,
+            connection_status="CONNECTED",
+        )
+
+    def test_local_connection_test_writes_reads_and_removes_only_its_probe(self):
+        with override_settings(MEDIA_ROOT=self.media_root, VISION_STORAGE_LOCAL_ROOT=self.local_root):
+            result = storage_service.test_destination({
+                "destination_type": "LOCAL",
+                "destination_directory": "station/evidence",
+            })
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["read_ok"])
+        self.assertTrue(result["write_ok"])
+        self.assertEqual(os.listdir(os.path.join(self.local_root, "station", "evidence")), [])
+
+    def test_smb_connection_test_uses_submitted_password_and_removes_probe(self):
+        from contextlib import contextmanager
+        from io import BytesIO
+        from types import SimpleNamespace
+
+        class MemorySmbClient:
+            def __init__(self):
+                self.files = {}
+                self.registered = None
+                self.removed = []
+                self.path = SimpleNamespace(exists=lambda path: path in self.files)
+
+            def register_session(self, server, **options):
+                self.registered = (server, options)
+
+            def makedirs(self, path, exist_ok=True):
+                return None
+
+            @contextmanager
+            def open_file(self, path, mode):
+                if mode == "xb":
+                    stream = BytesIO()
+                    yield stream
+                    self.files[path] = stream.getvalue()
+                else:
+                    yield BytesIO(self.files[path])
+
+            def remove(self, path):
+                self.removed.append(path)
+                self.files.pop(path, None)
+
+        client = MemorySmbClient()
+        with mock.patch.object(storage_service, "_smbclient", return_value=client):
+            result = storage_service.test_destination({
+                "destination_type": "SMB",
+                "ip_address": "nas.example.test",
+                "share_name": "inspection",
+                "destination_directory": "line-a/run-1",
+                "username": "operator",
+                "password": "not-persisted-by-test",
+            })
+        self.assertTrue(result["ok"])
+        self.assertEqual(client.registered[0], "nas.example.test")
+        self.assertEqual(client.registered[1]["password"], "not-persisted-by-test")
+        self.assertEqual(len(client.removed), 1)
+        self.assertEqual(client.files, {})
+
+    def test_local_activation_preserves_previous_destination(self):
+        with override_settings(MEDIA_ROOT=self.media_root, VISION_STORAGE_LOCAL_ROOT=self.local_root):
+            first, _ = storage_service.activate_destination({
+                "destination_type": "LOCAL", "destination_directory": "first",
+            })
+            second, _ = storage_service.activate_destination({
+                "destination_type": "LOCAL", "destination_directory": "second",
+            })
+        first.refresh_from_db()
+        config = StorageConfiguration.objects.get(pk=1)
+        self.assertFalse(first.is_active)
+        self.assertTrue(second.is_active)
+        self.assertEqual(config.active_destination_id, second.pk)
+        self.assertEqual(StorageDestination.objects.count(), 2)
+
+    def test_new_session_image_gets_stable_reference_and_active_local_destination(self):
+        session = VisionInspectionSession.objects.create(part_number="STORE-1")
+        destination = self._local_destination("Local", "captured")
+        StorageConfiguration.objects.create(pk=1, active_destination=destination)
+        image = b"verified inspection evidence"
+        with override_settings(MEDIA_ROOT=self.media_root, VISION_STORAGE_LOCAL_ROOT=self.local_root):
+            metadata = storage_service.register_image(
+                session, "front_image", image, "front.jpg"
+            )
+            session.save()
+            resolved = storage_service.metadata_for_field(session, "front_image")
+            with storage_service.open_image(resolved) as stored:
+                self.assertEqual(stored.read(), image)
+        self.assertEqual(metadata.destination_id, destination.pk)
+        self.assertEqual(metadata.storage_backend, StorageImageMetadata.STORAGE_LOCAL)
+        self.assertEqual(len(metadata.storage_key), 32)
+
+    def test_migration_verifies_copy_and_updates_reference_after_copy(self):
+        source = self._local_destination("Source", "source")
+        destination = self._local_destination("Target", "target")
+        contents = b"historical frame" * 100
+        key = "a" * 32
+        digest = __import__("hashlib").sha256(contents).hexdigest()
+        metadata = StorageImageMetadata.objects.create(
+            storage_key=key,
+            image_field_name="inspection_image",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL,
+            destination=source,
+            relative_path="old.jpg",
+            file_size=len(contents),
+            sha256_checksum=digest,
+        )
+        job = StorageMigrationJob.objects.create(
+            source_destination=source,
+            destination=destination,
+            total_count=1,
+        )
+        with override_settings(MEDIA_ROOT=self.media_root, VISION_STORAGE_LOCAL_ROOT=self.local_root):
+            source_path = storage_service._local_root(source) / "old.jpg"
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_bytes(contents)
+            first_batch = storage_service.process_migration_batch(job.pk)
+            second_batch = storage_service.process_migration_batch(job.pk)
+            metadata.refresh_from_db()
+            target_path = storage_service._local_root(destination) / metadata.relative_path
+            self.assertEqual(target_path.read_bytes(), contents)
+        self.assertEqual(first_batch["success"], 1)
+        self.assertTrue(second_batch["done"])
+        self.assertEqual(metadata.destination_id, destination.pk)
+        self.assertEqual(metadata.migration_status, StorageImageMetadata.MIGRATION_SUCCESS)
+        self.assertEqual(StorageTransferHistory.objects.filter(status="SUCCESS").count(), 1)
+
+    def test_checksum_failure_keeps_original_reference_and_file(self):
+        source = self._local_destination("Source", "source")
+        destination = self._local_destination("Target", "target")
+        metadata = StorageImageMetadata.objects.create(
+            storage_key="b" * 32,
+            image_field_name="inspection_image",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL,
+            destination=source,
+            relative_path="original.jpg",
+            file_size=5,
+            sha256_checksum="0" * 64,
+        )
+        job = StorageMigrationJob.objects.create(source_destination=source, destination=destination, total_count=1)
+        with override_settings(MEDIA_ROOT=self.media_root, VISION_STORAGE_LOCAL_ROOT=self.local_root):
+            original = storage_service._local_root(source) / "original.jpg"
+            original.parent.mkdir(parents=True, exist_ok=True)
+            original.write_bytes(b"valid")
+            storage_service.process_migration_batch(job.pk)
+            metadata.refresh_from_db()
+            self.assertEqual(original.read_bytes(), b"valid")
+            target_path = storage_service._local_root(destination) / (metadata.storage_key + ".jpg")
+            self.assertFalse(target_path.exists())
+        self.assertEqual(metadata.destination_id, source.pk)
+        self.assertEqual(metadata.migration_status, StorageImageMetadata.MIGRATION_FAILED)
+        self.assertEqual(StorageTransferHistory.objects.filter(status="FAILED").count(), 1)
+
+    def test_unavailable_original_destination_does_not_fall_back_to_local_copy(self):
+        destination = StorageDestination.objects.create(
+            name="Offline SMB", destination_type=StorageDestination.DEST_TYPE_SMB,
+            ip_address="unreachable", share_name="share",
+        )
+        metadata = StorageImageMetadata.objects.create(
+            storage_key="c" * 32,
+            image_field_name="inspection_image",
+            storage_backend=StorageImageMetadata.STORAGE_NETWORK,
+            destination=destination,
+            relative_path="frame.jpg",
+        )
+        with mock.patch.object(storage_service, "_remote_path", side_effect=storage_service.StorageOperationError("offline")):
+            with self.assertRaises(storage_service.StorageOperationError):
+                storage_service.open_image(metadata)
+
+    def test_automatic_threshold_accepts_10_through_95_and_persists(self):
+        config = storage_service.save_automatic_settings(True, 50)
+        self.assertTrue(config.automatic_migration_enabled)
+        self.assertEqual(config.migration_threshold_pct, 50)
+        self.assertEqual(storage_service.save_automatic_settings(False, 60).migration_threshold_pct, 60)
+        self.assertEqual(storage_service.save_automatic_settings(True, 80).migration_threshold_pct, 80)
+        self.assertEqual(storage_service.save_automatic_settings(True, 95).migration_threshold_pct, 95)
+        for invalid in (9, 96, "not-a-number"):
+            with self.assertRaises(storage_service.StorageOperationError):
+                storage_service.save_automatic_settings(True, invalid)
+
+    def test_automatic_transfer_waits_below_threshold_and_when_disabled(self):
+        destination = StorageDestination.objects.create(
+            name="Target", destination_type=StorageDestination.DEST_TYPE_SMB,
+            ip_address="nas", share_name="images", is_active=True,
+        )
+        StorageConfiguration.objects.create(pk=1, active_destination=destination, migration_threshold_pct=50)
+        with mock.patch.object(storage_service, "_local_volume_usage", return_value={"usage_percent": 49.9, "total_bytes": 100, "free_bytes": 50, "used_bytes": 50}):
+            below = storage_service.automatic_transfer_batch()
+        self.assertEqual(below["reason"], "below_threshold")
+        config = StorageConfiguration.objects.get(pk=1)
+        config.automatic_migration_enabled = False
+        config.save(update_fields=["automatic_migration_enabled"])
+        with mock.patch.object(storage_service, "_local_volume_usage", return_value={"usage_percent": 80, "total_bytes": 100, "free_bytes": 20, "used_bytes": 80}):
+            disabled = storage_service.automatic_transfer_batch()
+        self.assertEqual(disabled["reason"], "disabled")
+
+    def test_automatic_transfer_starts_at_threshold_and_uses_oldest_local_image(self):
+        destination = StorageDestination.objects.create(
+            name="Target", destination_type=StorageDestination.DEST_TYPE_SMB,
+            ip_address="nas", share_name="images", is_active=True,
+        )
+        StorageConfiguration.objects.create(pk=1, active_destination=destination, migration_threshold_pct=50)
+        oldest = StorageImageMetadata.objects.create(
+            storage_key="d" * 32, image_field_name="front_image",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL, relative_path="old.jpg",
+            file_size=3, sha256_checksum="0" * 64,
+        )
+        StorageImageMetadata.objects.create(
+            storage_key="e" * 32, image_field_name="back_image",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL,
+            destination=self._local_destination("Prior Local", "old"), relative_path="other.jpg",
+            file_size=4, sha256_checksum="1" * 64,
+        )
+
+        def complete_transfer(metadata, target, delete_originals=False):
+            metadata.storage_backend = StorageImageMetadata.STORAGE_NETWORK
+            metadata.destination = target
+            metadata.migration_status = StorageImageMetadata.MIGRATION_SUCCESS
+            metadata.save(update_fields=["storage_backend", "destination", "migration_status", "updated_at"])
+
+        usage = {"usage_percent": 50, "total_bytes": 100, "free_bytes": 50, "used_bytes": 50}
+        with mock.patch.object(storage_service, "_local_volume_usage", side_effect=[usage, usage]), \
+             mock.patch.object(storage_service, "migrate_image", side_effect=complete_transfer) as transfer:
+            result = storage_service.automatic_transfer_batch()
+        self.assertTrue(result["started"])
+        self.assertEqual(result["success"], 1)
+        transfer.assert_called_once()
+        self.assertEqual(transfer.call_args.args[0].pk, oldest.pk)
+
+    def test_automatic_transfer_failure_keeps_local_reference_and_records_error(self):
+        destination = StorageDestination.objects.create(
+            name="Target", destination_type=StorageDestination.DEST_TYPE_SMB,
+            ip_address="nas", share_name="images", is_active=True,
+        )
+        config = StorageConfiguration.objects.create(pk=1, active_destination=destination, migration_threshold_pct=10)
+        metadata = StorageImageMetadata.objects.create(
+            storage_key="f" * 32, image_field_name="front_image",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL, relative_path="local.jpg",
+            file_size=4, sha256_checksum="2" * 64,
+        )
+        usage = {"usage_percent": 50, "total_bytes": 100, "free_bytes": 50, "used_bytes": 50}
+        with mock.patch.object(storage_service, "_local_volume_usage", side_effect=[usage, usage]), \
+             mock.patch.object(storage_service, "migrate_image", side_effect=storage_service.StorageOperationError("share unavailable")):
+            result = storage_service.automatic_transfer_batch()
+        metadata.refresh_from_db()
+        config.refresh_from_db()
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(metadata.storage_backend, StorageImageMetadata.STORAGE_LOCAL)
+        self.assertEqual(metadata.migration_status, StorageImageMetadata.MIGRATION_FAILED)
+        self.assertEqual(metadata.migration_destination_id, destination.pk)
+        self.assertIn("share unavailable", config.last_transfer_error)
+
+    def test_failed_automatic_transfer_respects_bounded_retry_backoff(self):
+        destination = StorageDestination.objects.create(
+            name="Target", destination_type=StorageDestination.DEST_TYPE_SMB,
+            ip_address="nas", share_name="images", is_active=True,
+        )
+        StorageConfiguration.objects.create(pk=1, active_destination=destination, migration_threshold_pct=10)
+        StorageImageMetadata.objects.create(
+            storage_key="g" * 32, image_field_name="front_image",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL, relative_path="local.jpg",
+            migration_status=StorageImageMetadata.MIGRATION_FAILED,
+            migration_destination=destination, migration_attempt=1,
+        )
+        usage = {"usage_percent": 90, "total_bytes": 100, "free_bytes": 10, "used_bytes": 90}
+        with mock.patch.object(storage_service, "_local_volume_usage", side_effect=[usage, usage]), \
+             mock.patch.object(storage_service, "migrate_image") as transfer:
+            result = storage_service.automatic_transfer_batch()
+        self.assertFalse(result["started"])
+        transfer.assert_not_called()
+
+    def test_old_local_destination_is_not_automatically_redirected(self):
+        old_local = self._local_destination("Previous local", "archive")
+        active = StorageDestination.objects.create(
+            name="New SMB", destination_type=StorageDestination.DEST_TYPE_SMB,
+            ip_address="nas", share_name="new-share", is_active=True,
+        )
+        StorageConfiguration.objects.create(pk=1, active_destination=active, migration_threshold_pct=10)
+        StorageImageMetadata.objects.create(
+            storage_key="h" * 32, image_field_name="front_image",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL,
+            destination=old_local, relative_path="old.jpg",
+        )
+        usage = {"usage_percent": 90, "total_bytes": 100, "free_bytes": 10, "used_bytes": 90}
+        with mock.patch.object(storage_service, "_local_volume_usage", side_effect=[usage, usage]), \
+             mock.patch.object(storage_service, "migrate_image") as transfer:
+            result = storage_service.automatic_transfer_batch()
+        self.assertFalse(result["started"])
+        transfer.assert_not_called()
+
+    def test_database_update_failure_after_copy_keeps_source_file(self):
+        source = self._local_destination("Source", "source")
+        destination = self._local_destination("Target", "target")
+        contents = b"preserve until reference commits"
+        metadata = StorageImageMetadata.objects.create(
+            storage_key="i" * 32,
+            image_field_name="inspection_image",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL,
+            destination=source,
+            relative_path="source.jpg",
+            file_size=len(contents),
+            sha256_checksum=__import__("hashlib").sha256(contents).hexdigest(),
+        )
+        real_save = StorageImageMetadata.save
+
+        def fail_destination_update(instance, *args, **kwargs):
+            if instance.pk == metadata.pk and instance.destination_id == destination.pk:
+                raise RuntimeError("simulated database update failure")
+            return real_save(instance, *args, **kwargs)
+
+        with override_settings(MEDIA_ROOT=self.media_root, VISION_STORAGE_LOCAL_ROOT=self.local_root):
+            source_path = storage_service._local_root(source) / "source.jpg"
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_bytes(contents)
+            with mock.patch.object(StorageImageMetadata, "save", new=fail_destination_update):
+                with self.assertRaisesRegex(RuntimeError, "database update failure"):
+                    storage_service.migrate_image(metadata, destination, delete_originals=True)
+            metadata.refresh_from_db()
+            self.assertEqual(source_path.read_bytes(), contents)
+        self.assertEqual(metadata.destination_id, source.pk)
+
+    def test_worker_lock_rejects_a_second_worker(self):
+        from django.core.management.base import CommandError
+        from VisionInspection.management.commands.run_storage_worker import BaseWorkerLock
+
+        with mock.patch("VisionInspection.management.commands.run_storage_worker.tempfile.gettempdir", return_value=self.temp.name):
+            first = BaseWorkerLock()
+            second = BaseWorkerLock()
+            with mock.patch.object(BaseWorkerLock, "_pid_is_running", return_value=True):
+                first.acquire()
+                try:
+                    with self.assertRaises(CommandError):
+                        second.acquire()
+                finally:
+                    first.release()
+
+    def test_smb_credential_wrapper_never_returns_plaintext_storage_value(self):
+        import base64
+
+        class FakeFernet:
+            def encrypt(self, value):
+                return base64.urlsafe_b64encode(value)
+
+            def decrypt(self, value):
+                return base64.urlsafe_b64decode(value)
+
+        with mock.patch.object(storage_service, "_credential_fernet", return_value=FakeFernet()):
+            encrypted = storage_service.encrypt_credential("sample-password")
+            self.assertTrue(encrypted.startswith(storage_service.CREDENTIAL_PREFIX))
+            self.assertNotIn("sample-password", encrypted)
+            self.assertEqual(storage_service.decrypt_credential(encrypted), "sample-password")

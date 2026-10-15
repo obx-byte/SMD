@@ -1224,3 +1224,127 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle {
 @media (max-width: 1023px) {
     .vi-header-search { display: none; }
 }
+
+
+/* ---------------------------------------------------------------------------
+   SMD BRANDING — navy header + dark navy sidebar (Airbag Stitch Inspection)
+   --------------------------------------------------------------------------- */
+:root,
+[data-theme="purple"],
+[data-theme="green"] {
+    --smd-navy-900: #0d1c3c;
+    --smd-navy-800: #112449;
+    --smd-navy-700: #16305f;
+    --smd-navy-600: #1d3f79;
+    --smd-navy-500: #2457a6;
+    --smd-navy-100: #e7eef9;
+    --smd-ink: #16233d;
+    --smd-muted: #5b6b85;
+    --smd-border: #d8e1ee;
+    --smd-ok: #0f7a41;
+    --smd-not-ok: #c0291c;
+    --smd-pending: #64748b;
+    --smd-processing: #b06a00;
+    --smd-primary: #1d5fd0;
+    --smd-primary-dark: #174b9f;
+}
+
+.vi-top-header {
+    background: linear-gradient(90deg, var(--smd-navy-900) 0%, var(--smd-navy-700) 55%, var(--smd-navy-600) 100%);
+    border-bottom: 1px solid var(--smd-navy-700);
+    color: #ffffff;
+    gap: 12px;
+}
+
+.vi-sidebar {
+    background: var(--smd-navy-900);
+    color: #e4eaf4;
+    border-right: 1px solid var(--smd-navy-800);
+}
+
+.vi-sidebar .vi-sidebar-header {
+    background: var(--smd-navy-800);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vi-sidebar .vi-sidebar-logo { color: #7fb0f5; }
+
+.vi-sidebar-subtitle {
+    display: block;
+    color: #8ea6c8;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.vi-sidebar .vi-sidebar-title {
+    color: #ffffff;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.vi-sidebar .vi-sidebar-icon { color: #9db4d6; }
+.vi-sidebar .vi-sidebar-link { color: #cbd7ea; }
+.vi-sidebar .vi-sidebar-link:hover { background: var(--smd-navy-700); color: #ffffff; }
+.vi-sidebar .vi-sidebar-link.active { background: var(--smd-primary); color: #ffffff; }
+.vi-sidebar .vi-sidebar-section-title { color: #93a8c6; }
+.vi-sidebar .vi-sidebar-section-title:hover { color: #ffffff; }
+.vi-sidebar .vi-caret { color: #7f93b3; }
+
+.vi-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.vi-brand-logo { color: #8ab4f8; font-size: 20px; }
+.vi-brand-title {
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+
+.vi-top-header .vi-header-title {
+    color: #cfdcf1;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0.04em;
+    padding-left: 12px;
+    border-left: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.vi-header-station { color: #cfdcf1; font-size: 12px; white-space: nowrap; }
+.vi-header-actions { gap: 10px; }
+
+.vi-header-home,
+.vi-header-inspect {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    color: #eaf1fb;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.06);
+    white-space: nowrap;
+}
+
+.vi-header-home { padding: 0 9px; font-size: 16px; }
+.vi-header-home:hover,
+.vi-header-inspect:hover { background: rgba(255, 255, 255, 0.18); color: #ffffff; }
+.vi-header-inspect { background: var(--smd-primary); border-color: var(--smd-primary-dark); }
+.vi-header-inspect:hover { background: var(--smd-primary-dark); }
+
+.vi-top-header .vi-profile-btn { color: #eaf1fb; border-color: rgba(255, 255, 255, 0.22); }
+.vi-top-header .vi-profile-avatar { background: rgba(255, 255, 255, 0.18); color: #ffffff; }
+.vi-top-header .vi-profile-menu { color: var(--smd-ink); }
+
+@media (max-width: 900px) {
+    .vi-brand-title,
+    .vi-header-station,
+    .vi-top-header .vi-header-title { display: none; }
+    .vi-header-inspect { font-size: 12px; padding: 0 8px; }
+}

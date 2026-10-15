@@ -1,0 +1,2 @@
+cryptography>=42.0,<47.0
+smbprotocol>=1.12,<2.0

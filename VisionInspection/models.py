@@ -157,7 +157,7 @@ class VisionInspectionPreset(models.Model):
         blank=True,
         help_text="Additional trigger zone configuration (containment threshold, etc.).",
     )
-    is_active = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -261,10 +261,12 @@ class VisionInspectionLog(models.Model):
 
     employee_code = models.CharField(max_length=100, blank=True, null=True)
     part_number = models.CharField(max_length=40, blank=True, null=True)
+    barcode = models.CharField(max_length=80, blank=True, default="")
+    error_details = models.TextField(blank=True, null=True)
     preset_name = models.CharField(max_length=200, blank=True, null=True)
     preset_version = models.PositiveIntegerField(blank=True, null=True)
-    yolo_model_name = models.CharField(max_length=100, blank=True, null=True)
-    yolo_model_version = models.CharField(max_length=50, blank=True, null=True)
+    yolo_model_name = models.CharField(max_length=200, blank=True, null=True)
+    yolo_model_version = models.CharField(max_length=100, blank=True, null=True)
 
     timestamp = models.DateTimeField(auto_now_add=True)
     result = models.CharField(
@@ -287,7 +289,6 @@ class VisionInspectionLog(models.Model):
     inspection_image = models.ImageField(
         upload_to="vision_inspection/results/", blank=True, null=True
     )
-    error_details = models.TextField(blank=True, null=True)
     stable_frames_used = models.PositiveIntegerField(default=0)
     part_bbox = models.JSONField(blank=True, null=True)
     trigger_zone_polygon = models.JSONField(blank=True, null=True)
@@ -627,6 +628,13 @@ class VisionInspectionSession(models.Model):
     class Meta:
         db_table = "vision_inspection_session"
         ordering = ["-started_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("part_number",),
+                condition=models.Q(is_active=True),
+                name="uniq_active_vi_session_part",
+            ),
+        ]
 
     def __str__(self):
         return f"Session {self.session_id} — {self.part_number} ({self.stage}/{self.overall})"
@@ -965,6 +973,391 @@ class VisionPartROI(models.Model):
             return None
         return {"x": x, "y": y, "width": width, "height": height}
 
+
+# =========================================================================== #
+#  Storage Configuration & Migration (Network Share / Automatic Migration)
+# =========================================================================== #
+
+
+class StorageDestination(models.Model):
+    """Configured network storage destination (SMB/CIFS share).
+
+    Multiple destinations can be configured but only one is active at a time.
+    Historical destinations are preserved so images migrated to them remain
+    resolvable even after the active destination changes.
+    """
+
+    DEST_TYPE_WINDOWS = "WINDOWS"
+    DEST_TYPE_LINUX = "LINUX"
+    DEST_TYPE_SMB = "SMB"
+    DEST_TYPE_LOCAL = "LOCAL"
+    DEST_TYPE_CHOICES = (
+        (DEST_TYPE_WINDOWS, "Windows (SMB/CIFS)"),
+        (DEST_TYPE_LINUX, "Linux (SMB/CIFS)"),
+        (DEST_TYPE_SMB, "SMB/CIFS"),
+        (DEST_TYPE_LOCAL, "Local Storage"),
+    )
+
+    PROTOCOL_SMB = "SMB"
+    PROTOCOL_CHOICES = ((PROTOCOL_SMB, "SMB/CIFS"),)
+
+    name = models.CharField(max_length=100, help_text="Friendly name for this destination.")
+    destination_type = models.CharField(max_length=20, choices=DEST_TYPE_CHOICES)
+    ip_address = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Destination IP address or hostname for SMB storage.",
+    )
+    protocol = models.CharField(max_length=10, choices=PROTOCOL_CHOICES, default=PROTOCOL_SMB)
+    share_name = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="SMB share name (e.g. 'inspections').",
+    )
+    destination_directory = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="Directory path within the share (relative).",
+    )
+    username = models.CharField(max_length=100, blank=True, default="", help_text="Username for SMB authentication (if required).")
+    password = models.TextField(blank=True, default="", help_text="Encrypted SMB credential payload.")
+    mount_point = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="Local mount point where the share is mounted (managed by the worker).",
+    )
+    is_active = models.BooleanField(default=False, help_text="Whether this is the currently active destination.")
+    connection_status = models.CharField(max_length=20, default="UNKNOWN", help_text="Last known connection status.")
+    last_verified_at = models.DateTimeField(blank=True, null=True, help_text="When the connection was last verified.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vision_storage_destination"
+        ordering = ["-is_active", "-created_at"]
+        verbose_name = "Storage Destination"
+        verbose_name_plural = "Storage Destinations"
+
+    def __str__(self):
+        return f"{self.name} ({self.ip_address}/{self.share_name})"
+
+    def get_mount_point(self):
+        """Return the managed mount point path."""
+        if self.mount_point:
+            return self.mount_point
+        # Default managed mount point under /mnt/vision_inspection/<destination_id>
+        from django.conf import settings
+        base = getattr(settings, "VISION_STORAGE_MOUNT_BASE", "/mnt/vision_inspection")
+        return f"{base}/{self.pk}"
+
+    def get_full_remote_path(self):
+        """Return the full remote UNC/SMB path."""
+        return f"//{self.ip_address}/{self.share_name}"
+
+    def get_destination_subdir(self):
+        """Return the subdirectory within the share."""
+        return self.destination_directory.strip("/")
+
+
+class StorageConfiguration(models.Model):
+    """Global storage configuration (singleton-like).
+
+    Only one configuration row should exist. Manages the active destination
+    and migration thresholds.
+    """
+
+    active_destination = models.ForeignKey(
+        StorageDestination,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="Currently active destination for new migrations.",
+    )
+    migration_threshold_pct = models.PositiveIntegerField(
+        default=50,
+        help_text="Local disk usage percentage that triggers automatic migration.",
+    )
+    target_usage_pct = models.PositiveIntegerField(
+        default=70,
+        help_text="Target local disk usage percentage after migration.",
+    )
+    automatic_migration_enabled = models.BooleanField(default=True)
+    max_files_per_batch = models.PositiveIntegerField(
+        default=50,
+        help_text="Maximum files to migrate in a single batch.",
+    )
+    min_image_age_hours = models.PositiveIntegerField(
+        default=24,
+        help_text="Minimum age (hours) of images eligible for migration.",
+    )
+    retry_max_attempts = models.PositiveIntegerField(default=3)
+    retry_base_delay_seconds = models.PositiveIntegerField(default=300)
+    monitoring_interval_seconds = models.PositiveIntegerField(default=60)
+    monitoring_enabled = models.BooleanField(default=True)
+    last_monitoring_run = models.DateTimeField(blank=True, null=True)
+    last_transfer_at = models.DateTimeField(blank=True, null=True)
+    last_transfer_error = models.TextField(blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vision_storage_configuration"
+        verbose_name = "Storage Configuration"
+        verbose_name_plural = "Storage Configuration"
+
+    def __str__(self):
+        return "Storage Configuration"
+
+    @classmethod
+    def get_config(cls):
+        """Get or create the singleton configuration."""
+        config, _ = cls.objects.get_or_create(pk=1)
+        return config
+
+
+class StorageImageMetadata(models.Model):
+    """Tracks storage location and migration status for each inspection image.
+
+    This model provides a stable storage reference that survives destination
+    changes. Each image knows exactly which destination it was migrated to
+    (if any), and can be resolved through the centralized resolver.
+    """
+
+    STORAGE_LOCAL = "LOCAL"
+    STORAGE_NETWORK = "NETWORK"
+    STORAGE_CHOICES = ((STORAGE_LOCAL, "Local"), (STORAGE_NETWORK, "Network"))
+
+    MIGRATION_PENDING = "PENDING"
+    MIGRATION_IN_PROGRESS = "IN_PROGRESS"
+    MIGRATION_VERIFYING = "VERIFYING"
+    MIGRATION_DATABASE_UPDATE = "DATABASE_UPDATE"
+    MIGRATION_SUCCESS = "SUCCESS"
+    MIGRATION_FAILED = "FAILED"
+    MIGRATION_RETRYING = "RETRYING"
+    MIGRATION_CHOICES = (
+        (MIGRATION_PENDING, "Pending"),
+        (MIGRATION_IN_PROGRESS, "In Progress"),
+        (MIGRATION_VERIFYING, "Verifying"),
+        (MIGRATION_DATABASE_UPDATE, "Database Update"),
+        (MIGRATION_SUCCESS, "Success"),
+        (MIGRATION_FAILED, "Failed"),
+        (MIGRATION_RETRYING, "Retrying"),
+    )
+
+    # Stable identifier for this image across destination changes
+    storage_key = models.CharField(max_length=64, unique=True, db_index=True, help_text="Stable key for this image.")
+
+    # Source reference (which inspection record this belongs to)
+    inspection_log = models.ForeignKey(
+        "VisionInspectionLog",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="storage_metadata",
+        help_text="Linked inspection log record.",
+    )
+    inspection_session = models.ForeignKey(
+        "VisionInspectionSession",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="storage_metadata",
+        help_text="Linked inspection session record.",
+    )
+    image_field_name = models.CharField(
+        max_length=50,
+        help_text="Which ImageField this metadata tracks (e.g., 'inspection_image', 'front_image').",
+    )
+
+    # Storage location
+    storage_backend = models.CharField(max_length=10, choices=STORAGE_CHOICES, default=STORAGE_LOCAL)
+    destination = models.ForeignKey(
+        StorageDestination,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="image_metadata",
+        help_text="Destination where this image is stored (if network).",
+    )
+    relative_path = models.CharField(max_length=500, help_text="Relative path within the storage backend.")
+
+    # Migration tracking
+    migration_status = models.CharField(max_length=20, choices=MIGRATION_CHOICES, default=MIGRATION_PENDING)
+    migration_destination = models.ForeignKey(
+        StorageDestination,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="migration_metadata",
+        help_text="Destination being migrated to (during migration).",
+    )
+    migration_attempt = models.PositiveIntegerField(default=0)
+    migration_error = models.TextField(blank=True, default="")
+    migration_started_at = models.DateTimeField(blank=True, null=True)
+    migration_completed_at = models.DateTimeField(blank=True, null=True)
+
+    # File integrity
+    file_size = models.PositiveBigIntegerField(default=0)
+    sha256_checksum = models.CharField(max_length=64, blank=True, default="")
+    checksum_verified_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vision_storage_image_metadata"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["storage_backend", "migration_status"], name="vi_storage_backend_status_idx"),
+            models.Index(fields=["destination", "storage_backend"], name="vi_storage_dest_backend_idx"),
+            models.Index(fields=["inspection_log", "image_field_name"], name="vi_storage_log_field_idx"),
+            models.Index(fields=["inspection_session", "image_field_name"], name="vi_storage_session_field_idx"),
+        ]
+        verbose_name = "Storage Image Metadata"
+        verbose_name_plural = "Storage Image Metadata"
+
+    def __str__(self):
+        return f"{self.storage_key} ({self.storage_backend})"
+
+    def get_local_path(self):
+        """Return the local filesystem path for this image."""
+        from django.conf import settings
+        return settings.MEDIA_ROOT / self.relative_path
+
+    def get_network_path(self):
+        """Return the network filesystem path for this image."""
+        if self.destination:
+            mount = self.destination.get_mount_point()
+            subdir = self.destination.get_destination_subdir()
+            if subdir:
+                return f"{mount}/{subdir}/{self.relative_path}"
+            return f"{mount}/{self.relative_path}"
+        return None
+
+    def get_resolved_path(self):
+        """Return the actual filesystem path based on current storage backend."""
+        if self.storage_backend == self.STORAGE_NETWORK:
+            return self.get_network_path()
+        return self.get_local_path()
+
+
+class StorageTransferHistory(models.Model):
+    """Immutable record of every file transfer attempt."""
+
+    STATUS_PENDING = "PENDING"
+    STATUS_IN_PROGRESS = "IN_PROGRESS"
+    STATUS_VERIFYING = "VERIFYING"
+    STATUS_DATABASE_UPDATE = "DATABASE_UPDATE"
+    STATUS_SUCCESS = "SUCCESS"
+    STATUS_FAILED = "FAILED"
+    STATUS_RETRYING = "RETRYING"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "Pending"),
+        (STATUS_IN_PROGRESS, "In Progress"),
+        (STATUS_VERIFYING, "Verifying"),
+        (STATUS_DATABASE_UPDATE, "Database Update"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_RETRYING, "Retrying"),
+    )
+
+    image_metadata = models.ForeignKey(
+        StorageImageMetadata,
+        on_delete=models.PROTECT,
+        related_name="transfer_history",
+    )
+    source_storage_backend = models.CharField(max_length=10, choices=StorageImageMetadata.STORAGE_CHOICES)
+    destination_storage_backend = models.CharField(max_length=10, choices=StorageImageMetadata.STORAGE_CHOICES)
+    source_destination = models.ForeignKey(
+        StorageDestination,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_transfers",
+    )
+    destination_destination = models.ForeignKey(
+        StorageDestination,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dest_transfers",
+    )
+    file_size = models.PositiveBigIntegerField(default=0)
+    source_checksum = models.CharField(max_length=64, blank=True, default="")
+    destination_checksum = models.CharField(max_length=64, blank=True, default="")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    retry_count = models.PositiveIntegerField(default=0)
+    error_code = models.CharField(max_length=50, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = "vision_storage_transfer_history"
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(fields=["image_metadata", "status"], name="vi_xfer_meta_status_idx"),
+            models.Index(fields=["destination_destination", "status"], name="vi_xfer_dest_status_idx"),
+            models.Index(fields=["started_at"], name="vi_xfer_started_idx"),
+        ]
+        verbose_name = "Storage Transfer History"
+        verbose_name_plural = "Storage Transfer History"
+
+    def __str__(self):
+        return f"Transfer {self.pk} — {self.status}"
+
+
+class StorageMigrationJob(models.Model):
+    """Durable progress for bounded, resumable historical image migration."""
+
+    STATUS_PENDING = "PENDING"
+    STATUS_RUNNING = "RUNNING"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "Pending"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    )
+
+    source_destination = models.ForeignKey(
+        StorageDestination,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="migration_jobs_from",
+    )
+    destination = models.ForeignKey(
+        StorageDestination,
+        on_delete=models.PROTECT,
+        related_name="migration_jobs_to",
+    )
+    delete_originals = models.BooleanField(default=False)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    last_metadata_id = models.PositiveBigIntegerField(default=0)
+    total_count = models.PositiveIntegerField(default=0)
+    success_count = models.PositiveIntegerField(default=0)
+    failure_count = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vision_storage_migration_job"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Storage migration {self.pk} — {self.status}"
+
+
+# =========================================================================== #
+#  End of Storage Models
+# =========================================================================== #
 
 
 
