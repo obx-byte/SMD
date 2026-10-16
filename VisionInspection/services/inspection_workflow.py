@@ -34,7 +34,11 @@ from VisionInspection.services.camera_service import (
     get_camera_capabilities,
 )
 from VisionInspection.services.yolo_service import YOLOModelService
-from VisionInspection.services.model_registry import ModelLoadError, ModelRegistry
+from VisionInspection.services.model_registry import (
+    ModelLoadError,
+    ModelRegistry,
+    ModelRuntimeUnavailableError,
+)
 from VisionInspection.services import storage_service
 from VisionInspection.services.part_configuration import (
     store_validation,
@@ -421,7 +425,10 @@ class InspectionWorkflow:
         discovered_classes = {}
         for association in associations:
             try:
-                model_info = self._model_registry.inspect(association.model.model_path)
+                model_info = self._model_registry.inspect(
+                    association.model.model_path,
+                    task=association.task_type,
+                )
             except ModelLoadError as exc:
                 logger.warning(
                     "Configured model %s failed inspection: %s",
@@ -429,7 +436,11 @@ class InspectionWorkflow:
                     exc,
                 )
                 return configuration_error(
-                    "model_invalid",
+                    (
+                        "model_runtime_unavailable"
+                        if isinstance(exc, ModelRuntimeUnavailableError)
+                        else "model_invalid"
+                    ),
                     f"Configured model {association.model.name} could not be loaded: {exc}",
                 )
             if not model_info["ok"]:
@@ -438,9 +449,7 @@ class InspectionWorkflow:
                     f"Configured model {association.model.name} could not be loaded: {model_info['error']}",
                 )
             actual_task = model_info.get("task", "")
-            task_matches = actual_task == association.task_type or (
-                actual_task == "onnx" and association.task_type == "detect"
-            )
+            task_matches = actual_task == association.task_type
             if not task_matches:
                 return configuration_error(
                     "model_task_mismatch",
@@ -815,8 +824,12 @@ class InspectionWorkflow:
             ]
             if not rules:
                 continue
+            required_task = model_config.get("task_type", "segment")
             try:
-                model_info = self._model_registry.inspect(model_config["path"])
+                model_info = self._model_registry.inspect(
+                    model_config["path"],
+                    task=required_task,
+                )
             except ModelLoadError as exc:
                 logger.exception(
                     "Model inspection failed during %s inference for session %s",
@@ -829,11 +842,8 @@ class InspectionWorkflow:
                     f"Configured model {model_config['name']} could not be loaded: "
                     f"{model_info['error']}"
                 )
-            required_task = model_config.get("task_type", "segment")
             actual_task = model_info.get("task", "")
-            task_matches = actual_task == required_task or (
-                actual_task == "onnx" and required_task == "detect"
-            )
+            task_matches = actual_task == required_task
             if not task_matches:
                 return None, None, (
                     f"Configured model {model_config['name']} is marked as "
@@ -854,6 +864,7 @@ class InspectionWorkflow:
                     crop,
                     conf=threshold,
                     classes=class_ids,
+                    task=required_task,
                 )
             except ModelLoadError as exc:
                 logger.exception(

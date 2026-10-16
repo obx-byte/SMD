@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Inspection History - Vision Inspection</title>
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}?v=20261015-1">
     <link rel="stylesheet" href="{% static 'VisionInspection/css/configuration.css' %}">
 </head>
 <body>
@@ -21,6 +21,7 @@
 
     <section class="vi-history-section">
         <h2>Inspection Records</h2>
+        <div class="vi-table-wrap">
         <table class="vi-table">
             <thead>
                 <tr>
@@ -57,6 +58,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     </section>
 
     {% if log %}
@@ -102,6 +104,7 @@
 
         <!-- ROI Results -->
         <h3>ROI Results</h3>
+        <div class="vi-table-wrap">
         <table class="vi-table">
             <thead>
                 <tr>
@@ -124,9 +127,11 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
 
         <!-- Detected Objects -->
         <h3>Detected Objects</h3>
+        <div class="vi-table-wrap">
         <table class="vi-table">
             <thead>
                 <tr>
@@ -145,6 +150,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
 
         {% if inspection_image_url %}
         <h3>Inspection Image</h3>

@@ -144,12 +144,9 @@ JAZZMIN_SETTINGS = {
     'site_title': 'SMD Admin',
     'site_header': 'SMD - Surface Mount Device Inspection',
     'site_brand': 'SMD Inspection System',
-    'site_logo': 'vision_inspection/img/logo.png',
-    'site_logo_sm': 'vision_inspection/img/logo.png',
-    'site_favicon': 'vision_inspection/img/favicon.ico',
     'welcome_sign': 'Welcome to SMD Inspection',
     'copyright': 'SMD Inspection System',
-    'search_model': 'VisionInspection.visioninspectionpreset',
+    'search_model': 'vision_inspection.visioninspectionpreset',
     'user_avatar': None,
     'top_menu': [
         {'app': 'VisionInspection', 'name': 'Dashboard'},

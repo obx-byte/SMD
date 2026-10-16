@@ -4,148 +4,161 @@
 {% block title %}Dashboard — Airbag Stitch Inspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261015-1">
 {% endblock %}
 
 {% block header_title %}Dashboard{% endblock %}
 
-{# Header actions are unchanged — the Inspection (Vision) button opens the workspace. #}
 {% block header_actions %}
-    <a href="{% url 'VisionInspection:inspection' %}" class="vi-theme-toggle" title="Open the Airbag Stitch Inspection workspace"
-       style="background:linear-gradient(160deg,var(--vi-accent),var(--vi-accent-light));border-color:transparent;color:#fff;text-decoration:none">
-        &#9679; Vision
-    </a>
-    {% if user.is_authenticated %}
-        <span class="vi-header-user">{{ user.get_full_name|default:user.username }}</span>
-        {% if user.is_staff %}<span class="vi-header-role">Admin</span>{% endif %}
-    {% else %}
-        <span class="vi-header-user">Operator</span>
-    {% endif %}
+    <span class="vi-header-user">{% if user.is_authenticated %}{{ user.get_full_name|default:user.username }}{% else %}Operator{% endif %}</span>
+    {% if user.is_staff %}<span class="vi-header-role">Admin</span>{% endif %}
 {% endblock %}
 
 {% block content %}
 <div class="vi-dash">
-
-    {# ============ Heading ============ #}
-    <div class="vi-page-head">
+    <section class="vi-dash-heading" aria-labelledby="dashboardTitle">
         <div>
-            <h2 class="vi-page-title">Dashboard</h2>
+            <p class="vi-dash-eyebrow">AIRBAG STITCH INSPECTION</p>
+            <h2 class="vi-page-title" id="dashboardTitle">Dashboard</h2>
             <p class="vi-page-subtitle">Airbag Stitch Inspection Overview</p>
         </div>
-        <a class="vi-btn vi-btn-primary" href="{% url 'VisionInspection:inspection' %}" title="Open the Airbag Stitch Inspection workspace">
-            &#9654; Inspection
+        <a class="vi-btn vi-btn-primary vi-dash-start" href="{% url 'VisionInspection:inspection' %}">
+            <span aria-hidden="true">&#9654;</span> Start Inspection
         </a>
-    </div>
+    </section>
 
-    {# ============ Part filter ============ #}
-    <div class="vi-card vi-filter-card">
-        <form method="get" action="{% url 'VisionInspection:dashboard' %}" class="vi-filter-row">
-            <div class="vi-field">
-                <label for="dashPartFilter">Part</label>
-                <select id="dashPartFilter" name="part" class="vi-control">
-                    <option value="">All Parts</option>
-                    {% for part in parts %}
-                        <option value="{{ part.part_number }}" {% if part.part_number == selected_part %}selected{% endif %}>
-                            {{ part.part_number }}{% if part.part_name %} — {{ part.part_name }}{% endif %}
-                        </option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="vi-filter-actions">
-                <button type="submit" class="vi-btn vi-btn-primary">&#128269; Filter</button>
-                <a class="vi-btn" href="{% url 'VisionInspection:dashboard' %}">&#8634; Reset</a>
-            </div>
-            {% if selected_part %}
-                <span class="vi-filter-note">Showing records for part {{ selected_part }}</span>
-            {% endif %}
-        </form>
-    </div>
+    <form method="get" action="{% url 'VisionInspection:dashboard' %}" class="vi-card vi-dash-filter">
+        <div class="vi-dash-filter-field">
+            <label for="dashPartFilter">Part</label>
+            <select id="dashPartFilter" name="part" class="vi-control">
+                <option value="">All Parts</option>
+                {% for part in parts %}
+                    <option value="{{ part.part_number }}" {% if part.part_number == selected_part %}selected{% endif %}>
+                        {{ part.part_number }}{% if part.part_name %} — {{ part.part_name }}{% endif %}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="vi-dash-filter-actions">
+            <button type="submit" class="vi-btn vi-btn-primary"><span aria-hidden="true">&#128269;</span> Filter</button>
+            <a class="vi-btn vi-btn-secondary" href="{% url 'VisionInspection:dashboard' %}"><span aria-hidden="true">&#8634;</span> Reset</a>
+        </div>
+        {% if selected_part %}
+            <p class="vi-dash-filter-note">Showing results for {{ selected_part }}</p>
+        {% endif %}
+    </form>
 
-    {# ============ Summary cards ============ #}
-    <div class="vi-grid vi-grid-cols-4">
-        <div class="vi-card vi-kpi" data-tone="blue">
-            <span class="vi-kpi-icon" aria-hidden="true">&#128203;</span>
-            <div class="vi-kpi-body">
-                <div class="vi-kpi-value">{{ summary.total }}</div>
-                <div class="vi-kpi-label">Total Inspections</div>
-                <div class="vi-kpi-sub">{% if selected_part %}{{ selected_part }}{% else %}All parts{% endif %}</div>
+    <section class="vi-dash-kpis" aria-label="Inspection summary">
+        <article class="vi-card vi-dash-kpi" data-tone="purple">
+            <span class="vi-dash-kpi-icon" aria-hidden="true">&#9638;</span>
+            <div>
+                <p class="vi-dash-kpi-label">Total Inspections</p>
+                <p class="vi-dash-kpi-value">{{ summary.total }}</p>
+                <p class="vi-dash-kpi-note">{% if selected_part %}Part {{ selected_part }}{% else %}All parts{% endif %}</p>
             </div>
-        </div>
-        <div class="vi-card vi-kpi" data-tone="green">
-            <span class="vi-kpi-icon" aria-hidden="true">&#10003;</span>
-            <div class="vi-kpi-body">
-                <div class="vi-kpi-value">{{ summary.ok }}</div>
-                <div class="vi-kpi-label">Total OK</div>
-                <div class="vi-kpi-sub">{{ summary.ok_pct|floatformat:"1" }}% of records</div>
+        </article>
+        <article class="vi-card vi-dash-kpi" data-tone="green">
+            <span class="vi-dash-kpi-icon" aria-hidden="true">&#10003;</span>
+            <div>
+                <p class="vi-dash-kpi-label">Total OK</p>
+                <p class="vi-dash-kpi-value">{{ summary.ok }}</p>
+                <p class="vi-dash-kpi-note">{{ summary.ok_pct|floatformat:"1" }}% of inspections</p>
             </div>
-        </div>
-        <div class="vi-card vi-kpi" data-tone="red">
-            <span class="vi-kpi-icon" aria-hidden="true">&#10005;</span>
-            <div class="vi-kpi-body">
-                <div class="vi-kpi-value">{{ summary.not_ok }}</div>
-                <div class="vi-kpi-label">Total NOT OK</div>
-                <div class="vi-kpi-sub">{{ summary.not_ok_pct|floatformat:"1" }}% of records</div>
+        </article>
+        <article class="vi-card vi-dash-kpi" data-tone="red">
+            <span class="vi-dash-kpi-icon" aria-hidden="true">&#10005;</span>
+            <div>
+                <p class="vi-dash-kpi-label">Total NOT OK</p>
+                <p class="vi-dash-kpi-value">{{ summary.not_ok }}</p>
+                <p class="vi-dash-kpi-note">{{ summary.not_ok_pct|floatformat:"1" }}% of inspections</p>
             </div>
-        </div>
-        <div class="vi-card vi-kpi" data-tone="purple">
-            <span class="vi-kpi-icon" aria-hidden="true">&#9888;</span>
-            <div class="vi-kpi-body">
-                <div class="vi-kpi-value">{{ summary.incomplete_error }}</div>
-                <div class="vi-kpi-label">Incomplete / Error</div>
-                <div class="vi-kpi-sub">{{ summary.incomplete_error_pct|floatformat:"1" }}% of records</div>
-            </div>
-        </div>
-    </div>
+        </article>
+    </section>
 
-    {# ============ Recent inspection results ============ #}
-    <div class="vi-card vi-panel">
-        <div class="vi-card-head">
-            <h3 class="vi-card-title">Recent Inspection Results</h3>
-            <a class="vi-btn vi-btn-sm vi-btn-primary" href="{% url 'VisionInspection:history' %}" title="Open the Inspection History page">
-                View All
-            </a>
-        </div>
-        <div class="vi-table-wrap">
-            <table class="vi-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Date &amp; Time</th>
-                        <th>Part No.</th>
-                        <th>Part Name</th>
-                        <th>Employee</th>
-                        <th>Result</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in recent_rows %}
-                        <tr data-report-row>
-                            <td>{{ forloop.counter }}</td>
-                            <td>{{ row.log.timestamp|date:"Y-m-d H:i:s" }}</td>
-                            <td>{{ row.log.part_number|default:"—" }}</td>
-                            <td>{{ row.part_name|default:"—" }}</td>
-                            <td>{{ row.employee_label }}</td>
-                            <td><span class="vi-badge {{ row.result_badge }}">{{ row.result_label }}</span></td>
-                            <td>
-                                <a class="vi-btn vi-btn-sm" href="{% url 'VisionInspection:history-detail' row.log.pk %}"
-                                   title="View inspection details" aria-label="View inspection details">&#128065;</a>
-                            </td>
-                        </tr>
-                    {% empty %}
-                        <tr>
-                            <td colspan="7">
-                                <div class="vi-empty">
-                                    <div class="vi-empty-icon">&#9702;</div>
-                                    <div class="vi-empty-title">No inspection records yet</div>
-                                    <div class="vi-empty-text">Records appear here automatically as inspections are completed{% if selected_part %} for part {{ selected_part }}{% endif %}.</div>
+    <section class="vi-dash-analytics" aria-label="Inspection analytics">
+        <article class="vi-card vi-dash-chart-card">
+            <header class="vi-dash-card-heading">
+                <div>
+                    <p class="vi-dash-card-eyebrow">QUALITY OVERVIEW</p>
+                    <h3>Inspection Result Distribution</h3>
+                </div>
+                {% if selected_part %}<span class="vi-dash-part-chip">{{ selected_part }}</span>{% endif %}
+            </header>
+            <div class="vi-dash-donut-layout">
+                <div class="vi-dash-donut"
+                     style="--ok-sweep: {{ donut_ok_degrees }}deg; --classified-sweep: {{ donut_classified_degrees }}deg"
+                     role="img"
+                     aria-label="Inspection outcomes: {{ summary.ok }} OK, {{ summary.not_ok }} NOT OK, {{ summary.incomplete_error }} other or incomplete, {{ summary.total }} total">
+                    <div class="vi-dash-donut-hole">
+                        <strong>{{ summary.total }}</strong>
+                        <span>Inspections</span>
+                    </div>
+                </div>
+                <div class="vi-dash-legend">
+                    <div class="vi-dash-legend-item">
+                        <span class="vi-dash-legend-dot is-ok"></span>
+                        <span class="vi-dash-legend-label">OK</span>
+                        <strong>{{ summary.ok }}</strong>
+                        <small>{{ summary.ok_pct|floatformat:"1" }}%</small>
+                    </div>
+                    <div class="vi-dash-legend-item">
+                        <span class="vi-dash-legend-dot is-not-ok"></span>
+                        <span class="vi-dash-legend-label">NOT OK</span>
+                        <strong>{{ summary.not_ok }}</strong>
+                        <small>{{ summary.not_ok_pct|floatformat:"1" }}%</small>
+                    </div>
+                    {% if summary.incomplete_error %}
+                        <p class="vi-dash-chart-note">{{ summary.incomplete_error }} incomplete/error result{{ summary.incomplete_error|pluralize }} shown in the total.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </article>
+
+        <article class="vi-card vi-dash-chart-card">
+            <header class="vi-dash-card-heading">
+                <div>
+                    <p class="vi-dash-card-eyebrow">PRODUCTION BREAKDOWN</p>
+                    <h3>Part Wise Inspection</h3>
+                </div>
+                <div class="vi-dash-chart-key" aria-label="Chart legend">
+                    <span><i class="is-ok"></i> OK</span>
+                    <span><i class="is-not-ok"></i> NOT OK</span>
+                </div>
+            </header>
+            {% if part_rows %}
+                <div class="vi-dash-bar-axis" aria-hidden="true">
+                    <span>Part number</span>
+                    <div><span>0</span><span>{{ chart_mid }}</span><span>{{ chart_max }}</span></div>
+                </div>
+                <div class="vi-dash-bars" role="list" aria-label="OK and NOT OK inspection counts by part number">
+                    {% for row in part_rows %}
+                        <div class="vi-dash-bar-row" role="listitem" data-part-number="{{ row.part_number }}">
+                            <div class="vi-dash-bar-label" title="{{ row.part_number }}{% if row.part_name %} — {{ row.part_name }}{% endif %}">
+                                <strong>{{ row.part_number }}</strong>
+                                {% if row.part_name %}<span>{{ row.part_name }}</span>{% endif %}
+                            </div>
+                            <div class="vi-dash-bar-values">
+                                <div class="vi-dash-bar-track{% if not row.ok %} is-empty{% endif %}" aria-label="{{ row.ok }} OK">
+                                    <span class="vi-dash-bar is-ok" style="width: {{ row.ok_width }}%"></span>
+                                    <b>{{ row.ok }}</b>
                                 </div>
-                            </td>
-                        </tr>
+                                <div class="vi-dash-bar-track{% if not row.not_ok %} is-empty{% endif %}" aria-label="{{ row.not_ok }} NOT OK">
+                                    <span class="vi-dash-bar is-not-ok" style="width: {{ row.not_ok_width }}%"></span>
+                                    <b>{{ row.not_ok }}</b>
+                                </div>
+                            </div>
+                            <span class="vi-dash-bar-total" title="Total inspections">{{ row.total }}</span>
+                        </div>
                     {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+                </div>
+            {% else %}
+                <div class="vi-dash-empty">
+                    <span aria-hidden="true">&#9638;</span>
+                    <strong>No inspection results yet</strong>
+                    <p>Part results will appear here after inspections are recorded.</p>
+                </div>
+            {% endif %}
+        </article>
+    </section>
 </div>
 {% endblock %}

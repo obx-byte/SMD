@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Preset Management - Vision Inspection</title>
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}?v=20261015-1">
     <link rel="stylesheet" href="{% static 'VisionInspection/css/configuration.css' %}">
 </head>
 <body>
@@ -25,6 +25,7 @@
             <a href="/vision-inspection/configuration/" class="vi-btn vi-btn-primary">New Preset</a>
         </div>
 
+        <div class="vi-table-wrap">
         <table class="vi-table">
             <thead>
                 <tr>
@@ -66,6 +67,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     </section>
 </div>
 

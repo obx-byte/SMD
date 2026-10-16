@@ -4,7 +4,7 @@
 {% block title %}Inspection Report — VisionInspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}?v=20261015-1">
 {% endblock %}
 
 {% block header_title %}Inspection Report{% endblock %}
@@ -16,7 +16,7 @@
     <div class="vi-page-head">
         <div>
             <h2 class="vi-page-title">Inspection Report</h2>
-            <p class="vi-page-subtitle">View and export Airbag Stitch Inspection records.</p>
+            <p class="vi-page-subtitle">View{% if user.is_staff %} and export{% endif %} Airbag Stitch Inspection records.</p>
         </div>
     </div>
 
@@ -80,7 +80,7 @@
                 <button type="submit" class="vi-btn vi-btn-primary">&#128269; Search</button>
                 <a class="vi-btn" href="{% url 'VisionInspection:ui-reports' %}">&#8634; Reset</a>
                 {% if filters_active %}
-                    <span class="vi-filter-note">Filters applied — exports and the summary cards use the same selection.</span>
+                    <span class="vi-filter-note">Filters applied — {% if user.is_staff %}exports and {% endif %}the summary cards use the same selection.</span>
                 {% endif %}
             </div>
         </form>
@@ -127,10 +127,12 @@
         <div class="vi-report-toolbar">
             <h3 class="vi-card-title">Inspection Records</h3>
             <div class="vi-report-tools">
+                {% if user.is_staff %}
                 <a class="vi-btn vi-btn-success" href="{% url 'VisionInspection:ui-report-export-excel' %}{% if export_query %}?{{ export_query }}{% endif %}"
                    title="Export the filtered records as an Excel workbook">&#128196; Export Excel</a>
                 <a class="vi-btn vi-btn-danger" href="{% url 'VisionInspection:ui-report-export-pdf' %}{% if export_query %}?{{ export_query }}{% endif %}"
                    title="Export the filtered records as a PDF document">&#128196; Export PDF</a>
+                {% endif %}
                 <button type="button" class="vi-btn" id="reportPrintBtn" title="Print the report">&#128424; Print</button>
                 <input type="text" id="reportSearch" class="vi-report-search" placeholder="Search…" aria-label="Search records">
                 <span class="vi-report-page-size">

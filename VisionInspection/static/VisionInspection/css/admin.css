@@ -90,6 +90,11 @@ body {
     background: var(--vi-bg);
     color: var(--vi-text);
     overflow-x: hidden;
+    overflow-y: auto;
+}
+
+body.vi-inspection-chrome {
+    overflow: hidden;
 }
 
 /* Sidebar â€” purple gradient, logo, connected child markers */
@@ -1227,7 +1232,7 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle {
 
 
 /* ---------------------------------------------------------------------------
-   SMD BRANDING — navy header + dark navy sidebar (Airbag Stitch Inspection)
+   SMD BRANDING ï¿½ navy header + dark navy sidebar (Airbag Stitch Inspection)
    --------------------------------------------------------------------------- */
 :root,
 [data-theme="purple"],

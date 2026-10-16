@@ -10,10 +10,11 @@ opens the application URL and lands directly on Inspection Master.  Routes are
 split into two groups:
 
 ``station``  — operator routes that must work anonymously (inspection master,
-    live inspection, camera, ROI, workflow, history, traceability, state).
+    live inspection, camera, ROI, workflow, history, traceability, state, and
+    the read-only Inspection Report).
 
 ``admin``    — privileged routes (configuration setup, model registry,
-    master data, training, reports, settings).  These are wrapped with
+    master data, training, report exports, settings).  These are wrapped with
     :func:`~django.contrib.admin.views.decorators.staff_member_required`, so
     they keep a Django login and never become public.  Authentication
     middleware, CSRF protection and database permissions are left enabled.
@@ -331,7 +332,8 @@ urlpatterns = [
         name="ui-training-jobs",
     ),
     # ------------------------------------------------------------------ #
-    #  Inspection Report — exports reuse the report filters (staff only)
+    #  Inspection Report — operator page is available without login; exports
+    #  remain staff-only because they download report data.
     # ------------------------------------------------------------------ #
     admin(
         "reports/export/excel/",
@@ -343,7 +345,7 @@ urlpatterns = [
         ui_views.report_export_pdf,
         name="ui-report-export-pdf",
     ),
-    admin("reports/", ui_views.reports, name="ui-reports"),
+    station("reports/", ui_views.reports, name="ui-reports"),
     admin("settings/", ui_views.settings_page, name="ui-settings"),
     station("settings/storage/", ui_views.storage_settings, name="storage-settings"),
     station("api/storage/state/", storage_views.state, name="storage-state"),

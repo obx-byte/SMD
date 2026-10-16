@@ -9,7 +9,7 @@ from datetime import datetime
 
 from django.conf import settings
 from django.core.paginator import Paginator
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
 
@@ -52,24 +52,60 @@ def _parts_for_filter():
 
 
 def dashboard(request):
-    """Airbag Stitch Inspection overview — summary cards + latest results.
+    """Airbag Stitch Inspection overview with live counts grouped by part.
 
     Every displayed number is aggregated from the inspection records stored in
-    the database; the optional part filter restricts the summary cards and the
-    recent results alike.
+    the database; the optional part filter restricts the summary cards and
+    charts alike.
     """
     filters = records.read_filters(request.GET)
     logs = records.filter_logs(None, filters)
+    summary = records.summarize(logs)
 
-    recent_logs = logs.order_by("-timestamp", "-pk")[: records.RECENT_LIMIT]
+    parts = _parts_for_filter()
+    part_names = {part["part_number"]: part["part_name"] for part in parts}
+    grouped_parts = list(
+        logs.values("part_number")
+        .annotate(
+            total=Count("pk"),
+            ok=Count("pk", filter=Q(result=records.RESULT_OK)),
+            not_ok=Count("pk", filter=Q(result=records.RESULT_NOT_OK)),
+        )
+        .order_by("-total", "part_number")
+    )
+    chart_max = max((row["total"] for row in grouped_parts), default=0)
+    classified_total = summary["ok"] + summary["not_ok"]
+    part_rows = [
+        {
+            "part_number": row["part_number"] or "Unknown",
+            "part_name": part_names.get(row["part_number"] or "", ""),
+            "total": row["total"],
+            "ok": row["ok"],
+            "not_ok": row["not_ok"],
+            "ok_width": round(100 * row["ok"] / chart_max, 1) if chart_max else 0,
+            "not_ok_width": (
+                round(100 * row["not_ok"] / chart_max, 1) if chart_max else 0
+            ),
+        }
+        for row in grouped_parts
+    ]
+
     context = {
         "sidebar_active": "dashboard",
         "filters": filters,
         "selected_part": filters["part"],
-        "parts": _parts_for_filter(),
-        "summary": records.summarize(logs),
-        "recent_rows": records.build_rows(recent_logs),
-        "recent_total": logs.count(),
+        "parts": parts,
+        "summary": summary,
+        "classified_total": classified_total,
+        "donut_ok_degrees": (
+            round(360 * summary["ok"] / classified_total, 1)
+            if classified_total
+            else 0
+        ),
+        "donut_classified_degrees": 360 if classified_total else 0,
+        "part_rows": part_rows,
+        "chart_max": chart_max,
+        "chart_mid": round(chart_max / 2),
     }
     return render(request, "VisionInspection/ui/dashboard.html", context)
 

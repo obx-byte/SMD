@@ -77,7 +77,11 @@ from VisionInspection.services.part_configuration import (
     validate_configuration,
     validate_data_yaml,
 )
-from VisionInspection.services.model_registry import ModelLoadError, registry
+from VisionInspection.services.model_registry import (
+    ModelLoadError,
+    ModelRuntimeUnavailableError,
+    registry,
+)
 from VisionInspection.services.yolo_service import YOLOModelService
 
 logger = logging.getLogger(__name__)
@@ -1835,7 +1839,12 @@ def workflow_validate_model(request):
     if not safe_result.get("ok"):
         safe_result["error_code"] = safe_result.get("state", "model_validation_failed")
         state = safe_result.get("state")
-        status = 404 if state == "part_not_found" else 422
+        if state == "part_not_found":
+            status = 404
+        elif state == "model_runtime_unavailable":
+            status = 503
+        else:
+            status = 422
     else:
         status = 200
 
@@ -1903,6 +1912,8 @@ def workflow_inspect_side(request, side):
         status = 503
     elif state in ("model_invalid", "model_task_mismatch", "configuration_invalid"):
         status = 422
+    elif state in ("front_error", "back_error"):
+        status = 500
     else:
         status = 400
     logger.warning(
@@ -1949,13 +1960,13 @@ def workflow_cancel(request):
 
 
 def _discover_configurable_classes(model):
-    service = YOLOModelService()
-    if not service.load_model(model.model_path):
+    try:
+        info = registry.inspect(model.model_path, task="segment")
+    except ModelLoadError:
         return None
-    return [
-        {"id": class_id, "name": name}
-        for class_id, name in enumerate(service.get_class_names())
-    ]
+    if not info["ok"] or info.get("task") != "segment":
+        return None
+    return info["classes"]
 
 
 @require_GET
@@ -2195,10 +2206,19 @@ def api_part_vision_preview(request, part_id):
 @require_GET
 def api_yolo_model_classes(request, model_id):
     model = get_object_or_404(VisionYOLOModel, pk=model_id)
-    classes = _discover_configurable_classes(model)
-    if classes is None or not classes:
-        return _error("The registered model could not be validated for class discovery.", status=422)
-    return _json_response({"model_id": model.id, "classes": classes})
+    try:
+        info = registry.inspect(model.model_path, task="segment")
+    except ModelRuntimeUnavailableError as exc:
+        return _error(str(exc), status=503)
+    except ModelLoadError as exc:
+        return _error(str(exc), status=422)
+    if not info["ok"] or info.get("task") != "segment" or not info["classes"]:
+        return _error(
+            info.get("error")
+            or "The registered model is not a segmentation model with discoverable classes.",
+            status=422,
+        )
+    return _json_response({"model_id": model.id, "classes": info["classes"]})
 
 
 @require_POST
@@ -2234,10 +2254,13 @@ def part_model_upload(request):
         if written != upload.size:
             raise ValueError("Uploaded model size did not match the received data.")
 
-        service = YOLOModelService()
-        if not service.load_model(str(destination)):
-            raise ValueError("The model could not be loaded by the configured inference runtime.")
-        classes = service.get_class_names()
+        model_info = registry.inspect(str(destination), task="segment")
+        if not model_info["ok"] or model_info.get("task") != "segment":
+            raise ValueError(
+                model_info.get("error")
+                or "The uploaded model is not a segmentation model."
+            )
+        classes = model_info["classes"]
         if not classes:
             raise ValueError("The model did not expose class metadata.")
 
@@ -2250,6 +2273,20 @@ def part_model_upload(request):
             num_classes=len(classes),
             is_active=False,
         )
+    except ModelRuntimeUnavailableError as exc:
+        try:
+            if "destination" in locals():
+                destination.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Could not remove rejected uploaded model")
+        return _error(str(exc), status=503)
+    except ModelLoadError as exc:
+        try:
+            if "destination" in locals():
+                destination.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Could not remove rejected uploaded model")
+        return _error(str(exc), status=422)
     except (OSError, ValueError) as exc:
         try:
             if "destination" in locals():
@@ -2275,10 +2312,7 @@ def part_model_upload(request):
             "num_classes": model.num_classes,
             "is_active": model.is_active,
         },
-        "classes": [
-            {"id": class_id, "name": class_name}
-            for class_id, class_name in enumerate(classes)
-        ],
+        "classes": classes,
         "message": "Model uploaded, validated, and discovered successfully.",
     }, status=201)
 
@@ -2498,17 +2532,34 @@ def yolo_models_list(request):
 
 @require_POST
 def yolo_model_upload(request):
-    """Register a YOLO ``.pt`` model and verify it can be loaded."""
+    """Register and verify a supported YOLO model from its saved path."""
     data = _body_json(request)
     name = _clean(data.get("name"))
     model_path = _clean(data.get("model_path"))
     if not name or not model_path:
         return _error("Both a model name and a model path are required.")
 
+    if Path(model_path).suffix.lower() not in (".pt", ".onnx"):
+        return _error(
+            "Unsupported model format.",
+            {"model_path": "Choose a .pt or .onnx model file."},
+        )
     if not os.path.isfile(model_path):
         return _error(
             "The model file was not found on the server: " + model_path,
             {"model_path": "File does not exist on this system."},
+        )
+
+    try:
+        model_info = registry.inspect(model_path)
+    except ModelRuntimeUnavailableError as exc:
+        return _error(str(exc), status=503)
+    except ModelLoadError as exc:
+        return _error(str(exc), status=422)
+    if not model_info["ok"]:
+        return _error(
+            model_info.get("error") or "The model could not be inspected.",
+            status=422,
         )
 
     model = VisionYOLOModel.objects.create(
@@ -2516,19 +2567,16 @@ def yolo_model_upload(request):
         model_path=model_path,
         version=_clean(data.get("version")) or None,
         part_class=_clean(data.get("part_class")) or None,
-        num_classes=_as_int(data.get("num_classes"), 0),
+        num_classes=model_info["num_classes"],
     )
 
-    service = YOLOModelService()
-    loaded = service.load_model(model_path)
     return _json_response(
         {
             "ok": True,
             "id": model.id,
             "name": model.name,
-            "loaded": loaded,
-            "message": "Model registered."
-            + (" Model loaded successfully." if loaded else " Model could not be loaded."),
+            "loaded": True,
+            "message": "Model registered and loaded successfully.",
         },
         status=201,
     )

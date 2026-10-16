@@ -748,7 +748,7 @@ class InspectionWorkflowTests(TestCase):
                 "models": [{
                     "model_id": model.id,
                     "name": "Configured segmentation",
-                    "path": "segmentation.pt",
+                    "path": "segmentation.onnx",
                     "task_type": "segment",
                     "classes": [{"id": 0, "name": "perimeter"}],
                     "rules": [{
@@ -778,7 +778,7 @@ class InspectionWorkflowTests(TestCase):
                         "task": "segment",
                         "classes": [{"id": 0, "name": "perimeter"}],
                     },
-                ), \
+                ) as inspect, \
                 mock.patch.object(
                     self.wf._model_registry,
                     "predict",
@@ -799,11 +799,79 @@ class InspectionWorkflowTests(TestCase):
         self.assertEqual(result["detections"][0]["y1"], 92)
         self.assertEqual(result["detections"][0]["polygon"][0], [138.0, 92.0])
         self.assertEqual(result["progress"]["front_verdict"], "OK")
+        self.assertEqual(inspect.call_args.args[0], "segmentation.onnx")
+        self.assertEqual(inspect.call_args.kwargs["task"], "segment")
+        self.assertEqual(predict.call_args.args[0], "segmentation.onnx")
+        self.assertEqual(predict.call_args.kwargs["task"], "segment")
         predicted_crop = predict.call_args.args[1]
         self.assertEqual(predicted_crop.shape[:2], (360, 640))
         session.refresh_from_db()
         self.assertEqual(session.front_results[0]["stitch"], "perimeter")
         self.assertEqual(session.front_results[0]["status"], "OK")
+
+    def test_configured_back_inference_uses_selected_onnx_segmentation_model(self):
+        from types import SimpleNamespace
+
+        model_config = {
+            "model_id": 57,
+            "name": "Back ONNX model",
+            "path": "back-segmentation.onnx",
+            "task_type": "segment",
+            "classes": [{"id": 3, "name": "back-stitch"}],
+            "rules": [{
+                "class_id": 3,
+                "class_name": "back-stitch",
+                "side": "BACK",
+                "front_threshold": 0.5,
+                "back_threshold": 0.7,
+                "expected_back": 1,
+                "required": True,
+                "acceptance_rule": "presence",
+                "priority": 1,
+            }],
+        }
+        session = SimpleNamespace(
+            session_id="onnx-back-test",
+            config_snapshot={"models": [model_config]},
+        )
+        detection = {
+            "class": "back-stitch",
+            "class_id": 3,
+            "confidence": 0.82,
+            "x1": 1,
+            "y1": 2,
+            "x2": 10,
+            "y2": 12,
+            "polygon": [[1, 2], [10, 2], [10, 12]],
+        }
+        with mock.patch.object(
+            self.wf._model_registry,
+            "inspect",
+            return_value={
+                "ok": True,
+                "task": "segment",
+                "classes": [{"id": 3, "name": "back-stitch"}],
+            },
+        ) as inspect, mock.patch.object(
+            self.wf._model_registry,
+            "predict",
+            return_value=([detection], 3.5),
+        ) as predict:
+            detections, results, error = self.wf._configured_side_results(
+                session,
+                "back",
+                _fake_frame(),
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(detections[0]["model_id"], 57)
+        self.assertEqual(results[0]["status"], "OK")
+        self.assertEqual(inspect.call_args.args[0], "back-segmentation.onnx")
+        self.assertEqual(inspect.call_args.kwargs["task"], "segment")
+        self.assertEqual(predict.call_args.args[0], "back-segmentation.onnx")
+        self.assertEqual(predict.call_args.kwargs["task"], "segment")
+        self.assertEqual(predict.call_args.kwargs["classes"], {3})
+        self.assertEqual(predict.call_args.kwargs["conf"], 0.7)
 
     # ---- Step 8: overall result matrix ---- #
     def test_result_ok_only_when_both_ok(self):
@@ -1068,7 +1136,8 @@ class StationAccessTests(TestCase):
         r = self.client.get("/vision-inspection/")
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "Airbag Stitch Inspection Overview")
-        self.assertContains(r, "Recent Inspection Results")
+        self.assertContains(r, "Inspection Result Distribution")
+        self.assertContains(r, "Part Wise Inspection")
         self.assertNotContains(r, "Sign in")
         self.assertNotContains(r, "/login/")
 
@@ -1182,6 +1251,28 @@ class StationApiTests(TestCase):
         self.assertEqual(response.json()["error_code"], "configuration_invalid")
         self.assertEqual(response.json()["validation_errors"], invalid_result["validation_errors"])
 
+        with patch("VisionInspection.views._workflow") as workflow:
+            workflow.return_value.validate_model.return_value = {
+                "ok": False,
+                "state": "model_runtime_unavailable",
+                "message": "ONNX Runtime is unavailable.",
+            }
+            unavailable = _post(
+                self.client,
+                url,
+                {"part_number": self.part.part_number},
+            )
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(
+            unavailable.json(),
+            {
+                "ok": False,
+                "state": "model_runtime_unavailable",
+                "message": "ONNX Runtime is unavailable.",
+                "error_code": "model_runtime_unavailable",
+            },
+        )
+
         missing_target = _post(self.client, url, {})
         self.assertEqual(missing_target.status_code, 400)
         self.assertEqual(missing_target.json()["error_code"], "validation_target_required")
@@ -1197,6 +1288,82 @@ class StationApiTests(TestCase):
                 response = _post(self.client, url, payload)
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(response.json()["error_code"], error_code)
+
+    def test_validate_model_returns_runtime_diagnostic_for_registered_onnx(self):
+        from unittest.mock import patch
+
+        from VisionInspection.models import (
+            VisionPartConfiguration,
+            VisionPartModel,
+        )
+        from VisionInspection.services.model_registry import ModelRegistry
+
+        class FakeYOLO:
+            def __init__(self, path, task=None):
+                self.task = task
+                self.names = {0: "stitch"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            model_path = os.path.join(directory, "stitch.onnx")
+            with open(model_path, "wb") as model_file:
+                model_file.write(b"onnx model")
+            model = VisionYOLOModel.objects.create(
+                name="ONNX segmentation",
+                model_path=model_path,
+                num_classes=1,
+            )
+            configuration = VisionPartConfiguration.objects.create(
+                part=self.part,
+                version=1,
+                inspection_mode=VisionPartConfiguration.MODE_FRONT_ONLY,
+                is_active=True,
+                status=VisionPartConfiguration.STATUS_READY,
+            )
+            VisionPartModel.objects.create(
+                configuration=configuration,
+                model=model,
+                task_type=VisionPartModel.TASK_SEGMENT,
+                classes=[{"id": 0, "name": "stitch"}],
+                num_classes=1,
+                is_enabled=True,
+            )
+
+            with patch.object(
+                ModelRegistry,
+                "_import_ultralytics",
+                return_value=FakeYOLO,
+            ), patch.object(ModelRegistry, "_import_onnx", return_value=None):
+                response = _post(
+                    self.client,
+                    reverse("VisionInspection:workflow-validate-model"),
+                    {"part_number": self.part.part_number},
+                )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error_code"], "model_runtime_unavailable")
+        self.assertIn("ONNX Runtime is unavailable", response.json()["message"])
+
+    def test_inspection_inference_errors_return_server_error(self):
+        from unittest.mock import patch
+
+        with patch("VisionInspection.views._workflow") as workflow:
+            workflow.return_value.run_side.return_value = {
+                "ok": False,
+                "state": "front_error",
+                "message": "Segmentation inference failed: invalid ONNX output.",
+            }
+            response = _post(
+                self.client,
+                reverse(
+                    "VisionInspection:workflow-inspect-side",
+                    kwargs={"side": "front"},
+                ),
+                {"session_id": "test-session"},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["state"], "front_error")
+        self.assertIn("invalid ONNX output", response.json()["message"])
 
     def test_presence_rules_with_zero_counts_save_reload_and_validate(self):
         from unittest.mock import patch
@@ -1699,8 +1866,12 @@ class StationApiTests(TestCase):
             name="Draft model", model_path=__file__, is_active=False
         )
         with patch(
-            "VisionInspection.views._discover_configurable_classes",
-            return_value=[{"id": 0, "name": "actual-class"}],
+            "VisionInspection.views.registry.inspect",
+            return_value={
+                "ok": True,
+                "task": "segment",
+                "classes": [{"id": 0, "name": "actual-class"}],
+            },
         ):
             response = self.client.get(
                 reverse("VisionInspection:api-yolo-model-classes", args=[model.pk])
@@ -1708,7 +1879,7 @@ class StationApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["classes"], [{"id": 0, "name": "actual-class"}])
 
-    def test_frontend_model_upload_discovers_classes_and_stores_inactive_model(self):
+    def test_frontend_model_upload_accepts_pt_and_onnx_and_discovers_classes(self):
         from unittest.mock import patch
         from django.core.files.uploadedfile import SimpleUploadedFile
         from django.test import override_settings
@@ -1716,22 +1887,51 @@ class StationApiTests(TestCase):
         with tempfile.TemporaryDirectory() as model_dir, override_settings(
             VISION_MODEL_OUTPUT_DIR=model_dir
         ):
-            with patch("VisionInspection.views.YOLOModelService.load_model", return_value=True), patch(
-                "VisionInspection.views.YOLOModelService.get_class_names",
-                return_value=["class-a", "class-b"],
-            ):
-                response = self.client.post(
-                    reverse("VisionInspection:part-model-upload"),
-                    {"version": "v2", "model_file": SimpleUploadedFile("safe.pt", b"model-bytes")},
-                )
-            self.assertEqual(response.status_code, 201, response.content)
-            model = VisionYOLOModel.objects.get(pk=response.json()["model"]["id"])
-            self.assertFalse(model.is_active)
-            self.assertEqual(model.num_classes, 2)
-            self.assertTrue(model.model_path.startswith(model_dir))
-            self.assertEqual(response.json()["classes"], [
-                {"id": 0, "name": "class-a"}, {"id": 1, "name": "class-b"},
-            ])
+            for suffix in (".pt", ".onnx"):
+                with self.subTest(suffix=suffix), patch(
+                    "VisionInspection.views.registry.inspect",
+                    return_value={
+                        "ok": True,
+                        "task": "segment",
+                        "num_classes": 2,
+                        "classes": [
+                            {"id": 0, "name": "class-a"},
+                            {"id": 1, "name": "class-b"},
+                        ],
+                    },
+                ) as inspect:
+                    response = self.client.post(
+                        reverse("VisionInspection:part-model-upload"),
+                        {
+                            "version": "v2",
+                            "model_file": SimpleUploadedFile(
+                                f"safe{suffix}", b"model-bytes"
+                            ),
+                        },
+                    )
+                    self.assertEqual(response.status_code, 201, response.content)
+                    model = VisionYOLOModel.objects.get(
+                        pk=response.json()["model"]["id"]
+                    )
+                    self.assertFalse(model.is_active)
+                    self.assertEqual(model.num_classes, 2)
+                    self.assertTrue(model.model_path.startswith(model_dir))
+                    self.assertEqual(
+                        os.path.splitext(model.model_path)[1].lower(),
+                        suffix,
+                    )
+                    self.assertEqual(
+                        response.json()["classes"],
+                        [
+                            {"id": 0, "name": "class-a"},
+                            {"id": 1, "name": "class-b"},
+                        ],
+                    )
+                    inspect.assert_called_once()
+                    self.assertEqual(
+                        inspect.call_args.kwargs["task"],
+                        "segment",
+                    )
 
     def test_frontend_model_upload_rejects_unsupported_extension(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
@@ -1742,6 +1942,52 @@ class StationApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertFalse(VisionYOLOModel.objects.exists())
+
+    def test_onnx_upload_reports_missing_runtime_and_invalid_model(self):
+        from unittest.mock import patch
+
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.test import override_settings
+        from VisionInspection.services.model_registry import (
+            ModelLoadError,
+            ModelRuntimeUnavailableError,
+        )
+
+        with tempfile.TemporaryDirectory() as model_dir, override_settings(
+            VISION_MODEL_OUTPUT_DIR=model_dir
+        ):
+            for exc, expected_status, message in (
+                (
+                    ModelRuntimeUnavailableError(
+                        "ONNX Runtime is unavailable for this architecture."
+                    ),
+                    503,
+                    "ONNX Runtime is unavailable",
+                ),
+                (
+                    ModelLoadError(
+                        "The ONNX model is invalid or incompatible."
+                    ),
+                    422,
+                    "invalid or incompatible",
+                ),
+            ):
+                with self.subTest(status=expected_status), patch(
+                    "VisionInspection.views.registry.inspect",
+                    side_effect=exc,
+                ):
+                    response = self.client.post(
+                        reverse("VisionInspection:part-model-upload"),
+                        {
+                            "model_file": SimpleUploadedFile(
+                                "uploaded.onnx",
+                                b"test onnx",
+                            ),
+                        },
+                    )
+                    self.assertEqual(response.status_code, expected_status)
+                    self.assertIn(message, response.json()["error"])
+                    self.assertFalse(VisionYOLOModel.objects.exists())
 
     def test_configuration_save_needs_explicit_confirmation(self):
         response = _post(
@@ -2129,6 +2375,253 @@ class StationApiTests(TestCase):
 
 
 class SegmentationPreviewRegistryTests(TestCase):
+    def test_empty_segmentation_results_are_safe(self):
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import ModelRegistry
+
+        class Result:
+            names = {0: "stitch"}
+            boxes = []
+            masks = None
+
+            def __init__(self, source):
+                self.source = source
+
+            def plot(self, **kwargs):
+                self.plot_options = kwargs
+                return self.source
+
+        class FakeYOLO:
+            task = "segment"
+
+            def __init__(self, path, task=None):
+                pass
+
+            def predict(self, **kwargs):
+                return [Result(kwargs["source"])]
+
+        frame = np.zeros((24, 24, 3), dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "empty.onnx")
+            with open(path, "wb") as model_file:
+                model_file.write(b"mock onnx")
+            with patch.object(
+                ModelRegistry,
+                "_import_ultralytics",
+                return_value=FakeYOLO,
+            ), patch.object(
+                ModelRegistry,
+                "_import_onnx",
+                return_value=object(),
+            ):
+                detections, rendered, _elapsed = ModelRegistry().predict_segmentation(
+                    path,
+                    frame,
+                )
+
+        self.assertEqual(detections, [])
+        self.assertEqual(rendered.shape, frame.shape)
+
+    def test_segmentation_detection_without_masks_is_rejected(self):
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import (
+            ModelLoadError,
+            ModelRegistry,
+        )
+
+        class Box:
+            cls = [0]
+            conf = [0.91]
+            xyxy = [[1, 1, 10, 10]]
+
+        class Result:
+            names = {0: "stitch"}
+            boxes = [Box()]
+            masks = None
+
+        class FakeYOLO:
+            task = "segment"
+
+            def __init__(self, path, task=None):
+                pass
+
+            def predict(self, **kwargs):
+                return [Result()]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "missing-masks.onnx")
+            with open(path, "wb") as model_file:
+                model_file.write(b"mock onnx")
+            with patch.object(
+                ModelRegistry,
+                "_import_ultralytics",
+                return_value=FakeYOLO,
+            ), patch.object(
+                ModelRegistry,
+                "_import_onnx",
+                return_value=object(),
+            ):
+                with self.assertRaisesRegex(ModelLoadError, "without masks"):
+                    ModelRegistry().predict_segmentation(
+                        path,
+                        np.zeros((24, 24, 3), dtype=np.uint8),
+                    )
+
+    def test_non_segmentation_model_is_rejected_by_preview(self):
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import (
+            ModelLoadError,
+            ModelRegistry,
+        )
+
+        class FakeYOLO:
+            def __init__(self, path, task=None):
+                self.task = "detect"
+                self.names = {0: "object"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "detect.onnx")
+            with open(path, "wb") as model_file:
+                model_file.write(b"mock onnx")
+            with patch.object(
+                ModelRegistry,
+                "_import_ultralytics",
+                return_value=FakeYOLO,
+            ), patch.object(
+                ModelRegistry,
+                "_import_onnx",
+                return_value=object(),
+            ):
+                with self.assertRaisesRegex(
+                    ModelLoadError,
+                    "does not expose Ultralytics segmentation results",
+                ):
+                    ModelRegistry().predict_segmentation(
+                        path,
+                        np.zeros((32, 32, 3), dtype=np.uint8),
+                    )
+
+    def test_onnx_is_loaded_and_inferred_through_cached_ultralytics_segmentation(self):
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import ModelRegistry
+
+        class Box:
+            cls = [0]
+            conf = [0.91]
+            xyxy = [[2, 3, 20, 25]]
+
+        class Mask:
+            xy = [[[2, 3], [20, 3], [20, 25]]]
+
+        class Result:
+            names = {0: "stitch"}
+            boxes = [Box()]
+            masks = Mask()
+
+        class FakeYOLO:
+            instances = []
+
+            def __init__(self, path, task=None):
+                self.task = task
+                self.names = {0: "stitch"}
+                self.calls = []
+                self.__class__.instances.append(self)
+
+            def predict(self, **kwargs):
+                self.calls.append(kwargs)
+                return [Result()]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "stitch.onnx")
+            with open(path, "wb") as model_file:
+                model_file.write(b"mock onnx")
+            FakeYOLO.instances.clear()
+
+            with patch.object(
+                ModelRegistry,
+                "_import_ultralytics",
+                return_value=FakeYOLO,
+            ), patch.object(
+                ModelRegistry,
+                "_import_onnx",
+                return_value=object(),
+            ):
+                registry = ModelRegistry()
+                info = registry.inspect(path, task="segment")
+                frame = np.zeros((32, 32, 3), dtype=np.uint8)
+                detections, elapsed = registry.predict(
+                    path,
+                    frame,
+                    conf=0.65,
+                    classes={0},
+                    task="segment",
+                )
+
+            self.assertTrue(info["ok"])
+            self.assertEqual(info["task"], "segment")
+            self.assertEqual(info["classes"], [{"id": 0, "name": "stitch"}])
+            self.assertEqual(len(FakeYOLO.instances), 1)
+            self.assertEqual(len(FakeYOLO.instances[0].calls), 1)
+            prediction = FakeYOLO.instances[0].calls[0]
+            self.assertIs(prediction["source"], frame)
+            self.assertEqual(prediction["conf"], 0.65)
+            self.assertEqual(prediction["iou"], 0.45)
+            self.assertEqual(prediction["verbose"], False)
+            self.assertEqual(prediction["task"], "segment")
+            self.assertEqual(detections[0]["class"], "stitch")
+            self.assertEqual(detections[0]["confidence"], 0.91)
+            self.assertEqual(detections[0]["polygon"], [[2.0, 3.0], [20.0, 3.0], [20.0, 25.0]])
+            self.assertIsInstance(elapsed, float)
+
+    def test_onnx_reports_missing_runtime_and_invalid_file_separately(self):
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import (
+            ModelLoadError,
+            ModelRegistry,
+            ModelRuntimeUnavailableError,
+        )
+
+        class FakeYOLO:
+            def __init__(self, path, task=None):
+                raise RuntimeError("invalid ONNX protobuf")
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "bad.onnx")
+            with open(path, "wb") as model_file:
+                model_file.write(b"not an ONNX model")
+
+            registry = ModelRegistry()
+            with patch.object(
+                ModelRegistry,
+                "_import_ultralytics",
+                return_value=FakeYOLO,
+            ), patch.object(ModelRegistry, "_import_onnx", return_value=None):
+                with self.assertRaisesRegex(
+                    ModelRuntimeUnavailableError,
+                    "ONNX Runtime is unavailable",
+                ):
+                    registry.inspect(path, task="segment")
+
+            with patch.object(
+                ModelRegistry,
+                "_import_ultralytics",
+                return_value=FakeYOLO,
+            ), patch.object(
+                ModelRegistry,
+                "_import_onnx",
+                return_value=object(),
+            ):
+                with self.assertRaisesRegex(
+                    ModelLoadError,
+                    "invalid or incompatible.*invalid ONNX protobuf",
+                ):
+                    registry.inspect(path, task="segment")
+
     def test_pt_and_onnx_models_are_cached_and_use_ultralytics_predict(self):
         from unittest.mock import patch
 
@@ -2181,6 +2674,10 @@ class SegmentationPreviewRegistryTests(TestCase):
                     ModelRegistry,
                     "_import_ultralytics",
                     return_value=FakeYOLO,
+                ), patch.object(
+                    ModelRegistry,
+                    "_import_onnx",
+                    return_value=object(),
                 ):
                     first = registry.predict_segmentation(
                         path,
@@ -2203,7 +2700,7 @@ class SegmentationPreviewRegistryTests(TestCase):
                 if suffix == ".onnx":
                     self.assertEqual(loaded_task, "segment")
                 else:
-                    self.assertIsNone(loaded_task)
+                    self.assertEqual(loaded_task, "segment")
                 self.assertEqual(
                     model.predict_calls[0],
                     {
@@ -2385,7 +2882,6 @@ class AdminProtectionTests(TestCase):
         "VisionInspection:training-dataset-paths",
         "VisionInspection:ui-settings",
         "VisionInspection:ui-employees",
-        "VisionInspection:ui-reports",
         "VisionInspection:ui-logs",
         "VisionInspection:api-dashboard-summary",
         "VisionInspection:preset-detail",
@@ -2697,6 +3193,36 @@ class InspectionWorkspaceUiTests(TestCase):
             ".ws:fullscreen",
         ):
             self.assertIn(declaration, css, "%s is missing" % declaration)
+
+    def test_shared_pages_scroll_except_the_start_inspection_screen(self):
+        """Shared chrome scrolls normally; only Start Inspection is fixed."""
+        from django.conf import settings
+
+        path = os.path.join(
+            settings.BASE_DIR, "VisionInspection", "static",
+            "VisionInspection", "css", "admin.css",
+        )
+        with open(path, encoding="utf-8") as handle:
+            css = handle.read()
+
+        body_rules = re.findall(r"(?m)^body \{([^}]*)\}", css)
+        inspection = re.search(r"(?m)^body\.vi-inspection-chrome \{([^}]*)\}", css)
+        self.assertTrue(body_rules)
+        self.assertIsNotNone(inspection)
+        self.assertTrue(any("overflow-y: auto" in rule for rule in body_rules))
+        self.assertIn("overflow: hidden", inspection.group(1))
+
+        inspection_css_path = os.path.join(
+            settings.BASE_DIR, "VisionInspection", "static",
+            "VisionInspection", "css", "inspection.css",
+        )
+        with open(inspection_css_path, encoding="utf-8") as handle:
+            inspection_css = handle.read()
+        self.assertIn("overflow-y: auto", inspection_css)
+        container = re.search(r"\.vi-container \{([^}]*)\}", inspection_css)
+        self.assertIsNotNone(container)
+        self.assertIn("min-height: 100vh", container.group(1))
+        self.assertNotRegex(container.group(1), r"(?m)^\s*height\s*:")
 
     def test_camera_frame_is_bounded(self):
         """Camera feeds stay contained by the active stage frame."""
@@ -3213,12 +3739,16 @@ def _card_values(html, body_marker):
     return values
 
 
-def _row_parts(html):
-    """Part numbers of the rendered record rows, in document order."""
-    return [
-        match.group(1)
-        for match in re.finditer(r'data-report-row[\s\S]*?<td>(P-\d+)</td>', html)
-    ]
+def _dashboard_card_values(html):
+    """Summary values rendered by the professional dashboard KPI cards."""
+    return {
+        match.group(1).strip(): match.group(2).strip()
+        for match in re.finditer(
+            r'class="vi-dash-kpi-label">([^<]+)</p>\s*'
+            r'<p class="vi-dash-kpi-value">([^<]+)</p>',
+            html,
+        )
+    }
 
 
 class DashboardPageTests(TestCase):
@@ -3244,48 +3774,64 @@ class DashboardPageTests(TestCase):
         self.assertContains(
             r, 'href="/vision-inspection/" class="vi-sidebar-link active"'
         )
+        self.assertContains(r, 'class="vi-sidebar-collapse" id="section-home"')
         self.assertContains(r, 'href="/vision-inspection/inspection/"')
 
-    def test_summary_cards_use_database_counts(self):
+    def test_three_summary_cards_use_database_counts_and_percentages(self):
         r = self.client.get(reverse("VisionInspection:dashboard"))
-        values = _card_values(r.content.decode(), "vi-dash")
+        html = r.content.decode()
+        values = _dashboard_card_values(html)
         self.assertEqual(values["Total Inspections"], "4")
         self.assertEqual(values["Total OK"], "2")
         self.assertEqual(values["Total NOT OK"], "1")
-        self.assertEqual(values["Incomplete / Error"], "1")
+        self.assertEqual(len(values), 3)
+        self.assertContains(r, "50.0% of inspections")
+        self.assertContains(r, "25.0% of inspections")
+        self.assertEqual(
+            len(re.findall(r'<article class="vi-card vi-dash-kpi"', html)),
+            3,
+        )
+        self.assertNotContains(r, "Incomplete / Error")
+        self.assertNotContains(r, "Recent Inspection Results")
+        self.assertNotContains(r, "data-report-row")
 
-    def test_part_filter_restricts_cards_and_rows(self):
+    def test_part_filter_restricts_cards_and_both_charts(self):
         r = self.client.get(reverse("VisionInspection:dashboard"), {"part": "P-1"})
         self.assertEqual(r.status_code, 200)
-        values = _card_values(r.content.decode(), "vi-dash")
+        html = r.content.decode()
+        values = _dashboard_card_values(html)
         self.assertEqual(values["Total Inspections"], "2")
         self.assertEqual(values["Total OK"], "1")
         self.assertEqual(values["Total NOT OK"], "1")
-        self.assertEqual(values["Incomplete / Error"], "0")
-        self.assertEqual(_row_parts(r.content.decode()), ["P-1", "P-1"])
-        self.assertContains(r, "Showing records for part P-1")
+        self.assertContains(r, "Showing results for P-1")
+        self.assertEqual(html.count('class="vi-dash-bar-row"'), 1)
+        self.assertContains(r, 'data-part-number="P-1"')
+        self.assertContains(r, 'aria-label="1 OK"')
+        self.assertContains(r, 'aria-label="1 NOT OK"')
 
         reset = self.client.get(reverse("VisionInspection:dashboard"))
         self.assertEqual(
-            _card_values(reset.content.decode(), "vi-dash")["Total Inspections"],
+            _dashboard_card_values(reset.content.decode())["Total Inspections"],
             "4",
         )
 
-    def test_recent_results_show_the_latest_six(self):
+    def test_part_chart_aggregates_real_results_without_showing_records(self):
         _records(
             ["P-1", "P-1"], ["OK", "NOT_OK"],
             base=datetime(2026, 6, 24, 10, 0, tzinfo=dt_timezone.utc),
-        )                                                          # two more, newer
-        r = self.client.get(reverse("VisionInspection:dashboard"))
-        rows = _row_parts(r.content.decode())
-        self.assertEqual(len(rows), 6)
-        # Newest first: the two newer records lead, the oldest two are gone.
-        self.assertEqual(rows, ["P-1", "P-1", "P-2", "P-1", "P-2", "P-1"])
-        newest = VisionInspectionLog.objects.order_by("-timestamp").first()
-        self.assertContains(
-            r, reverse("VisionInspection:history-detail", args=[newest.pk])
         )
-        self.assertContains(r, reverse("VisionInspection:history"))   # View All
+        r = self.client.get(reverse("VisionInspection:dashboard"))
+        html = r.content.decode()
+        rows = re.findall(
+            r'<div class="vi-dash-bar-row"[^>]*data-part-number="([^"]+)">',
+            html,
+        )
+        self.assertEqual(rows, ["P-1", "P-2"])
+        self.assertIn('data-part-number="P-1"', html)
+        self.assertIn('data-part-number="P-2"', html)
+        self.assertEqual(html.count('aria-label="2 OK"'), 1)
+        self.assertEqual(html.count('aria-label="2 NOT OK"'), 1)
+        self.assertNotIn("data-report-row", html)
 
     def test_part_dropdown_lists_database_parts(self):
         r = self.client.get(reverse("VisionInspection:dashboard"))
@@ -3298,14 +3844,21 @@ class DashboardPageTests(TestCase):
         for removed in (
             "viDashRoot", "viDashTrend", "viDashDonut", "viDashAlerts",
             "Real-Time Inspection Flow", "AI Inspection Results", "Quick Actions",
-            "System Status", "Welcome back",
+            "System Status", "Welcome back", "Recent Inspection Results",
         ):
             self.assertNotContains(r, removed)
 
     def test_empty_state_without_records(self):
         VisionInspectionLog.objects.all().delete()
         r = self.client.get(reverse("VisionInspection:dashboard"))
-        self.assertContains(r, "No inspection records yet")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            _dashboard_card_values(r.content.decode()),
+            {"Total Inspections": "0", "Total OK": "0", "Total NOT OK": "0"},
+        )
+        self.assertContains(r, "0.0% of inspections")
+        self.assertContains(r, "No inspection results yet")
+        self.assertContains(r, "--ok-sweep: 0deg")
 
 
 class InspectionReportTests(TestCase):
@@ -3343,16 +3896,53 @@ class InspectionReportTests(TestCase):
 
     # -- page ----------------------------------------------------------- #
 
-    def test_anonymous_access_is_redirected(self):
+    def test_anonymous_access_loads_custom_report(self):
         r = Client().get(reverse("VisionInspection:ui-reports"))
-        self.assertEqual(r.status_code, 302)
-        self.assertIn("/admin/login/", r.url)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Inspection Report")
+        self.assertContains(r, "P-1")
+        self.assertContains(r, "U-000123")
+        self.assertNotContains(r, reverse("VisionInspection:ui-report-export-excel"))
+        self.assertNotContains(r, reverse("VisionInspection:ui-report-export-pdf"))
+
+    def test_anonymous_report_shows_empty_state_when_filters_match_no_records(self):
+        r = Client().get(
+            reverse("VisionInspection:ui-reports"), {"part_number": "NO-SUCH-PART"}
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "No inspection records found")
+
+    def test_jazzmin_search_model_uses_the_registered_app_label(self):
+        from django.conf import settings
+        from django.contrib.auth import get_user_model
+        from django.test import Client
+
+        self.assertEqual(
+            settings.JAZZMIN_SETTINGS["search_model"],
+            "vision_inspection.visioninspectionpreset",
+        )
+        model_admin_url = reverse(
+            "admin:vision_inspection_visioninspectionpreset_changelist"
+        )
+        self.assertEqual(
+            model_admin_url, "/admin/vision_inspection/visioninspectionpreset/"
+        )
+        admin = get_user_model().objects.create_superuser(
+            username="superadmin", email="admin@example.com", password="password"
+        )
+        admin_client = Client()
+        self.assertTrue(
+            admin_client.login(username=admin.username, password="password")
+        )
+        self.assertEqual(admin_client.get(model_admin_url).status_code, 200)
 
     def test_report_shows_header_filters_and_cards(self):
         r = self.client.get(reverse("VisionInspection:ui-reports"))
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "Inspection Report")
         self.assertContains(r, "View and export Airbag Stitch Inspection records.")
+        self.assertContains(r, reverse("VisionInspection:ui-report-export-excel"))
+        self.assertContains(r, reverse("VisionInspection:ui-report-export-pdf"))
         for field in (
             "date_from", "date_to", "part", "employee", "result",
             "part_number", "part_name", "unique_number",

@@ -18,8 +18,8 @@
             }
         })();
     </script>
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}">
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}?v=20261015-1">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261015-2">
     {% block extra_head %}{% endblock %}
 </head>
 {# The Airbag Stitch Inspection station page uses the dark reference chrome. #}
@@ -34,7 +34,7 @@
             <!-- HOME -->
             <div class="vi-sidebar-section">
                 <div class="vi-sidebar-section-title" data-target="section-home">Home <span class="vi-caret">&#9656;</span></div>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-home">
+                <div class="vi-sidebar-collapse{% if sidebar_active != 'dashboard' %} vi-collapsed{% endif %}" id="section-home">
                     <a href="{% url 'VisionInspection:dashboard' %}" class="vi-sidebar-link {% if sidebar_active == 'dashboard' %}active{% endif %}"><span class="vi-sidebar-icon">&#9632;</span> Dashboard</a>
                 </div>
             </div>
