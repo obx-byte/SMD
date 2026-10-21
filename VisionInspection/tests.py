@@ -1619,7 +1619,7 @@ class StationAccessTests(TestCase):
     def test_root_url_opens_dashboard(self):
         r = self.client.get("/vision-inspection/")
         self.assertEqual(r.status_code, 200)
-        self.assertContains(r, "Airbag Stitch Inspection Overview")
+        self.assertContains(r, "Inspection Overview")
         self.assertContains(r, "Inspection Result Distribution")
         self.assertContains(r, "Part Wise Inspection")
         self.assertNotContains(r, "Sign in")
@@ -4565,6 +4565,7 @@ class DashboardPageTests(TestCase):
     """Acceptance — the Dashboard shows the real records, sidebar unchanged."""
 
     def setUp(self):
+        self.client, _user = _staff_client()
         VisionInspectionPart.objects.create(part_number="P-1", part_name="Airbag Front")
         VisionInspectionPart.objects.create(part_number="P-2", part_name="Airbag Rear")
         self.records = _records(
@@ -4575,7 +4576,7 @@ class DashboardPageTests(TestCase):
     def test_heading_and_sidebar_stay_unchanged(self):
         r = self.client.get(reverse("VisionInspection:dashboard"))
         self.assertEqual(r.status_code, 200)
-        self.assertContains(r, "Airbag Stitch Inspection Overview")
+        self.assertContains(r, "Inspection Overview")
         # The shared chrome is rendered by ui/base.html, not by this page:
         # sidebar (with Dashboard highlighted), top navigation and workspace link.
         self.assertContains(r, 'id="viSidebar"')
@@ -4601,7 +4602,8 @@ class DashboardPageTests(TestCase):
             len(re.findall(r'<article class="vi-card vi-dash-kpi"', html)),
             3,
         )
-        self.assertNotContains(r, "Incomplete / Error")
+        self.assertContains(r, "Incomplete / Error")
+        self.assertContains(r, "25.0%")
         self.assertNotContains(r, "Recent Inspection Results")
         self.assertNotContains(r, "data-report-row")
 
@@ -4618,6 +4620,8 @@ class DashboardPageTests(TestCase):
         self.assertContains(r, 'data-part-number="P-1"')
         self.assertContains(r, 'aria-label="1 OK"')
         self.assertContains(r, 'aria-label="1 NOT OK"')
+        self.assertContains(r, "--ok-sweep: 180.0deg")
+        self.assertContains(r, "--classified-sweep: 360.0deg")
 
         reset = self.client.get(reverse("VisionInspection:dashboard"))
         self.assertEqual(
@@ -4766,6 +4770,42 @@ class InspectionReportTests(TestCase):
         rows = re.findall(r'data-report-row[\s\S]*?<td>(\d+)</td>',
                           r.content.decode())
         self.assertEqual(rows, [str(n) for n in range(1, 11)])
+
+    def test_print_table_includes_all_filtered_rows_on_every_page(self):
+        response = self.client.get(
+            reverse("VisionInspection:ui-reports"), {"page": 2}
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertEqual(len(re.findall(r'data-print-row', body)), 13)
+        self.assertEqual(len(re.findall(r'data-report-row', body)), 3)
+        self.assertContains(response, "Front Result")
+        self.assertContains(response, "Back Result")
+
+        filtered = self.client.get(
+            reverse("VisionInspection:ui-reports"),
+            {"page": 2, "result": "NOT_OK"},
+        )
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(
+            len(re.findall(r'data-print-row', filtered.content.decode())), 4
+        )
+
+    def test_identical_timestamps_use_descending_primary_key(self):
+        second = _record(
+            part_number="P-1", preset_name="same-timestamp-report-test"
+        )
+        VisionInspectionLog.objects.filter(pk=second.pk).update(
+            timestamp=self.session_record.timestamp
+        )
+        response = self.client.get(reverse("VisionInspection:ui-reports"))
+        page_logs = list(response.context["page_obj"].object_list)
+        tied_ids = [
+            log.pk for log in page_logs
+            if log.timestamp == self.session_record.timestamp
+        ]
+        self.assertGreaterEqual(len(tied_ids), 2)
+        self.assertEqual(tied_ids, sorted(tied_ids, reverse=True))
 
     def test_page_two_continues_the_serial_numbers(self):
         r = self.client.get(reverse("VisionInspection:ui-reports"), {"page": 2})

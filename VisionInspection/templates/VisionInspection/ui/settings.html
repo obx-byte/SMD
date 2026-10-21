@@ -5,11 +5,6 @@
 
 {% block header_title %}Settings{% endblock %}
 {% block header_actions %}
-    {% if user.is_authenticated %}
-        <span class="vi-header-user">{{ user.get_full_name|default:user.username }}</span>
-    {% else %}
-        <span class="vi-header-user">Operator</span>
-    {% endif %}
     <a href="{% url 'VisionInspection:dashboard' %}" class="vi-header-action" title="Dashboard" aria-label="Dashboard">&#9632;</a>
 {% endblock %}
 

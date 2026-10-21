@@ -1,0 +1,457 @@
+/* Shared light industrial design tokens and components. */
+:root,
+html[data-theme="purple"],
+html[data-theme="green"] {
+    color-scheme: light;
+    --vi-bg: #F3F6FA;
+    --vi-bg-card: #FFFFFF;
+    --vi-bg-dark: #0F766E;
+    --vi-border: #E2E8F0;
+    --vi-text: #334155;
+    --vi-text-muted: #64748B;
+    --vi-text-bright: #172B4D;
+    --vi-accent: #0D9488;
+    --vi-accent-light: #0F766E;
+    --vi-warning: #D97706;
+    --vi-error: #E11D48;
+    --vi-info: #0D9488;
+    --vi-input-bg: #FFFFFF;
+    --vi-input-border: #CBD5E1;
+    --vi-green: #16A34A;
+    --vi-red: #E11D48;
+    --vi-yellow: #D97706;
+    --vi-blue: #0D9488;
+    --vi-badge-ok: #15803D;
+    --vi-badge-not-ok: #BE123C;
+    --vi-badge-error: #B45309;
+    --vi-badge-skip: #64748B;
+    --vi-info-bg: #E6F4F3;
+    --vi-sidebar-width: 212px;
+    --vi-sidebar-text: #CBD5E1;
+    --vi-sidebar-text-bright: #FFFFFF;
+    --vi-sidebar-hover: rgba(148, 163, 184, 0.12);
+    --vi-sidebar-active: rgba(13, 148, 136, 0.22);
+    --vi-sidebar-active-text: #FFFFFF;
+    --vi-shadow: 0 1px 2px rgba(23, 43, 77, 0.04), 0 5px 16px rgba(23, 43, 77, 0.045);
+
+    --smd-ink: #172B4D;
+    --smd-muted: #64748B;
+    --smd-border: #E2E8F0;
+    --smd-ok: #16A34A;
+    --smd-not-ok: #E11D48;
+    --smd-pending: #64748B;
+    --smd-processing: #D97706;
+    --smd-primary: #0D9488;
+    --smd-primary-dark: #0F766E;
+
+    --ui-space-1: 4px;
+    --ui-space-2: 8px;
+    --ui-space-3: 12px;
+    --ui-space-4: 16px;
+    --ui-space-5: 20px;
+    --ui-space-6: 24px;
+    --ui-radius-sm: 6px;
+    --ui-radius: 10px;
+    --ui-radius-lg: 12px;
+}
+
+html[data-theme="green"] {
+    --vi-accent: #0F766E;
+    --vi-accent-light: #115E59;
+    --vi-blue: #0F766E;
+    --vi-sidebar-active: rgba(13, 148, 136, 0.22);
+    --smd-primary: #0F766E;
+    --smd-primary-dark: #115E59;
+}
+
+body:not(.vi-inspection-chrome) {
+    background: #F3F6FA;
+    color: #334155;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+body:not(.vi-inspection-chrome) .vi-content {
+    background: #F3F6FA;
+}
+
+/* Keep the established navy shell regardless of the selected light accent. */
+html[data-theme] .vi-sidebar,
+html:not([data-theme]) .vi-sidebar {
+    background: #0D1C3C;
+    border-color: #24385A;
+}
+
+.vi-sidebar .vi-sidebar-header {
+    background: #112449;
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.vi-sidebar .vi-sidebar-link.active {
+    background: rgba(13, 148, 136, 0.2);
+    color: #FFFFFF;
+    box-shadow: inset 3px 0 #2DD4BF;
+}
+
+.vi-sidebar .vi-sidebar-link.active .vi-sidebar-icon {
+    color: #5EEAD4;
+}
+
+.vi-sidebar .vi-sidebar-section-title.has-active,
+.vi-sidebar .vi-sidebar-section-title.vi-expanded {
+    color: #E2E8F0;
+}
+
+.vi-content :is(.vi-card, .vi-summary-card, .vi-panel) {
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    background: #FFFFFF;
+    box-shadow: 0 1px 2px rgba(23, 43, 77, 0.04), 0 4px 12px rgba(23, 43, 77, 0.035);
+}
+
+.vi-content .vi-card-title,
+.vi-content .vi-page-header h2,
+.vi-content .vi-page-title,
+.vi-content h2,
+.vi-content h3 {
+    color: #172B4D;
+}
+
+.vi-content .vi-page-subtitle,
+.vi-content .vi-help-text,
+.vi-content .vi-muted,
+.vi-content .vi-filter-note {
+    color: #64748B;
+}
+
+.vi-content :is(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea),
+.vi-content .vi-control,
+.vi-content .vi-master-control,
+.vi-content .vi-form-group input,
+.vi-content .vi-form-group select,
+.vi-content .vi-form-group textarea {
+    border: 1px solid #CBD5E1;
+    border-radius: 8px;
+    background-color: #FFFFFF;
+    color: #172B4D;
+    font: inherit;
+}
+
+.vi-content :is(input, select, textarea, button, a):focus-visible,
+.vi-content .vi-control:focus,
+.vi-content .vi-master-control:focus {
+    outline: 3px solid rgba(13, 148, 136, 0.2);
+    outline-offset: 1px;
+    border-color: #0D9488;
+}
+
+.vi-content .vi-btn {
+    min-height: 38px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-weight: 650;
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.vi-content .vi-btn-primary {
+    background: #0D9488;
+    border-color: #0D9488;
+    color: #FFFFFF;
+}
+
+.vi-content .vi-btn-primary:hover {
+    background: #0F766E;
+    border-color: #0F766E;
+}
+
+.vi-content .vi-btn-secondary,
+.vi-content .vi-btn:not(.vi-btn-primary):not(.vi-btn-danger):not(.vi-btn-success) {
+    background: #FFFFFF;
+    border-color: #CBD5E1;
+    color: #334155;
+}
+
+.vi-content .vi-btn-danger {
+    color: #BE123C;
+    border-color: #FDA4AF;
+}
+
+.vi-content .vi-btn-success {
+    background: #15803D;
+    border-color: #15803D;
+    color: #FFFFFF;
+}
+
+.vi-content .vi-btn:disabled,
+.vi-content button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.vi-content .vi-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+}
+
+.vi-content .vi-table {
+    color: #334155;
+    font-size: 13px;
+}
+
+.vi-content .vi-table th {
+    background: #F1F5F9;
+    color: #334155;
+    border-bottom: 1px solid #CBD5E1;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+}
+
+.vi-content .vi-table td {
+    border-bottom-color: #E2E8F0;
+    line-height: 1.45;
+}
+
+.vi-content .vi-table tbody tr {
+    background: #FFFFFF;
+}
+
+.vi-content .vi-table tbody tr:nth-child(even) {
+    background: #FAFCFE;
+}
+
+.vi-content .vi-table tbody tr:hover {
+    background: #F1F7F8;
+}
+
+.vi-content .vi-badge {
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    letter-spacing: 0.025em;
+}
+
+.vi-content .vi-badge-ok,
+.vi-content .vi-badge-active {
+    background: #ECFDF3;
+    border-color: #86EFAC;
+    color: #166534;
+}
+
+.vi-content .vi-badge-not-ok {
+    background: #FFF1F2;
+    border-color: #FDA4AF;
+    color: #9F1239;
+}
+
+.vi-content :is(.vi-badge-error, .vi-badge-pending) {
+    background: #FFFBEB;
+    border-color: #FCD34D;
+    color: #92400E;
+}
+
+.vi-content :is(.vi-badge-skip, .vi-badge-inactive) {
+    background: #F1F5F9;
+    border-color: #CBD5E1;
+    color: #475569;
+}
+
+.vi-content :is(.vi-alert, .vi-message, .vi-error, .vi-success) {
+    border-radius: 8px;
+}
+
+.vi-content :is(.vi-page-header, .vi-page-head) {
+    margin-bottom: 20px;
+}
+
+.vi-content :is(.vi-page-header h2, .vi-page-title) {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+/* Inspection Master has its own workflow controls; only adjust its palette. */
+.vi-content .vi-master {
+    --mx-cyan: #0D9488;
+    --mx-cyan-2: #0F766E;
+    --mx-green: #16A34A;
+    --mx-amber: #D97706;
+    --mx-red: #E11D48;
+    --mx-card: #FFFFFF;
+    --mx-card-alt: #F8FAFC;
+    --mx-border: #E2E8F0;
+    --mx-heading: #172B4D;
+    --mx-muted: #64748B;
+    --mx-input-bg: #FFFFFF;
+}
+
+.vi-content .vi-master-control {
+    min-height: 42px;
+}
+
+.vi-content .vi-master-btn-primary {
+    background: #0D9488;
+    border-color: #0D9488;
+}
+
+.vi-content .vi-master-btn-danger {
+    color: #BE123C;
+    border-color: #FDA4AF;
+}
+
+.vi-content .vi-master-card {
+    border-color: #E2E8F0;
+    border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(23, 43, 77, 0.04);
+}
+
+.vi-content .vi-master-badge.STARTING,
+.vi-content .vi-master-badge.CONNECTING {
+    background: #FFFBEB;
+    color: #92400E;
+}
+
+/* Keep the camera surface dark for image fidelity; restyle surrounding UI. */
+.vi-content .ws {
+    --ws-page: #F3F6FA;
+    --ws-card: #FFFFFF;
+    --ws-surface: #FFFFFF;
+    --ws-surface-2: #F1F5F9;
+    --ws-border: #E2E8F0;
+    --ws-border-strong: #CBD5E1;
+    --ws-heading: #172B4D;
+    --ws-text: #334155;
+    --ws-muted: #64748B;
+    --ws-blue: #0D9488;
+    --ws-blue-2: #0F766E;
+    --ws-violet: #0D9488;
+    --ws-green: #16A34A;
+    --ws-green-strong: #15803D;
+    --ws-green-bg: #ECFDF3;
+    --ws-red: #E11D48;
+    --ws-red-bg: #FFF1F2;
+    --ws-amber: #D97706;
+    --ws-amber-bg: #FFFBEB;
+    --ws-neutral: #64748B;
+    --ws-neutral-bg: #F1F5F9;
+    --ws-radius: 10px;
+    --ws-radius-sm: 7px;
+}
+
+body.vi-inspection-chrome .vi-content {
+    background: #F3F6FA;
+}
+
+/* Standalone preset configuration uses the same tokens without the shared shell. */
+body.vi-configuration-page {
+    --vi-bg: #F3F6FA;
+    --vi-bg-card: #FFFFFF;
+    --vi-bg-dark: #F1F5F9;
+    --vi-border: #E2E8F0;
+    --vi-text: #334155;
+    --vi-text-muted: #64748B;
+    --vi-text-bright: #172B4D;
+    --vi-accent: #0D9488;
+    --vi-accent-light: #0F766E;
+    --vi-warning: #D97706;
+    --vi-error: #E11D48;
+    --vi-info: #0D9488;
+    --vi-input-bg: #FFFFFF;
+    --vi-input-border: #CBD5E1;
+    --vi-green: #16A34A;
+    --vi-red: #E11D48;
+    --vi-yellow: #D97706;
+    --vi-blue: #0D9488;
+    background: #F3F6FA;
+}
+
+body.vi-configuration-page :is(.vi-tab-content, .vi-form-section, .vi-config-nav) {
+    border-color: #E2E8F0;
+    border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(23, 43, 77, 0.04);
+}
+
+body.vi-configuration-page .vi-container {
+    color: #334155;
+}
+
+body.vi-configuration-page :is(.vi-history-detail, .vi-presets-section, .vi-presets-list) {
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    background: #FFFFFF;
+    padding: 18px;
+}
+
+body.vi-configuration-page :is(.vi-history-section, .vi-presets-section, .vi-presets-list) h2,
+body.vi-configuration-page :is(.vi-history-section, .vi-presets-section, .vi-presets-list) h3,
+body.vi-configuration-page .vi-config-header h1 {
+    color: #172B4D;
+}
+
+body.vi-configuration-page .vi-config-nav {
+    flex-wrap: wrap;
+    border-radius: 10px;
+}
+
+body.vi-configuration-page .vi-nav-btn {
+    min-height: 40px;
+    flex: 1 0 112px;
+    border-radius: 7px;
+    font-weight: 600;
+}
+
+body.vi-configuration-page .vi-form-group label {
+    color: #334155;
+    font-weight: 600;
+    letter-spacing: 0;
+}
+
+body.vi-configuration-page .vi-table {
+    color: #334155;
+}
+
+body.vi-configuration-page .vi-table th {
+    background: #F1F5F9;
+    color: #334155;
+}
+
+body.vi-configuration-page .vi-table tbody tr:hover {
+    background: #F1F7F8;
+}
+
+body.vi-configuration-page .vi-nav-btn.active,
+body.vi-configuration-page .vi-btn-primary {
+    background: #0D9488;
+    border-color: #0D9488;
+    color: #FFFFFF;
+}
+
+body.vi-configuration-page :is(input, select, textarea, button):focus-visible {
+    outline: 3px solid rgba(13, 148, 136, 0.2);
+    outline-offset: 1px;
+}
+
+@media (max-width: 900px) {
+    .vi-content {
+        padding: 16px;
+    }
+
+    .vi-content .vi-grid-cols-5,
+    .vi-content .vi-grid-cols-4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .vi-content {
+        padding: 12px;
+    }
+
+    .vi-content :is(.vi-card, .vi-summary-card, .vi-panel) {
+        border-radius: 10px;
+    }
+
+    .vi-content .vi-grid-cols-5,
+    .vi-content .vi-grid-cols-4 {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

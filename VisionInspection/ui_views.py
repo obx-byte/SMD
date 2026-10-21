@@ -100,11 +100,15 @@ def dashboard(request):
         "summary": summary,
         "classified_total": classified_total,
         "donut_ok_degrees": (
-            round(360 * summary["ok"] / classified_total, 1)
-            if classified_total
+            round(360 * summary["ok"] / summary["total"], 1)
+            if summary["total"]
             else 0
         ),
-        "donut_classified_degrees": 360 if classified_total else 0,
+        "donut_classified_degrees": (
+            round(360 * classified_total / summary["total"], 1)
+            if summary["total"]
+            else 0
+        ),
         "part_rows": part_rows,
         "chart_max": chart_max,
         "chart_mid": round(chart_max / 2),
@@ -452,6 +456,7 @@ def reports(request):
         "result_options": result_options,
         "summary": records.summarize(logs),
         "recent_rows": rows,
+        "print_rows": records.build_rows(list(ordered)),
         "page_obj": page_obj,
         "page_links": _page_links(page_obj),
         "page_first": page_obj.start_index if page_obj.object_list else 0,

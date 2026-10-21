@@ -1,10 +1,11 @@
 {% extends "VisionInspection/ui/base.html" %}
 {% load static %}
+{% load tz %}
 
 {% block title %}Inspection Report — VisionInspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}?v=20261015-1">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}?v=20261021-1">
 {% endblock %}
 
 {% block header_title %}Inspection Report{% endblock %}
@@ -201,6 +202,41 @@
                             </div>
                         </td>
                     </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="vi-report-print-table-wrap">
+            <table class="vi-report-print-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Date &amp; Time</th>
+                        <th>Part No.</th>
+                        <th>Part Name</th>
+                        <th>Employee</th>
+                        <th>Unique No.</th>
+                        <th>Result</th>
+                        <th>Front Result</th>
+                        <th>Back Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in print_rows %}
+                    <tr data-print-row>
+                        <td>{{ forloop.counter }}</td>
+                        <td>{{ row.log.timestamp|localtime|date:"Y-m-d H:i:s" }}</td>
+                        <td>{{ row.log.part_number|default:"—" }}</td>
+                        <td>{{ row.part_name|default:"—" }}</td>
+                        <td>{{ row.employee_label }}</td>
+                        <td>{{ row.unique_number|default:"—" }}</td>
+                        <td><span class="vi-report-print-result {{ row.result_badge }}">{{ row.result_label }}</span></td>
+                        <td><span class="vi-report-print-result {{ row.front_badge }}">{{ row.front_label }}</span></td>
+                        <td><span class="vi-report-print-result {{ row.back_badge }}">{{ row.back_label }}</span></td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="9">No inspection records found.</td></tr>
+                    {% endfor %}
                 </tbody>
             </table>
         </div>

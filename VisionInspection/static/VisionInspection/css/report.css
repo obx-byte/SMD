@@ -263,6 +263,10 @@
     padding: 0 4px;
 }
 
+.vi-report-print-table-wrap {
+    display: none;
+}
+
 /* --------------------------------------------------------------------------
    Responsive
    -------------------------------------------------------------------------- */
@@ -284,24 +288,182 @@
    -------------------------------------------------------------------------- */
 
 @media print {
+    @page {
+        size: A3 landscape;
+        margin: 10mm;
+    }
+
+    html,
+    body {
+        width: auto !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+        background: #ffffff !important;
+        color: #111111 !important;
+        font-size: 9pt;
+    }
+
     .vi-sidebar,
     .vi-top-header,
     .vi-filter-card,
     .vi-report-tools,
-    .vi-pagination {
+    .vi-pagination,
+    .vi-report-footer,
+    .vi-table-wrap,
+    .vi-global-notices {
         display: none !important;
     }
 
     .vi-main-wrapper,
     .vi-content {
+        display: block !important;
         margin: 0 !important;
         padding: 0 !important;
+        width: auto !important;
+        max-width: none !important;
+        height: auto !important;
         overflow: visible !important;
     }
 
-    .vi-kpi,
+    .vi-report,
     .vi-panel {
-        box-shadow: none;
+        width: 100% !important;
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: visible !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    .vi-page-head {
+        margin: 0 0 5mm !important;
+    }
+
+    .vi-page-title {
+        color: #111111 !important;
+        font-size: 16pt !important;
+    }
+
+    .vi-page-subtitle {
+        color: #333333 !important;
+        font-size: 9pt !important;
+    }
+
+    .vi-grid.vi-grid-cols-4 {
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        gap: 3mm !important;
+        margin-bottom: 5mm !important;
+    }
+
+    .vi-kpi {
+        min-width: 0;
+        padding: 3mm !important;
+        border: 1px solid #777777 !important;
+        border-left-width: 2mm !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
         break-inside: avoid;
+    }
+
+    .vi-kpi-icon {
+        display: none !important;
+    }
+
+    .vi-kpi-value {
+        color: #111111 !important;
+        font-size: 16pt !important;
+    }
+
+    .vi-kpi-label,
+    .vi-kpi-sub {
+        color: #333333 !important;
+    }
+
+    .vi-report-toolbar {
+        margin: 0 0 2mm !important;
+    }
+
+    .vi-report-toolbar .vi-card-title {
+        color: #111111 !important;
+        font-size: 12pt !important;
+    }
+
+    .vi-report-print-table-wrap {
+        display: block !important;
+        width: 100% !important;
+        max-width: none !important;
+        overflow: visible !important;
+    }
+
+    .vi-report-print-table {
+        width: 100% !important;
+        table-layout: fixed;
+        border-collapse: collapse !important;
+        font-size: 7.5pt !important;
+        color: #111111 !important;
+    }
+
+    .vi-report-print-table thead {
+        display: table-header-group !important;
+    }
+
+    .vi-report-print-table tr {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    .vi-report-print-table th,
+    .vi-report-print-table td {
+        padding: 1.3mm 1.5mm !important;
+        border: 0.25mm solid #777777 !important;
+        text-align: left;
+        vertical-align: top;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
+        word-break: normal;
+        line-height: 1.2;
+    }
+
+    .vi-report-print-table th {
+        background: #e8e8e8 !important;
+        color: #111111 !important;
+        font-size: 7pt !important;
+        font-weight: 700 !important;
+        text-transform: uppercase;
+    }
+
+    .vi-report-print-table th:nth-child(1),
+    .vi-report-print-table td:nth-child(1) { width: 4%; }
+    .vi-report-print-table th:nth-child(2),
+    .vi-report-print-table td:nth-child(2) { width: 13%; }
+    .vi-report-print-table th:nth-child(3),
+    .vi-report-print-table td:nth-child(3) { width: 9%; }
+    .vi-report-print-table th:nth-child(4),
+    .vi-report-print-table td:nth-child(4) { width: 15%; }
+    .vi-report-print-table th:nth-child(5),
+    .vi-report-print-table td:nth-child(5) { width: 13%; }
+    .vi-report-print-table th:nth-child(6),
+    .vi-report-print-table td:nth-child(6) { width: 11%; }
+    .vi-report-print-table th:nth-child(7),
+    .vi-report-print-table td:nth-child(7) { width: 10%; }
+    .vi-report-print-table th:nth-child(8),
+    .vi-report-print-table td:nth-child(8),
+    .vi-report-print-table th:nth-child(9),
+    .vi-report-print-table td:nth-child(9) { width: 12.5%; }
+
+    .vi-report-print-result {
+        display: inline-block;
+        padding: 0.5mm 1mm;
+        border: 0.25mm solid #555555;
+        border-radius: 1mm;
+        background: transparent !important;
+        color: #111111 !important;
+        font-weight: 700;
+        white-space: normal;
+        -webkit-print-color-adjust: economy;
+        print-color-adjust: economy;
     }
 }

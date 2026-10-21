@@ -1,4 +1,172 @@
-{% extends "VisionInspection/ui/base.html" %}{% block title %}Employee accounts{% endblock %}{% block header_title %}Employee Accounts{% endblock %}{% block content %}<div class="vi-page-header"><h2>Employee accounts</h2><p>Create named accounts and assign the smallest necessary role.</p></div>{% for message in messages %}<div class="vi-card">{{ message }}</div>{% endfor %}<div class="vi-card"><h3>Create account</h3><form method="post">{% csrf_token %}<input type="hidden" name="action" value="create"><label>Employee ID <input name="employee_id" required maxlength="150" autocomplete="off"></label><label>Display name (optional) <input name="display_name" maxlength="150" autocomplete="name"></label><label>Initial password <input type="password" name="password" required minlength="12" autocomplete="new-password"></label><label>Role <select name="role">{% for role in roles %}<option>{{ role }}</option>{% endfor %}</select></label><label>Station scope (comma separated; required for supervisors) <input name="scope"></label><button class="vi-btn vi-btn-primary">Create account</button></form></div><div class="vi-card"><h3>Current accounts</h3><div class="vi-table-wrap"><table class="vi-table"><thead><tr><th>Employee ID</th><th>Name</th><th>Role</th><th>Status</th><th>Last login</th><th>Account action</th></tr></thead><tbody>{% for account in users %}<tr><td>{{ account.username }}</td><td>{{ account.get_full_name|default:"?" }}</td><td>{% for group in account.groups.all %}{{ group.name }}{% empty %}Unassigned{% endfor %}</td><td>{% if account.is_active %}Active{% else %}Inactive{% endif %}</td><td>{{ account.last_login|date:"Y-m-d H:i"|default:"Never" }}</td><td><form method="post" style="display:inline">{% csrf_token %}<input type="hidden" name="user_id" value="{{ account.pk }}"><input type="hidden" name="action" value="{% if account.is_active %}deactivate{% else %}activate{% endif %}"><button class="vi-btn vi-btn-sm">{% if account.is_active %}Deactivate{% else %}Activate{% endif %}</button></form>
-<form method="post" style="display:inline">{% csrf_token %}<input type="hidden" name="user_id" value="{{ account.pk }}"><input type="hidden" name="action" value="change_role"><select name="role">{% for role in roles %}<option {% for group in account.groups.all %}{% if group.name == role %}selected{% endif %}{% endfor %}>{{ role }}</option>{% endfor %}</select><input name="scope" placeholder="Station scope" value="{{ account.vision_inspection_profile.station_scope }}"><button class="vi-btn vi-btn-sm">Save role</button></form>
-<form method="post" style="display:inline">{% csrf_token %}<input type="hidden" name="user_id" value="{{ account.pk }}"><input type="hidden" name="action" value="reset_password"><input type="password" name="password" minlength="12" placeholder="New password" required autocomplete="new-password"><button class="vi-btn vi-btn-sm">Reset password</button></form>
-</td></tr>{% empty %}<tr><td colspan="6">No accounts yet.</td></tr>{% endfor %}</tbody></table></div></div>{% endblock %}
+{% extends "VisionInspection/ui/base.html" %}
+
+{% block title %}Employee Accounts{% endblock %}
+{% block header_title %}Employee Accounts{% endblock %}
+
+{% block content %}
+<div class="vi-page-header vi-account-page-header">
+    <div>
+        <h2>Employee Accounts</h2>
+        <p>Create and manage employee access and roles</p>
+    </div>
+</div>
+
+<section class="vi-card vi-account-create-card" aria-labelledby="createAccountTitle">
+    <div class="vi-account-card-heading">
+        <div>
+            <h3 id="createAccountTitle">Create Account</h3>
+            <p>Add an employee account and assign the appropriate access role.</p>
+        </div>
+    </div>
+    <form method="post" class="vi-account-create-form" id="createEmployeeAccountForm">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="create">
+        <div class="vi-account-form-grid">
+            <div class="vi-field">
+                <label for="newEmployeeId">Employee ID</label>
+                <input id="newEmployeeId" name="employee_id" required maxlength="150" pattern="[A-Za-z0-9._-]{1,150}" autocomplete="off" aria-describedby="employeeIdHelp employeeIdError" data-error-id="employeeIdError">
+                <span class="vi-field-help" id="employeeIdHelp">Use letters, numbers, periods, underscores, or hyphens.</span>
+                <span class="vi-field-error" id="employeeIdError" hidden></span>
+            </div>
+            <div class="vi-field">
+                <label for="newDisplayName">Display Name <span class="vi-optional">(optional)</span></label>
+                <input id="newDisplayName" name="display_name" maxlength="150" autocomplete="name">
+            </div>
+            <div class="vi-field">
+                <label for="newAccountPassword">Initial Password</label>
+                <input id="newAccountPassword" type="password" name="password" required minlength="12" autocomplete="new-password" aria-describedby="passwordHelp accountPasswordError" data-error-id="accountPasswordError">
+                <span class="vi-field-help" id="passwordHelp">Use at least 12 characters.</span>
+                <span class="vi-field-error" id="accountPasswordError" hidden></span>
+            </div>
+            <div class="vi-field">
+                <label for="newAccountRole">Role</label>
+                <select id="newAccountRole" name="role" required aria-describedby="accountRoleError" data-error-id="accountRoleError">
+                    {% for role in roles %}<option value="{{ role }}">{{ role }}</option>{% endfor %}
+                </select>
+                <span class="vi-field-error" id="accountRoleError" hidden></span>
+            </div>
+            <div class="vi-field vi-account-scope-field">
+                <label for="newAccountScope">Station Scope</label>
+                <input id="newAccountScope" name="scope" aria-describedby="scopeHelp">
+                <span class="vi-field-help" id="scopeHelp">For scoped access, enter station IDs separated by commas.</span>
+            </div>
+        </div>
+        <div class="vi-account-form-actions">
+            <button class="vi-btn vi-btn-primary" type="submit">Create Account</button>
+        </div>
+    </form>
+</section>
+
+<section class="vi-card vi-account-list-card" aria-labelledby="accountListTitle">
+    <div class="vi-account-card-heading">
+        <div>
+            <h3 id="accountListTitle">Current Accounts</h3>
+            <p>Manage employee status, role, station scope, and password access.</p>
+        </div>
+    </div>
+    <div class="vi-table-wrap vi-account-table-wrap" tabindex="0" role="region" aria-label="Current employee accounts">
+        <table class="vi-table vi-account-table">
+            <thead>
+                <tr>
+                    <th scope="col">Employee ID</th>
+                    <th scope="col">Display Name</th>
+                    <th scope="col">Role</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Last Login</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in users %}
+                <tr>
+                    <td class="vi-account-id">{{ account.username }}</td>
+                    <td>{{ account.get_full_name|default:"—" }}</td>
+                    <td>
+                        <div class="vi-account-roles">
+                            {% for group in account.groups.all %}<span class="vi-role-badge">{{ group.name }}</span>{% empty %}<span class="vi-account-muted">Unassigned</span>{% endfor %}
+                        </div>
+                    </td>
+                    <td>
+                        <span class="vi-status-badge {% if account.is_active %}is-active{% else %}is-inactive{% endif %}">
+                            {% if account.is_active %}Active{% else %}Inactive{% endif %}
+                        </span>
+                    </td>
+                    <td>{{ account.last_login|date:"Y-m-d H:i"|default:"Never" }}</td>
+                    <td class="vi-account-actions-cell">
+                        <div class="vi-account-actions">
+                            <form method="post" class="vi-account-action-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="user_id" value="{{ account.pk }}">
+                                <input type="hidden" name="action" value="{% if account.is_active %}deactivate{% else %}activate{% endif %}">
+                                <button class="vi-btn vi-btn-sm {% if account.is_active %}vi-btn-danger{% else %}vi-account-activate{% endif %}" type="submit">
+                                    {% if account.is_active %}Deactivate{% else %}Activate{% endif %}
+                                </button>
+                            </form>
+                            <form method="post" class="vi-account-action-form vi-account-role-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="user_id" value="{{ account.pk }}">
+                                <input type="hidden" name="action" value="change_role">
+                                <label class="vi-sr-only" for="accountRole{{ account.pk }}">Role for {{ account.username }}</label>
+                                <select id="accountRole{{ account.pk }}" name="role">
+                                    {% for role in roles %}<option value="{{ role }}" {% for group in account.groups.all %}{% if group.name == role %}selected{% endif %}{% endfor %}>{{ role }}</option>{% endfor %}
+                                </select>
+                                <label class="vi-sr-only" for="accountScope{{ account.pk }}">Station scope for {{ account.username }}</label>
+                                <input id="accountScope{{ account.pk }}" name="scope" placeholder="Station scope" value="{{ account.vision_inspection_profile.station_scope }}">
+                                <button class="vi-btn vi-btn-sm vi-btn-secondary" type="submit">Save Role</button>
+                            </form>
+                            <form method="post" class="vi-account-action-form vi-account-reset-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="user_id" value="{{ account.pk }}">
+                                <input type="hidden" name="action" value="reset_password">
+                                <label class="vi-sr-only" for="resetPassword{{ account.pk }}">New password for {{ account.username }}</label>
+                                <input id="resetPassword{{ account.pk }}" type="password" name="password" minlength="12" placeholder="New password" required autocomplete="new-password">
+                                <button class="vi-btn vi-btn-sm vi-btn-secondary" type="submit">Reset Password</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td class="vi-account-empty" colspan="6">No employee accounts yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var form = document.getElementById('createEmployeeAccountForm');
+        if (!form) return;
+
+        function clearError(input) {
+            var error = document.getElementById(input.getAttribute('data-error-id'));
+            if (error) {
+                error.textContent = '';
+                error.hidden = true;
+            }
+            input.removeAttribute('aria-invalid');
+        }
+
+        form.addEventListener('invalid', function(event) {
+            var input = event.target;
+            var error = document.getElementById(input.getAttribute('data-error-id'));
+            if (!error) return;
+            var message = 'Check this field.';
+            if (input.validity.valueMissing) message = 'This field is required.';
+            else if (input.validity.patternMismatch) message = 'Use letters, numbers, periods, underscores, or hyphens.';
+            else if (input.validity.tooShort) message = 'Use at least 12 characters.';
+            error.textContent = message;
+            error.hidden = false;
+            input.setAttribute('aria-invalid', 'true');
+        }, true);
+
+        form.querySelectorAll('[data-error-id]').forEach(function(input) {
+            input.addEventListener('input', function() {
+                if (input.validity.valid) clearError(input);
+            });
+            input.addEventListener('change', function() {
+                if (input.validity.valid) clearError(input);
+            });
+        });
+    });
+</script>
+{% endblock %}

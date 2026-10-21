@@ -4,23 +4,18 @@
 {% block title %}Dashboard — Airbag Stitch Inspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261015-1">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261021-1">
 {% endblock %}
 
 {% block header_title %}Dashboard{% endblock %}
-
-{% block header_actions %}
-    <span class="vi-header-user">{% if user.is_authenticated %}{{ user.get_full_name|default:user.username }}{% else %}Operator{% endif %}</span>
-    {% if user.is_staff %}<span class="vi-header-role">Admin</span>{% endif %}
-{% endblock %}
 
 {% block content %}
 <div class="vi-dash">
     <section class="vi-dash-heading" aria-labelledby="dashboardTitle">
         <div>
-            <p class="vi-dash-eyebrow">AIRBAG STITCH INSPECTION</p>
-            <h2 class="vi-page-title" id="dashboardTitle">Dashboard</h2>
-            <p class="vi-page-subtitle">Airbag Stitch Inspection Overview</p>
+            <p class="vi-dash-eyebrow">QUALITY OPERATIONS</p>
+            <h2 class="vi-page-title" id="dashboardTitle">Inspection Overview</h2>
+            <p class="vi-page-subtitle">Monitor inspection outcomes and quality across production parts.</p>
         </div>
         <a class="vi-btn vi-btn-primary vi-dash-start" href="{% url 'VisionInspection:inspection' %}">
             <span aria-hidden="true">&#9654;</span> Start Inspection
@@ -29,7 +24,7 @@
 
     <form method="get" action="{% url 'VisionInspection:dashboard' %}" class="vi-card vi-dash-filter">
         <div class="vi-dash-filter-field">
-            <label for="dashPartFilter">Part</label>
+            <label for="dashPartFilter">Part Filter</label>
             <select id="dashPartFilter" name="part" class="vi-control">
                 <option value="">All Parts</option>
                 {% for part in parts %}
@@ -49,7 +44,7 @@
     </form>
 
     <section class="vi-dash-kpis" aria-label="Inspection summary">
-        <article class="vi-card vi-dash-kpi" data-tone="purple">
+        <article class="vi-card vi-dash-kpi" data-tone="total">
             <span class="vi-dash-kpi-icon" aria-hidden="true">&#9638;</span>
             <div>
                 <p class="vi-dash-kpi-label">Total Inspections</p>
@@ -84,6 +79,7 @@
                 </div>
                 {% if selected_part %}<span class="vi-dash-part-chip">{{ selected_part }}</span>{% endif %}
             </header>
+            {% if summary.total %}
             <div class="vi-dash-donut-layout">
                 <div class="vi-dash-donut"
                      style="--ok-sweep: {{ donut_ok_degrees }}deg; --classified-sweep: {{ donut_classified_degrees }}deg"
@@ -96,22 +92,32 @@
                 </div>
                 <div class="vi-dash-legend">
                     <div class="vi-dash-legend-item">
-                        <span class="vi-dash-legend-dot is-ok"></span>
+                        <span class="vi-dash-legend-dot is-ok" aria-hidden="true"></span>
                         <span class="vi-dash-legend-label">OK</span>
                         <strong>{{ summary.ok }}</strong>
                         <small>{{ summary.ok_pct|floatformat:"1" }}%</small>
                     </div>
                     <div class="vi-dash-legend-item">
-                        <span class="vi-dash-legend-dot is-not-ok"></span>
+                        <span class="vi-dash-legend-dot is-not-ok" aria-hidden="true"></span>
                         <span class="vi-dash-legend-label">NOT OK</span>
                         <strong>{{ summary.not_ok }}</strong>
                         <small>{{ summary.not_ok_pct|floatformat:"1" }}%</small>
                     </div>
-                    {% if summary.incomplete_error %}
-                        <p class="vi-dash-chart-note">{{ summary.incomplete_error }} incomplete/error result{{ summary.incomplete_error|pluralize }} shown in the total.</p>
-                    {% endif %}
+                    <div class="vi-dash-legend-item">
+                        <span class="vi-dash-legend-dot is-incomplete" aria-hidden="true"></span>
+                        <span class="vi-dash-legend-label">Incomplete / Error</span>
+                        <strong>{{ summary.incomplete_error }}</strong>
+                        <small>{{ summary.incomplete_error_pct|floatformat:"1" }}%</small>
+                    </div>
                 </div>
             </div>
+            {% else %}
+            <div class="vi-dash-empty" style="--ok-sweep: {{ donut_ok_degrees }}deg" role="status">
+                <span aria-hidden="true">&#9675;</span>
+                <strong>No inspection results yet</strong>
+                <p>Result distribution will appear after inspections are recorded.</p>
+            </div>
+            {% endif %}
         </article>
 
         <article class="vi-card vi-dash-chart-card">
@@ -138,12 +144,16 @@
                                 {% if row.part_name %}<span>{{ row.part_name }}</span>{% endif %}
                             </div>
                             <div class="vi-dash-bar-values">
-                                <div class="vi-dash-bar-track{% if not row.ok %} is-empty{% endif %}" aria-label="{{ row.ok }} OK">
-                                    <span class="vi-dash-bar is-ok" style="width: {{ row.ok_width }}%"></span>
+                                <div class="vi-dash-bar-line" aria-label="{{ row.ok }} OK">
+                                    <div class="vi-dash-bar-track{% if not row.ok %} is-empty{% endif %}">
+                                        <span class="vi-dash-bar is-ok" style="width: {{ row.ok_width }}%"></span>
+                                    </div>
                                     <b>{{ row.ok }}</b>
                                 </div>
-                                <div class="vi-dash-bar-track{% if not row.not_ok %} is-empty{% endif %}" aria-label="{{ row.not_ok }} NOT OK">
-                                    <span class="vi-dash-bar is-not-ok" style="width: {{ row.not_ok_width }}%"></span>
+                                <div class="vi-dash-bar-line" aria-label="{{ row.not_ok }} NOT OK">
+                                    <div class="vi-dash-bar-track{% if not row.not_ok %} is-empty{% endif %}">
+                                        <span class="vi-dash-bar is-not-ok" style="width: {{ row.not_ok_width }}%"></span>
+                                    </div>
                                     <b>{{ row.not_ok }}</b>
                                 </div>
                             </div>

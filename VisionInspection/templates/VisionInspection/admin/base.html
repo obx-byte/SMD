@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}VisionInspection Admin{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261015-2">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-1">
 </head>
 <body>
     <aside class="vi-sidebar" id="viSidebar">
@@ -31,7 +32,6 @@
                 <div class="vi-sidebar-section-title" data-target="section-inspection">Vision Inspection &#9662;</div>
                 <div class="vi-sidebar-collapse" id="section-inspection">
                     <a href="{% url 'VisionInspection:admin-state' %}" class="vi-sidebar-link {% if sidebar_active == 'state' %}active{% endif %}">Inspection State</a>
-                    <a href="{% url 'VisionInspection:admin-logs' %}" class="vi-sidebar-link {% if sidebar_active == 'logs' %}active{% endif %}">Inspection Logs</a>
                     <a href="{% url 'VisionInspection:admin-rois' %}" class="vi-sidebar-link {% if sidebar_active == 'rois' %}active{% endif %}">ROI Configuration</a>
                     <a href="{% url 'VisionInspection:admin-trigger-zones' %}" class="vi-sidebar-link {% if sidebar_active == 'trigger_zones' %}active{% endif %}">Trigger Zone Configuration</a>
                 </div>
