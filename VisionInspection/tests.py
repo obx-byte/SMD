@@ -441,7 +441,11 @@ class _FakeYolo:
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class InspectionWorkflowTests(TestCase):
     def setUp(self):
+        from django.contrib.auth.models import Group, User
+
         self.part = VisionInspectionPart.objects.create(part_number="AB-100", part_name="Airbag")
+        self.operator = User.objects.create_user(username="WF-OPERATOR", password="test-password")
+        self.operator.groups.add(Group.objects.get(name="Operator"))
         self.wf = InspectionWorkflow()
         self.wf._yolo = _FakeYolo()
 
@@ -452,7 +456,7 @@ class InspectionWorkflowTests(TestCase):
         )
 
     def _session(self, **kw):
-        base = dict(part_number="AB-100", stage="result")
+        base = dict(part_number="AB-100", stage="result", operator=self.operator)
         base.update(kw)
         return VisionInspectionSession.objects.create(**base)
 
@@ -697,11 +701,11 @@ class InspectionWorkflowTests(TestCase):
         self.assertIsNone(r["active_session"])
         self.assertEqual(VisionInspectionSession.objects.count(), 0)
 
-    def test_scan_of_different_part_exposes_prior_active_session_for_reset(self):
+    def test_scan_of_different_part_exposes_only_own_active_session_for_reset(self):
         VisionInspectionPart.objects.create(part_number="AB-200", part_name="Second Airbag")
         session = self._session(stage="front", front_status="IN_PROGRESS")
 
-        result = self.wf.scan_part("AB-200")
+        result = self.wf.scan_part("AB-200", operator=self.operator)
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["part"]["part_number"], "AB-200")
@@ -709,14 +713,45 @@ class InspectionWorkflowTests(TestCase):
         self.assertEqual(result["active_session"]["part_number"], "AB-100")
         self.assertEqual(VisionInspectionSession.objects.count(), 1)
 
+    def test_scan_does_not_disclose_another_operators_active_session(self):
+        from django.contrib.auth.models import User
+
+        VisionInspectionPart.objects.create(part_number="AB-200", part_name="Second Airbag")
+        session = self._session(stage="front", front_status="IN_PROGRESS")
+        other_operator = User.objects.create_user(username="WF-OTHER", password="test-password")
+
+        result = self.wf.scan_part("AB-200", operator=other_operator)
+
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["active_session"])
+        self.assertNotIn(str(session.session_id), str(result))
+
+    def test_duplicate_submit_does_not_disclose_another_operators_session_id(self):
+        from django.contrib.auth.models import User
+
+        other_operator = User.objects.create_user(username="WF-OTHER", password="test-password")
+        session = self._session(
+            stage="front",
+            front_status="IN_PROGRESS",
+            operator=other_operator,
+        )
+        with mock.patch(
+            "VisionInspection.services.inspection_workflow.storage_service.ensure_evidence_capacity"
+        ):
+            result = self.wf.submit("AB-100", operator=self.operator)
+
+        self.assertEqual(result["state"], "duplicate_session")
+        self.assertNotIn("session_id", result)
+        self.assertNotIn(str(session.session_id), str(result))
+
     def test_different_part_can_be_validated_after_prior_session_is_cancelled(self):
         VisionInspectionPart.objects.create(part_number="AB-200", part_name="Second Airbag")
         previous = self._session(stage="front", front_status="IN_PROGRESS")
 
-        first_scan = self.wf.scan_part("AB-200")
+        first_scan = self.wf.scan_part("AB-200", operator=self.operator)
         self.assertEqual(first_scan["active_session"]["session_id"], str(previous.session_id))
         self.assertEqual(self.wf.cancel(str(previous.session_id))["state"], "cancelled")
-        second_scan = self.wf.scan_part("AB-200")
+        second_scan = self.wf.scan_part("AB-200", operator=self.operator)
 
         self.assertTrue(second_scan["ok"])
         self.assertEqual(second_scan["part"]["part_number"], "AB-200")
@@ -1000,6 +1035,7 @@ class InspectionWorkflowTests(TestCase):
         self.assertEqual(result["results"], session.front_results)
         predict.assert_not_called()
 
+        self.client.force_login(self.operator)
         with mock.patch("VisionInspection.views._workflow", return_value=self.wf):
             response = self.client.post(
                 reverse(
@@ -1303,6 +1339,7 @@ class InspectionWorkflowTests(TestCase):
             back_results=[{"class_id": 1, "confidence": None, "status": "NOT_OK"}],
         )
 
+        self.client.force_login(self.operator)
         response = self.client.get(
             reverse(
                 "VisionInspection:workflow-progress",
@@ -4588,24 +4625,34 @@ class DashboardPageTests(TestCase):
         self.assertContains(r, 'class="vi-sidebar-collapse" id="section-home"')
         self.assertContains(r, 'href="/vision-inspection/inspection/"')
 
-    def test_three_summary_cards_use_database_counts_and_percentages(self):
+    def test_summary_cards_use_database_counts_and_percentages(self):
         r = self.client.get(reverse("VisionInspection:dashboard"))
         html = r.content.decode()
         values = _dashboard_card_values(html)
         self.assertEqual(values["Total Inspections"], "4")
         self.assertEqual(values["Total OK"], "2")
         self.assertEqual(values["Total NOT OK"], "1")
-        self.assertEqual(len(values), 3)
-        self.assertContains(r, "50.0% of inspections")
+        self.assertEqual(values["Incomplete / Error"], "1")
+        self.assertEqual(len(values), 4)
+        self.assertContains(r, "Quality rate: 50.0%")
         self.assertContains(r, "25.0% of inspections")
         self.assertEqual(
             len(re.findall(r'<article class="vi-card vi-dash-kpi"', html)),
-            3,
+            4,
         )
         self.assertContains(r, "Incomplete / Error")
         self.assertContains(r, "25.0%")
-        self.assertNotContains(r, "Recent Inspection Results")
-        self.assertNotContains(r, "data-report-row")
+        self.assertContains(r, "Recent Inspections")
+        self.assertContains(r, "data-report-row")
+        self.assertContains(r, "View Inspection Report")
+        self.assertEqual(html.count('<th scope="col">'), 7)
+        self.assertContains(r, "<table class=\"vi-dash-recent-table\">")
+        self.assertContains(r, "<th scope=\"col\">Part Number</th>")
+        self.assertContains(r, "<th scope=\"col\">Part Name</th>")
+        self.assertEqual(
+            [row["log"].pk for row in r.context["recent_rows"]],
+            [record.pk for record in reversed(self.records)],
+        )
 
     def test_part_filter_restricts_cards_and_both_charts(self):
         r = self.client.get(reverse("VisionInspection:dashboard"), {"part": "P-1"})
@@ -4645,7 +4692,7 @@ class DashboardPageTests(TestCase):
         self.assertIn('data-part-number="P-2"', html)
         self.assertEqual(html.count('aria-label="2 OK"'), 1)
         self.assertEqual(html.count('aria-label="2 NOT OK"'), 1)
-        self.assertNotIn("data-report-row", html)
+        self.assertEqual(html.count("data-report-row"), 6)
 
     def test_part_dropdown_lists_database_parts(self):
         r = self.client.get(reverse("VisionInspection:dashboard"))
@@ -4658,7 +4705,7 @@ class DashboardPageTests(TestCase):
         for removed in (
             "viDashRoot", "viDashTrend", "viDashDonut", "viDashAlerts",
             "Real-Time Inspection Flow", "AI Inspection Results", "Quick Actions",
-            "System Status", "Welcome back", "Recent Inspection Results",
+            "System Status", "Welcome back",
         ):
             self.assertNotContains(r, removed)
 
@@ -4668,10 +4715,17 @@ class DashboardPageTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(
             _dashboard_card_values(r.content.decode()),
-            {"Total Inspections": "0", "Total OK": "0", "Total NOT OK": "0"},
+            {
+                "Total Inspections": "0",
+                "Total OK": "0",
+                "Total NOT OK": "0",
+                "Incomplete / Error": "0",
+            },
         )
-        self.assertContains(r, "0.0% of inspections")
+        self.assertContains(r, "Quality rate: 0.0%")
         self.assertContains(r, "No inspection results yet")
+        self.assertContains(r, "No inspection data available")
+        self.assertContains(r, "No inspections match the current filter.")
         self.assertContains(r, "--ok-sweep: 0deg")
 
 

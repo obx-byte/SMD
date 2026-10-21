@@ -35,60 +35,66 @@
         </div>
         <nav class="vi-sidebar-nav" id="viSidebarNav" aria-label="Application navigation">
             <!-- HOME -->
+            {% if vi_access.dashboard %}
             <div class="vi-sidebar-section">
                 <button class="vi-sidebar-section-title" type="button" data-target="section-home" aria-controls="section-home" aria-expanded="{% if sidebar_active == 'dashboard' %}true{% else %}false{% endif %}">Home <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
                 <div class="vi-sidebar-collapse{% if sidebar_active != 'dashboard' %} vi-collapsed{% endif %}" id="section-home">
                     <a href="{% url 'VisionInspection:dashboard' %}" class="vi-sidebar-link {% if sidebar_active == 'dashboard' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9632;</span><span class="vi-sidebar-label" title="Dashboard">Dashboard</span></a>
                 </div>
             </div>
+            {% endif %}
 
             <!-- MASTER DATA (privileged) -->
-            {% if vi_access.administrator %}
+            {% if vi_access.master_data_view or vi_access.master_data_create %}
             <div class="vi-sidebar-section">
                 <button class="vi-sidebar-section-title" type="button" data-target="section-master-data" aria-controls="section-master-data" aria-expanded="false">Master Data <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
                 <div class="vi-sidebar-collapse vi-collapsed" id="section-master-data">
-                    <a href="{% url 'VisionInspection:ui-parts' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'parts' and request.resolver_match.url_name == 'ui-parts' and request.GET.action == 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#43;</span><span class="vi-sidebar-label" title="Add Part">Add Part</span></a>
-                    <a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' and request.resolver_match.url_name == 'ui-parts' and request.GET.action != 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="View Parts">View Parts</span></a>
-                    <a href="{% url 'VisionInspection:ui-employees' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'employees' and request.resolver_match.url_name == 'ui-employees' and request.GET.action == 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#43;</span><span class="vi-sidebar-label" title="Add Employee">Add Employee</span></a>
-                    <a href="{% url 'VisionInspection:ui-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' and request.resolver_match.url_name == 'ui-employees' and request.GET.action != 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9737;</span><span class="vi-sidebar-label" title="View Employees">View Employees</span></a>
+                    {% if vi_access.master_data_create %}<a href="{% url 'VisionInspection:ui-parts' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'parts' and request.resolver_match.url_name == 'ui-parts' and request.GET.action == 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#43;</span><span class="vi-sidebar-label" title="Add Part">Add Part</span></a>{% endif %}
+                    {% if vi_access.master_data_view %}<a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' and request.resolver_match.url_name == 'ui-parts' and request.GET.action != 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="View Parts">View Parts</span></a>{% endif %}
+                    {% if vi_access.master_data_create %}<a href="{% url 'VisionInspection:ui-employees' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'employees' and request.resolver_match.url_name == 'ui-employees' and request.GET.action == 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#43;</span><span class="vi-sidebar-label" title="Add Employee">Add Employee</span></a>{% endif %}
+                    {% if vi_access.master_data_view %}<a href="{% url 'VisionInspection:ui-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' and request.resolver_match.url_name == 'ui-employees' and request.GET.action != 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9737;</span><span class="vi-sidebar-label" title="View Employees">View Employees</span></a>{% endif %}
                 </div>
             </div>
             {% endif %}
 
             <!-- VISION INSPECTION -->
+            {% if vi_access.inspection or vi_access.part_vision_view %}
             <div class="vi-sidebar-section">
                 <button class="vi-sidebar-section-title" type="button" data-target="section-vision" aria-controls="section-vision" aria-expanded="{% if sidebar_active == 'inspection' or sidebar_active == 'parts' %}true{% else %}false{% endif %}">Vision Inspection <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
                 <div class="vi-sidebar-collapse vi-collapsed" id="section-vision">
-                    <a href="{% url 'VisionInspection:inspection' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9679;</span><span class="vi-sidebar-label" title="Start Inspection">Start Inspection</span></a>
-                    {% if vi_access.configuration_view %}<a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'part-vision-configuration' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="Part Vision Setup">Part Vision Setup</span></a>{% endif %}
-                </div>
-            </div>
-
-            <!-- AI / MODELS -->
-            {% if vi_access.administrator %}
-            <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-ai" aria-controls="section-ai" aria-expanded="{% if sidebar_active == 'yolo_models' or sidebar_active == 'training_jobs' %}true{% else %}false{% endif %}">AI / Models <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-ai">
-                    <a href="{% url 'VisionInspection:ui-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' and not request.GET.approved %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9632;</span><span class="vi-sidebar-label" title="YOLO Models">YOLO Models</span></a>
-                    <a href="{% url 'VisionInspection:ui-training-jobs' %}" class="vi-sidebar-link {% if sidebar_active == 'training_jobs' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9776;</span><span class="vi-sidebar-label" title="Training Jobs">Training Jobs</span></a>
+                    {% if vi_access.inspection %}<a href="{% url 'VisionInspection:inspection' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9679;</span><span class="vi-sidebar-label" title="Start Inspection">Start Inspection</span></a>{% endif %}
+                    {% if vi_access.part_vision_view %}<a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'part-vision-configuration' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="Part Vision Setup">Part Vision Setup</span></a>{% endif %}
                 </div>
             </div>
             {% endif %}
 
+            <!-- AI / MODELS -->
+            {% if vi_access.yolo_models_view or vi_access.training_jobs_view %}
+            <div class="vi-sidebar-section">
+                <button class="vi-sidebar-section-title" type="button" data-target="section-ai" aria-controls="section-ai" aria-expanded="{% if sidebar_active == 'yolo_models' or sidebar_active == 'training_jobs' %}true{% else %}false{% endif %}">AI / Models <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
+                <div class="vi-sidebar-collapse vi-collapsed" id="section-ai">
+                    {% if vi_access.yolo_models_view %}<a href="{% url 'VisionInspection:ui-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' and not request.GET.approved %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9632;</span><span class="vi-sidebar-label" title="YOLO Models">YOLO Models</span></a>{% endif %}
+                    {% if vi_access.training_jobs_view %}<a href="{% url 'VisionInspection:ui-training-jobs' %}" class="vi-sidebar-link {% if sidebar_active == 'training_jobs' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9776;</span><span class="vi-sidebar-label" title="Training Jobs">Training Jobs</span></a>{% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            {% if vi_access.storage_view or vi_access.camera_setup_view or vi_access.model_configuration_view or vi_access.approved_models_view or vi_access.user_management %}
             <div class="vi-sidebar-section">
                 <button class="vi-sidebar-section-title" type="button" data-target="section-configuration" aria-controls="section-configuration" aria-expanded="{% if sidebar_active == 'storage' or sidebar_active == 'inspection_master' or sidebar_active == 'configuration' or sidebar_active == 'presets' or sidebar_active == 'yolo_models' or request.resolver_match.url_name == 'user-management' %}true{% else %}false{% endif %}">Configuration <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
                 <div class="vi-sidebar-collapse vi-collapsed" id="section-configuration">
-                    {% if vi_access.administrator %}<a href="{% url 'VisionInspection:storage-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'storage' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="Storage Settings">Storage Settings</span></a>{% endif %}
-                    {% if vi_access.camera_roi_edit %}
+                    {% if vi_access.storage_view %}<a href="{% url 'VisionInspection:storage-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'storage' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="Storage Settings">Storage Settings</span></a>{% endif %}
+                    {% if vi_access.camera_setup_view %}
                     <a href="{% url 'VisionInspection:inspection-master' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection_master' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9679;</span><span class="vi-sidebar-label" title="Camera Setup">Camera Setup</span></a>
                     {% endif %}
-                    {% if vi_access.configuration_edit %}
+                    {% if vi_access.model_configuration_view %}
                     <a href="{% url 'VisionInspection:configuration' %}" class="vi-sidebar-link {% if sidebar_active == 'configuration' or sidebar_active == 'presets' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9881;</span><span class="vi-sidebar-label" title="Model Configuration">Model Configuration</span></a>
-                    <a href="{% url 'VisionInspection:ui-yolo-models' %}?approved=1" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' and request.GET.approved %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#10003;</span><span class="vi-sidebar-label" title="Approved Models">Approved Models</span></a>
                     {% endif %}
+                    {% if vi_access.approved_models_view %}<a href="{% url 'VisionInspection:ui-yolo-models' %}?approved=1" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' and request.GET.approved %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#10003;</span><span class="vi-sidebar-label" title="Approved Models">Approved Models</span></a>{% endif %}
                     {% if vi_access.user_management %}<a href="{% url 'VisionInspection:user-management' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'user-management' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9881;</span><span class="vi-sidebar-label" title="User Management">User Management</span></a>{% endif %}
                 </div>
             </div>
+            {% endif %}
 
             <!-- REPORTS -->
             {% if vi_access.reports %}<div class="vi-sidebar-section">
@@ -151,7 +157,7 @@
                             <div>
                                 <div class="vi-profile-name" id="viProfileFullName">{{ user.get_username }}</div>
                                 <div class="vi-profile-sub">
-                                    {% if vi_access.administrator %}Administrator{% elif vi_access.supervisor %}Supervisor{% elif vi_access.quality %}Quality user{% elif vi_access.operator %}Operator{% else %}Account{% endif %}
+                                    {% if vi_access.administrator %}Administrator{% elif vi_access.supervisor %}Supervisor{% elif vi_access.operator %}Operator{% else %}Account{% endif %}
                                 </div>
                             </div>
                         </div>
@@ -186,6 +192,21 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            var signoutForm = document.querySelector('.vi-signout-form');
+            if (signoutForm) {
+                signoutForm.addEventListener('submit', function() {
+                    try {
+                        sessionStorage.removeItem('viInspectionWorkflow');
+                        Object.keys(localStorage).forEach(function(key) {
+                            if (key.indexOf('vi-user-') === 0) localStorage.removeItem(key);
+                        });
+                    } catch (error) {
+                        // Browser storage may be disabled; the server session is still flushed.
+                    }
+                    window.dispatchEvent(new Event('vi:signout'));
+                });
+            }
+
             // Sidebar drawer toggle (tablet/mobile)
             var toggle = document.getElementById('viSidebarToggle');
             var sidebar = document.getElementById('viSidebar');

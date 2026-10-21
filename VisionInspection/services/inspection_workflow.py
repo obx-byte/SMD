@@ -189,7 +189,7 @@ class InspectionWorkflow:
     # ------------------------------------------------------------------ #
     #  Step 1 — Part barcode
     # ------------------------------------------------------------------ #
-    def scan_part(self, barcode: str):
+    def scan_part(self, barcode: str, operator=None):
         barcode = str(barcode or "").strip()
         if not barcode:
             return {"ok": False, "state": "waiting", "message": "Scan a part barcode."}
@@ -207,15 +207,18 @@ class InspectionWorkflow:
         has_model = bool(active_config and active_config.part_models.filter(is_enabled=True).exists())
         if latest_config is None:
             has_model = self._active_model() is not None
-        active_session = (
-            VisionInspectionSession.objects.filter(
-                is_active=True,
-                is_saved=False,
+        active_session = None
+        if operator is not None and getattr(operator, "is_authenticated", False):
+            active_session = (
+                VisionInspectionSession.objects.filter(
+                    is_active=True,
+                    is_saved=False,
+                    operator_id=operator.pk,
+                )
+                .exclude(stage__in=["saved", "cancelled"])
+                .order_by("-started_at")
+                .first()
             )
-            .exclude(stage__in=["saved", "cancelled"])
-            .order_by("-started_at")
-            .first()
-        )
         return {
             "ok": True,
             "state": "part_identified",
@@ -676,12 +679,14 @@ class InspectionWorkflow:
             .first()
         )
         if existing:
-            return {
+            duplicate = {
                 "ok": False,
                 "state": "duplicate_session",
-                "session_id": str(existing.session_id),
                 "message": "An active inspection session already exists for this part.",
             }
+            if operator is not None and existing.operator_id == operator.pk:
+                duplicate["session_id"] = str(existing.session_id)
+            return duplicate
 
         validation = self.validate_model(model_id, part_number)
         if not validation["ok"]:

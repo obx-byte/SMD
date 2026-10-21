@@ -1750,7 +1750,7 @@ def api_reset_state(request):
 def workflow_scan_part(request):
     """Step 1 — resolve the scanned part barcode."""
     data = _body_json(request)
-    result = _workflow().scan_part(data.get("barcode"))
+    result = _workflow().scan_part(data.get("barcode"), operator=request.user)
     return _json_response(result, status=200 if result.get("ok") else 400)
 
 

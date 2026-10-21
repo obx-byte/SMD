@@ -3,23 +3,13 @@
 All URLs are relative to ``/vision-inspection/`` as set in the project's
 root ``urls.py``.
 
-Deployment model
-----------------
-This is a **dedicated factory inspection station** with no login: an operator
-opens the application URL and lands directly on Inspection Master.  Routes are
-split into two groups:
-
-``station``  — operator routes that must work anonymously (inspection master,
-    live inspection, camera, ROI, workflow, history, traceability, state, and
-    the read-only Inspection Report).
-
-``admin``    — privileged routes (configuration setup, model registry,
-    master data, training, report exports, settings).  These are wrapped with
-    :func:`~django.contrib.admin.views.decorators.staff_member_required`, so
-    they keep a Django login and never become public.  Authentication
-    middleware, CSRF protection and database permissions are left enabled.
-
-Only the second group asks for a login; the station group never redirects.
+Access model
+------------
+The login page is public. Application pages and APIs are authenticated and
+wrapped with explicit role/permission checks; ``admin`` is a convenience
+wrapper for privileged routes, not a separate authentication mechanism.
+Inspection sessions are additionally scoped to their owning operator or an
+authorized Supervisor/Admin.
 """
 
 from django.urls import path
@@ -29,15 +19,46 @@ from VisionInspection.services.access_control import (
     require_administrator,
     require_audit_access,
     require_camera_roi_access,
+    require_camera_setup_view,
     require_configuration_access,
     require_configuration_view,
+    require_dashboard_access,
+    require_history_access,
     require_inspection_access,
+    require_inspection_logs_view,
+    require_inspection_state_view,
+    require_master_data_change,
+    require_master_data_create,
+    require_master_data_delete,
+    require_master_data_view,
+    require_master_data_page,
+    require_master_images_change,
+    require_master_images_view,
+    require_model_configuration_change,
+    require_model_configuration_view,
+    require_approved_models_change,
+    require_approved_models_view,
+    require_presets_change,
+    require_presets_view,
+    require_roi_configuration_change,
+    require_roi_configuration_view,
     require_report_access,
     require_report_export,
     require_authenticated,
+    require_storage_change,
+    require_storage_view,
+    require_system_settings_change,
+    require_system_settings_view,
     require_session_mutation_access,
     require_session_read_access,
+    require_training_jobs_change,
+    require_training_jobs_view,
+    require_trigger_zone_change,
+    require_trigger_zone_view,
     require_user_management,
+    require_yolo_models_change,
+    require_yolo_models_view,
+    require_yolo_models_page,
 )
 
 app_name = "VisionInspection"
@@ -46,10 +67,41 @@ app_name = "VisionInspection"
 _ACCESS_DECORATORS = {
     "authenticated": require_authenticated,
     "inspection": require_inspection_access,
+    "dashboard": require_dashboard_access,
+    "history": require_history_access,
     "reports": require_report_access,
     "report_export": require_report_export,
+    "master_data_view": require_master_data_view,
+    "master_data_create": require_master_data_create,
+    "master_data_change": require_master_data_change,
+    "master_data_delete": require_master_data_delete,
+    "master_data_page": require_master_data_page,
     "configuration": require_configuration_access,
     "configuration_view": require_configuration_view,
+    "camera_setup_view": require_camera_setup_view,
+    "storage_view": require_storage_view,
+    "storage_change": require_storage_change,
+    "model_view": require_model_configuration_view,
+    "model_change": require_model_configuration_change,
+    "approved_models_view": require_approved_models_view,
+    "approved_models_change": require_approved_models_change,
+    "yolo_models_view": require_yolo_models_view,
+    "yolo_models_page": require_yolo_models_page,
+    "yolo_models_change": require_yolo_models_change,
+    "training_view": require_training_jobs_view,
+    "training_change": require_training_jobs_change,
+    "inspection_state_view": require_inspection_state_view,
+    "inspection_logs_view": require_inspection_logs_view,
+    "roi_view": require_roi_configuration_view,
+    "roi_change": require_roi_configuration_change,
+    "trigger_zone_view": require_trigger_zone_view,
+    "trigger_zone_change": require_trigger_zone_change,
+    "presets_view": require_presets_view,
+    "presets_change": require_presets_change,
+    "master_images_view": require_master_images_view,
+    "master_images_change": require_master_images_change,
+    "system_settings_view": require_system_settings_view,
+    "system_settings_change": require_system_settings_change,
     "administrator": require_administrator,
     "user_management": require_user_management,
     "camera": require_camera_roi_access,
@@ -68,9 +120,9 @@ def public(route, view, name):
     return path(route, view, name=name)
 
 
-def admin(route, view, name):
-    """Administrator-only route; staff status alone does not grant access."""
-    return path(route, require_administrator(view), name=name)
+def admin(route, view, name, access="administrator"):
+    """Privileged route with explicit application-role authorization."""
+    return station(route, view, name, access=access)
 
 
 urlpatterns = [
@@ -80,27 +132,27 @@ urlpatterns = [
     station("users/", auth_views.user_management, name="user-management", access="user_management"),
     station("audit/", auth_views.audit_log, name="audit-log", access="audit"),
     # ------------------------------------------------------------------ #
-    #  Station landing page — Dashboard (no login, no redirect).
+    #  Station landing page — role-gated dashboard.
     #  The sidebar "Dashboard" item and the workspace Home icon point here.
     # ------------------------------------------------------------------ #
-    station("", ui_views.dashboard, name="dashboard", access="reports"),
+    station("", ui_views.dashboard, name="dashboard", access="dashboard"),
     station("inspection/", views.inspection_view, name="inspection"),
-    station("history/", views.history_view, name="history", access="reports"),
-    station("storage/image/<int:metadata_id>/", storage_views.image, name="storage-image", access="reports"),
+    station("history/", views.history_view, name="history", access="history"),
+    station("storage/image/<int:metadata_id>/", storage_views.image, name="storage-image", access="history"),
     station(
         "history/<int:inspection_id>/",
         views.history_detail,
         name="history-detail",
-        access="reports",
+        access="history",
     ),
-    station("traceability/", ui_views.traceability, name="ui-traceability", access="reports"),
+    station("traceability/", ui_views.traceability, name="ui-traceability", access="history"),
     station(
         "traceability/<int:inspection_id>/",
         ui_views.traceability_detail,
         name="traceability-detail",
-        access="reports",
+        access="history",
     ),
-    # Scan-time validation (read-only; works without any account).
+    # Scan-time validation (read-only, inspection-permission protected).
     station(
         "api/employee/validate/",
         views.api_employee_validate,
@@ -121,7 +173,7 @@ urlpatterns = [
         "inspection-master/",
         views.inspection_master_view,
         name="inspection-master",
-        access="configuration_view",
+        access="camera_setup_view",
     ),
     station(
         "inspection-master/save-roi/",
@@ -145,31 +197,31 @@ urlpatterns = [
         "inspection-master/status/",
         views.api_master_inspection_status,
         name="master-inspection-status",
-        access="configuration_view",
+        access="camera_setup_view",
     ),
     station(
         "inspection-master/roi/",
         views.master_roi_get,
         name="master-roi-get",
-        access="configuration_view",
+        access="camera_setup_view",
     ),
     station(
         "inspection-master/preview/",
         views.api_master_roi_preview,
         name="master-roi-preview",
-        access="configuration_view",
+        access="camera_setup_view",
     ),
     station(
         "inspection-master/camera-resolution/",
         views.api_master_camera_resolution,
         name="master-camera-resolution",
-        access="configuration_view",
+        access="camera_setup_view",
     ),
     station(
         "inspection-master/<str:part_number>/",
         views.inspection_master_view,
         name="inspection-master-part",
-        access="configuration_view",
+        access="camera_setup_view",
     ),
     # ------------------------------------------------------------------ #
     #  Airbag Stitch Inspection workflow (barcode → model → front → back →
@@ -203,7 +255,7 @@ urlpatterns = [
     ),
     station("workflow/save/", views.workflow_save, name="workflow-save", access="session_mutation"),
     station("workflow/cancel/", views.workflow_cancel, name="workflow-cancel", access="session_mutation"),
-    station("workflow/camera-config/", views.api_camera_config, name="api-camera-config", access="configuration_view"),
+    station("workflow/camera-config/", views.api_camera_config, name="api-camera-config", access="camera_setup_view"),
     station(
         "workflow/camera-config/save/",
         views.api_camera_config_save,
@@ -219,82 +271,92 @@ urlpatterns = [
     station("camera/stream/", views.camera_stream, name="camera-stream"),
     station("camera/capture/", views.camera_capture, name="camera-capture"),
     # ------------------------------------------------------------------ #
-    #  Operations dashboard (aggregated JSON for dashboard.js) — staff only
+    #  Legacy operations payload includes cross-station and configuration data.
     # ------------------------------------------------------------------ #
     admin(
         "operations/",
         ui_views.dashboard,
         name="dashboard-operations",
+        access="dashboard",
     ),
     admin(
         "api/dashboard/summary/",
         dashboard_api.dashboard_summary,
         name="api-dashboard-summary",
+        access="administrator",
     ),
     # ------------------------------------------------------------------ #
     #  Employee & Part Master CRUD (JSON) — administration, staff only
     # ------------------------------------------------------------------ #
-    admin("api/employees/", views.api_employee_list, name="api-employee-list"),
-    admin("api/employees/create/", views.employee_create, name="employee-create"),
+    admin("api/employees/", views.api_employee_list, name="api-employee-list", access="master_data_view"),
+    admin("api/employees/create/", views.employee_create, name="employee-create", access="master_data_create"),
     admin(
         "api/employees/<int:employee_id>/update/",
         views.employee_update,
         name="employee-update",
+        access="master_data_change",
     ),
-    station("api/parts/", views.api_part_list, name="api-part-list", access="configuration_view"),
-    admin("api/parts/list/", views.parts_list_api, name="api-parts-list"),
-    admin("api/parts/create/", views.part_create, name="part-create"),
-    admin("api/parts/<int:part_id>/update/", views.part_update, name="part-update"),
+    station("api/parts/", views.api_part_list, name="api-part-list", access="master_data_view"),
+    admin("api/parts/list/", views.parts_list_api, name="api-parts-list", access="master_data_view"),
+    admin("api/parts/create/", views.part_create, name="part-create", access="master_data_create"),
+    admin("api/parts/<int:part_id>/update/", views.part_update, name="part-update", access="master_data_change"),
     # ------------------------------------------------------------------ #
     #  Configuration (preset / master image / trigger zone / ROI) — staff only
     # ------------------------------------------------------------------ #
-    admin("configuration/", views.configuration_view, name="configuration"),
+    admin("configuration/", views.configuration_view, name="configuration", access="model_view"),
     admin(
         "configuration/master-image/",
         views.master_image_view,
         name="master-image",
+        access="master_images_view",
     ),
     admin(
         "configuration/master-image/save/",
         views.save_master_image,
         name="master-image-save",
+        access="master_images_change",
     ),
     admin(
         "configuration/trigger-zone/<int:preset_id>/",
         views.trigger_zone_config_view,
         name="trigger-zone-config",
+        access="trigger_zone_view",
     ),
     admin(
         "configuration/trigger-zone/save/",
         views.save_trigger_zone,
         name="trigger-zone-save",
+        access="trigger_zone_change",
     ),
     admin(
         "configuration/rois/<int:preset_id>/",
         views.roi_config_list,
         name="roi-config-list",
+        access="roi_view",
     ),
-    admin("configuration/roi/create/", views.create_roi, name="roi-create"),
-    admin("configuration/roi/<int:roi_id>/update/", views.update_roi, name="roi-update"),
-    admin("configuration/roi/<int:roi_id>/delete/", views.delete_roi, name="roi-delete"),
-    admin("configuration/roi/reorder/", views.reorder_rois, name="roi-reorder"),
-    admin("configuration/preset/create/", views.create_preset, name="preset-create"),
+    admin("configuration/roi/create/", views.create_roi, name="roi-create", access="roi_change"),
+    admin("configuration/roi/<int:roi_id>/update/", views.update_roi, name="roi-update", access="roi_change"),
+    admin("configuration/roi/<int:roi_id>/delete/", views.delete_roi, name="roi-delete", access="roi_change"),
+    admin("configuration/roi/reorder/", views.reorder_rois, name="roi-reorder", access="roi_change"),
+    admin("configuration/preset/create/", views.create_preset, name="preset-create", access="presets_change"),
     admin(
         "configuration/preset/list/",
         views.preset_list_api,
         name="preset-list",
+        access="presets_view",
     ),
     admin(
         "configuration/preset/<int:preset_id>/activate/",
         views.activate_preset,
         name="preset-activate",
+        access="presets_change",
     ),
 
     station(
         "parts/<int:part_id>/roi-setup/",
         ui_views.part_roi_setup,
         name="part-roi-setup",
-        access="configuration_view",
+        access="camera_setup_view",
     ),
     station(
         "api/parts/<int:part_id>/vision-configuration/",
@@ -320,7 +382,7 @@ urlpatterns = [
         name="api-yolo-model-classes",
         access="configuration_view",
     ),
-    station("api/yolo/models/upload/", views.part_model_upload, name="part-model-upload", access="administrator"),
+    station("api/yolo/models/upload/", views.part_model_upload, name="part-model-upload", access="yolo_models_change"),
     station(
         "api/parts/<int:part_id>/vision-roi/",
         views.api_part_vision_roi,
@@ -339,63 +401,67 @@ urlpatterns = [
         name="api-part-data-yaml-validate",
         access="configuration_view",
     ),
-    admin("preset/<int:preset_id>/", views.preset_detail, name="preset-detail"),
+    admin("preset/<int:preset_id>/", views.preset_detail, name="preset-detail", access="presets_view"),
     # ------------------------------------------------------------------ #
     #  YOLO Model registry — staff only (model uploads never public)
     # ------------------------------------------------------------------ #
-    admin("yolo/models/", views.yolo_models_list, name="yolo-models"),
-    admin("yolo/model/upload/", views.yolo_model_upload, name="yolo-model-upload"),
-    admin("yolo/model/test/", views.yolo_model_test, name="yolo-model-test"),
-    admin("yolo/detect/", views.yolo_detect, name="yolo-detect"),
+    admin("yolo/models/", views.yolo_models_list, name="yolo-models", access="yolo_models_view"),
+    admin("yolo/model/upload/", views.yolo_model_upload, name="yolo-model-upload", access="yolo_models_change"),
+    admin("yolo/model/test/", views.yolo_model_test, name="yolo-model-test", access="yolo_models_change"),
+    admin("yolo/detect/", views.yolo_detect, name="yolo-detect", access="yolo_models_change"),
     # ------------------------------------------------------------------ #
     #  YOLO Training (Celery + Redis + AJAX polling) — staff only
     # ------------------------------------------------------------------ #
-    admin("training/start/", views.training_start, name="training-start"),
+    admin("training/start/", views.training_start, name="training-start", access="training_change"),
     admin(
         "training/status/<int:job_id>/",
         views.training_status,
         name="training-status",
+        access="training_view",
     ),
     admin(
         "training/cancel/<int:job_id>/",
         views.training_cancel,
         name="training-cancel",
+        access="training_change",
     ),
-    admin("training/jobs/", views.training_jobs_list, name="training-jobs"),
+    admin("training/jobs/", views.training_jobs_list, name="training-jobs", access="training_view"),
     admin(
         "training/dataset-paths/",
         views.training_dataset_paths,
         name="training-dataset-paths",
+        access="training_view",
     ),
     # ------------------------------------------------------------------ #
     #  Custom UI pages — administration, staff only
     # ------------------------------------------------------------------ #
-    admin("employees/", ui_views.employee_list, name="ui-employees"),
-    station("parts/", ui_views.part_list, name="ui-parts", access="configuration_view"),
+    station("employees/", ui_views.employee_list, name="ui-employees", access="master_data_page"),
+    station("parts/", ui_views.part_list, name="ui-parts", access="master_data_page"),
     station(
         "parts/<int:part_id>/vision-configuration/",
         ui_views.part_vision_configuration,
         name="part-vision-configuration",
         access="configuration_view",
     ),
-    admin("yolo-models/", ui_views.yolo_model_list, name="ui-yolo-models"),
-    admin("presets/", ui_views.preset_list, name="ui-presets"),
-    admin("state/", ui_views.state_list, name="ui-state"),
-    admin("logs/", ui_views.log_list, name="ui-logs"),
-    admin("rois/", ui_views.roi_list, name="ui-rois"),
+    station("yolo-models/", ui_views.yolo_model_list, name="ui-yolo-models", access="yolo_models_page"),
+    admin("presets/", ui_views.preset_list, name="ui-presets", access="presets_view"),
+    admin("state/", ui_views.state_list, name="ui-state", access="inspection_state_view"),
+    admin("logs/", ui_views.log_list, name="ui-logs", access="inspection_logs_view"),
+    admin("rois/", ui_views.roi_list, name="ui-rois", access="roi_view"),
     admin(
         "trigger-zones/",
         ui_views.trigger_zone_list,
         name="ui-trigger-zones",
+        access="trigger_zone_view",
     ),
     admin(
         "training-jobs/",
         ui_views.training_job_list,
         name="ui-training-jobs",
+        access="training_view",
     ),
     # ------------------------------------------------------------------ #
-    #  Inspection Report — operator page is available without login; exports
-    #  remain staff-only because they download report data.
+    #  Inspection Report — view and export access are checked independently.
     # ------------------------------------------------------------------ #
     station(
         "reports/export/excel/",
@@ -410,13 +476,14 @@ urlpatterns = [
         access="report_export",
     ),
     station("reports/", ui_views.reports, name="ui-reports", access="reports"),
-    admin("settings/", ui_views.settings_page, name="ui-settings"),
-    station("settings/storage/", ui_views.storage_settings, name="storage-settings", access="administrator"),
-    station("api/storage/state/", storage_views.state, name="storage-state", access="administrator"),
-    station("api/storage/automatic-settings/", storage_views.automatic_settings, name="storage-automatic-settings", access="administrator"),
-    station("api/storage/test/", storage_views.test_destination, name="storage-test", access="administrator"),
-    station("api/storage/activate/", storage_views.activate_destination, name="storage-activate", access="administrator"),
-    station("api/storage/migration/", storage_views.migration_start, name="storage-migration-start", access="administrator"),
-    station("api/storage/migration/<int:job_id>/batch/", storage_views.migration_batch, name="storage-migration-batch", access="administrator"),
-    station("api/storage/migration/<int:job_id>/", storage_views.migration_status, name="storage-migration-status", access="administrator"),
+    admin("settings/", ui_views.settings_page, name="ui-settings", access="system_settings_view"),
+    station("settings/storage/", ui_views.storage_settings, name="storage-settings", access="storage_view"),
+    station("api/storage/state/", storage_views.state, name="storage-state", access="storage_view"),
+    station("api/storage/automatic-settings/", storage_views.automatic_settings, name="storage-automatic-settings", access="storage_change"),
+    station("api/storage/test/", storage_views.test_destination, name="storage-test", access="storage_change"),
+    station("api/storage/activate/", storage_views.activate_destination, name="storage-activate", access="storage_change"),
+    station("api/storage/migration/", storage_views.migration_start, name="storage-migration-start", access="storage_change"),
+    station("api/storage/migration/<int:job_id>/batch/", storage_views.migration_batch, name="storage-migration-batch", access="storage_change"),
+    station("api/storage/migration/<int:job_id>/", storage_views.migration_status, name="storage-migration-status", access="storage_view"),
+    station("users/permissions/", auth_views.user_management_permissions, name="user-management-permissions", access="user_management"),
 ]

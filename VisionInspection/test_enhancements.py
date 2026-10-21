@@ -1,15 +1,19 @@
-﻿from django.contrib.auth.models import Group, User
+from io import BytesIO
+from django.contrib.auth.models import Group, Permission, User
 from django.test import TestCase, Client
 from django.urls import reverse
+from unittest.mock import patch
 
 from VisionInspection.models import (
     VisionInspectionLog,
+    VisionInspectionPermissionOverride,
+    VisionInspectionPart,
     VisionInspectionSession,
     VisionInspectionUserProfile,
     StorageImageMetadata,
 )
 from VisionInspection.services.access_control import (
-    ROLE_OPERATOR, ROLE_QUALITY, ROLE_SUPERVISOR, ROLE_ADMIN,
+    ROLE_OPERATOR, ROLE_QUALITY, ROLE_SUPERVISOR, ROLE_ADMIN, has_permission,
 )
 
 
@@ -35,6 +39,28 @@ class AccountAndRoleAcceptanceTests(TestCase):
         response = self.client.post(reverse("VisionInspection:logout"))
         self.assertEqual(response.status_code, 302)
         self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_user_switch_starts_with_a_clean_session(self):
+        first = self.make_user("E-SWITCH-1", ROLE_OPERATOR)
+        second = self.make_user("E-SWITCH-2", ROLE_SUPERVISOR)
+        self.client.post(
+            reverse("VisionInspection:login"),
+            {"username": first.username, "password": "CorrectHorseBattery77"},
+        )
+        session = self.client.session
+        session["viInspectionWorkflow"] = {"session_id": "old-user-session"}
+        session["station_scope"] = "OLD-STATION"
+        session.save()
+
+        self.client.post(reverse("VisionInspection:logout"))
+        self.client.post(
+            reverse("VisionInspection:login"),
+            {"username": second.username, "password": "CorrectHorseBattery77"},
+        )
+
+        self.assertEqual(self.client.session.get("_auth_user_id"), str(second.pk))
+        self.assertNotIn("viInspectionWorkflow", self.client.session)
+        self.assertNotIn("station_scope", self.client.session)
 
     def test_login_form_enforces_csrf(self):
         client = Client(enforce_csrf_checks=True)
@@ -65,15 +91,13 @@ class AccountAndRoleAcceptanceTests(TestCase):
         self.assertContains(response, "inactive")
         self.assertNotIn("_auth_user_id", self.client.session)
 
-    def test_operator_reports_are_limited_to_own_employee_id(self):
+    def test_operator_cannot_view_reports_by_default(self):
         operator = self.make_user("E-103", ROLE_OPERATOR)
         VisionInspectionLog.objects.create(part_number="OWN-PART", employee_code="E-103", result="OK")
         VisionInspectionLog.objects.create(part_number="OTHER-PART", employee_code="E-999", result="OK")
         self.client.force_login(operator)
         response = self.client.get(reverse("VisionInspection:ui-reports"))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "OWN-PART")
-        self.assertNotContains(response, "OTHER-PART")
+        self.assertEqual(response.status_code, 403)
 
     def test_supervisor_reports_are_limited_to_assigned_employee_ids(self):
         supervisor = self.make_user("S-1", ROLE_SUPERVISOR, ["STATION-A"])
@@ -94,6 +118,22 @@ class AccountAndRoleAcceptanceTests(TestCase):
         self.assertEqual(self.client.get(reverse("VisionInspection:user-management")).status_code, 403)
         self.assertEqual(self.client.get(reverse("VisionInspection:ui-settings")).status_code, 403)
 
+    def test_operator_and_supervisor_role_defaults_match_access_policy(self):
+        operator = self.make_user("E-DEFAULT", ROLE_OPERATOR)
+        supervisor = self.make_user("S-DEFAULT", ROLE_SUPERVISOR)
+
+        self.assertTrue(has_permission(operator, "perform_inspection"))
+        self.assertTrue(has_permission(operator, "view_inspection_history"))
+        self.assertFalse(has_permission(operator, "view_inspection_dashboard"))
+        self.assertFalse(has_permission(operator, "view_inspection_reports"))
+
+        self.assertTrue(has_permission(supervisor, "view_inspection_dashboard"))
+        self.assertTrue(has_permission(supervisor, "view_inspection_reports"))
+        self.assertTrue(has_permission(supervisor, "view_storage_settings"))
+        self.assertFalse(has_permission(supervisor, "change_storage_settings"))
+        self.assertFalse(has_permission(supervisor, "view_camera_setup"))
+        self.assertFalse(has_permission(supervisor, "view_yolo_models"))
+
     def test_operator_cannot_fetch_another_employees_image_by_direct_url(self):
         owner = self.make_user("E-250", ROLE_OPERATOR)
         other = self.make_user("E-251", ROLE_OPERATOR)
@@ -108,6 +148,32 @@ class AccountAndRoleAcceptanceTests(TestCase):
         self.client.force_login(other)
         response = self.client.get(reverse("VisionInspection:storage-image", args=[metadata.pk]))
         self.assertEqual(response.status_code, 403)
+
+    def test_operator_can_view_own_inspection_evidence(self):
+        operator = self.make_user("E-OWN-IMAGE", ROLE_OPERATOR)
+        session = VisionInspectionSession.objects.create(
+            part_number="P-OWN-IMG",
+            employee_code=operator.username,
+            operator=operator,
+        )
+        metadata = StorageImageMetadata.objects.create(
+            storage_key="b" * 32,
+            inspection_session=session,
+            image_field_name="front_image",
+            relative_path="evidence/front.jpg",
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL,
+        )
+        self.client.force_login(operator)
+
+        with patch(
+            "VisionInspection.storage_views.storage_service.open_image",
+            return_value=BytesIO(b"evidence"),
+        ):
+            response = self.client.get(
+                reverse("VisionInspection:storage-image", args=[metadata.pk])
+            )
+
+        self.assertEqual(response.status_code, 200)
 
     def test_operator_cannot_open_another_employees_traceability_detail(self):
         operator = self.make_user("E-301", ROLE_OPERATOR)
@@ -135,6 +201,175 @@ class AccountAndRoleAcceptanceTests(TestCase):
         self.assertTrue(user.check_password("EmployeePasswordValid99"))
         self.assertNotEqual(user.password, "EmployeePasswordValid99")
         self.assertTrue(user.groups.filter(name=ROLE_OPERATOR).exists())
+
+    def test_admin_can_open_permission_matrix_but_supervisor_cannot(self):
+        admin = User.objects.create_superuser(
+            username="ADMIN-PERM", password="AdminPasswordValid99"
+        )
+        self.client.force_login(admin)
+        response = self.client.get(
+            reverse("VisionInspection:user-management-permissions")
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Default role access")
+        self.assertContains(response, "Supervisor access overrides")
+
+        supervisor = self.make_user("S-PERM", ROLE_SUPERVISOR)
+        self.client.force_login(supervisor)
+        response = self.client.get(
+            reverse("VisionInspection:user-management-permissions")
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_set_supervisor_override(self):
+        admin = User.objects.create_superuser(
+            username="ADMIN-OVERRIDE", password="AdminPasswordValid99"
+        )
+        supervisor = self.make_user("S-OVERRIDE", ROLE_SUPERVISOR)
+        permission = Permission.objects.get(
+            content_type__app_label="vision_inspection",
+            codename="view_yolo_models",
+        )
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("VisionInspection:user-management-permissions"),
+            {
+                "action": "save_user_overrides",
+                "user_id": supervisor.pk,
+                "override_view_yolo_models": "grant",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        override = VisionInspectionPermissionOverride.objects.get(
+            user=supervisor, permission=permission
+        )
+        self.assertTrue(override.granted)
+        self.assertTrue(has_permission(supervisor, "view_yolo_models"))
+
+    def test_supervisor_override_cannot_grant_user_or_permission_management(self):
+        admin = User.objects.create_superuser(
+            username="ADMIN-RESTRICT", password="AdminPasswordValid99"
+        )
+        supervisor = self.make_user("S-RESTRICT", ROLE_SUPERVISOR)
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("VisionInspection:user-management-permissions"),
+            {
+                "action": "save_user_overrides",
+                "user_id": supervisor.pk,
+                "override_manage_inspection_users": "grant",
+                "override_manage_inspection_permissions": "grant",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(
+            VisionInspectionPermissionOverride.objects.filter(user=supervisor).exists()
+        )
+
+
+class DashboardRoleAcceptanceTests(TestCase):
+    def make_user(self, username, role, scope=""):
+        user = User.objects.create_user(
+            username=username, password="CorrectHorseBattery77"
+        )
+        user.groups.add(Group.objects.get(name=role))
+        VisionInspectionUserProfile.objects.create(
+            user=user, station_scope=scope
+        )
+        return user
+
+    def test_dashboard_requires_permission_and_operator_data_stays_scoped(self):
+        operator = self.make_user("DASH-OP", ROLE_OPERATOR)
+        denied = Client()
+        denied.force_login(operator)
+        response = denied.get(reverse("VisionInspection:dashboard"))
+        self.assertEqual(response.status_code, 403)
+
+        dashboard_permission = Permission.objects.get(
+            content_type__app_label="vision_inspection",
+            codename="view_inspection_dashboard",
+        )
+        dashboard_only = Group.objects.create(name="Dashboard-only access")
+        dashboard_only.permissions.add(dashboard_permission)
+        operator.groups.add(dashboard_only)
+
+        VisionInspectionPart.objects.create(
+            part_number="OWN-PART", part_name="Own Airbag"
+        )
+        VisionInspectionPart.objects.create(
+            part_number="OTHER-PART", part_name="Other Airbag"
+        )
+        VisionInspectionLog.objects.create(
+            part_number="OWN-PART",
+            employee_code=operator.username,
+            result="OK",
+        )
+        VisionInspectionLog.objects.create(
+            part_number="OTHER-PART",
+            employee_code="OTHER-OP",
+            result="NOT_OK",
+        )
+
+        response = denied.get(reverse("VisionInspection:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["summary"]["total"], 1)
+        self.assertContains(response, "Start Inspection")
+        self.assertNotContains(response, "Recent Inspections")
+        self.assertNotContains(response, "View Inspection Report")
+        self.assertContains(response, "OWN-PART")
+        self.assertNotContains(response, "OTHER-PART")
+        self.assertEqual(
+            denied.get(reverse("VisionInspection:api-dashboard-summary")).status_code,
+            403,
+        )
+
+    def test_supervisor_dashboard_recent_inspections_follow_station_scope(self):
+        supervisor = self.make_user("DASH-SUP", ROLE_SUPERVISOR, "LINE-A")
+        VisionInspectionPart.objects.create(
+            part_number="LINE-A-PART", part_name="Assigned Line"
+        )
+        VisionInspectionPart.objects.create(
+            part_number="LINE-B-PART", part_name="Other Line"
+        )
+        assigned = VisionInspectionSession.objects.create(
+            part_number="LINE-A-PART",
+            employee_code="OP-A",
+            station_id="LINE-A",
+        )
+        VisionInspectionSession.objects.create(
+            part_number="LINE-B-PART",
+            employee_code="OP-B",
+            station_id="LINE-B",
+        )
+        VisionInspectionLog.objects.create(
+            part_number="LINE-A-PART",
+            employee_code="OP-A",
+            result="OK",
+            session=assigned,
+        )
+        VisionInspectionLog.objects.create(
+            part_number="LINE-B-PART",
+            employee_code="OP-B",
+            result="NOT_OK",
+        )
+
+        self.client.force_login(supervisor)
+        response = self.client.get(reverse("VisionInspection:dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["summary"]["total"], 1)
+        self.assertContains(response, "Recent Inspections")
+        self.assertContains(response, "View Inspection Report")
+        self.assertContains(response, "LINE-A-PART")
+        self.assertEqual(len(response.context["recent_rows"]), 1)
+        self.assertEqual(
+            response.context["recent_rows"][0]["log"].part_number,
+            "LINE-A-PART",
+        )
 
 
 class SessionTraceabilityAcceptanceTests(TestCase):
@@ -178,5 +413,4 @@ class SessionTraceabilityAcceptanceTests(TestCase):
         self.assertContains(response, "Annotation not generated")
         self.assertContains(response, "SERIAL-77")
         report = self.client.get(reverse("VisionInspection:ui-reports"))
-        self.assertEqual(report.status_code, 200)
-        self.assertContains(report, "INCOMPLETE")
+        self.assertEqual(report.status_code, 403)

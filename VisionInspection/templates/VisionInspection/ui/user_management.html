@@ -9,6 +9,11 @@
         <h2>Employee Accounts</h2>
         <p>Create and manage employee access and roles</p>
     </div>
+    {% if can_manage_permissions %}
+    <a class="vi-btn vi-btn-secondary" href="{% url 'VisionInspection:user-management-permissions' %}">
+        Configure role permissions
+    </a>
+    {% endif %}
 </div>
 
 <section class="vi-card vi-account-create-card" aria-labelledby="createAccountTitle">

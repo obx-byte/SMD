@@ -4,7 +4,7 @@
 {% block title %}Dashboard — Airbag Stitch Inspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261021-1">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261021-3">
 {% endblock %}
 
 {% block header_title %}Dashboard{% endblock %}
@@ -15,11 +15,13 @@
         <div>
             <p class="vi-dash-eyebrow">QUALITY OPERATIONS</p>
             <h2 class="vi-page-title" id="dashboardTitle">Inspection Overview</h2>
-            <p class="vi-page-subtitle">Monitor inspection outcomes and quality across production parts.</p>
+            <p class="vi-page-subtitle">Monitor inspection outcomes and quality across production parts</p>
         </div>
+        {% if vi_access.inspection %}
         <a class="vi-btn vi-btn-primary vi-dash-start" href="{% url 'VisionInspection:inspection' %}">
             <span aria-hidden="true">&#9654;</span> Start Inspection
         </a>
+        {% endif %}
     </section>
 
     <form method="get" action="{% url 'VisionInspection:dashboard' %}" class="vi-card vi-dash-filter">
@@ -57,7 +59,7 @@
             <div>
                 <p class="vi-dash-kpi-label">Total OK</p>
                 <p class="vi-dash-kpi-value">{{ summary.ok }}</p>
-                <p class="vi-dash-kpi-note">{{ summary.ok_pct|floatformat:"1" }}% of inspections</p>
+                <p class="vi-dash-kpi-note">Quality rate: {{ summary.ok_pct|floatformat:"1" }}%</p>
             </div>
         </article>
         <article class="vi-card vi-dash-kpi" data-tone="red">
@@ -66,6 +68,14 @@
                 <p class="vi-dash-kpi-label">Total NOT OK</p>
                 <p class="vi-dash-kpi-value">{{ summary.not_ok }}</p>
                 <p class="vi-dash-kpi-note">{{ summary.not_ok_pct|floatformat:"1" }}% of inspections</p>
+            </div>
+        </article>
+        <article class="vi-card vi-dash-kpi" data-tone="warning">
+            <span class="vi-dash-kpi-icon" aria-hidden="true">!</span>
+            <div>
+                <p class="vi-dash-kpi-label">Incomplete / Error</p>
+                <p class="vi-dash-kpi-value">{{ summary.incomplete_error }}</p>
+                <p class="vi-dash-kpi-note">{{ summary.incomplete_error_pct|floatformat:"1" }}% of inspections</p>
             </div>
         </article>
     </section>
@@ -164,11 +174,60 @@
             {% else %}
                 <div class="vi-dash-empty">
                     <span aria-hidden="true">&#9638;</span>
-                    <strong>No inspection results yet</strong>
+                    <strong>No inspection data available</strong>
                     <p>Part results will appear here after inspections are recorded.</p>
                 </div>
             {% endif %}
         </article>
     </section>
+
+    {% if show_recent_inspections %}
+    <section class="vi-card vi-dash-recent" aria-labelledby="recentInspectionsTitle">
+        <header class="vi-dash-card-heading vi-dash-recent-heading">
+            <div>
+                <p class="vi-dash-card-eyebrow">LATEST RECORDS</p>
+                <h3 id="recentInspectionsTitle">Recent Inspections</h3>
+            </div>
+            <a class="vi-dash-report-link"
+               href="{% url 'VisionInspection:ui-reports' %}{% if selected_part %}?part={{ selected_part|urlencode }}{% endif %}">
+                View Inspection Report
+            </a>
+        </header>
+        {% if recent_rows %}
+        <div class="vi-dash-recent-table-wrap" role="region" aria-label="Recent inspections" tabindex="0">
+            <table class="vi-dash-recent-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Date &amp; Time</th>
+                        <th scope="col">Part Number</th>
+                        <th scope="col">Part Name</th>
+                        <th scope="col">Employee / Station</th>
+                        <th scope="col">Overall</th>
+                        <th scope="col">Front</th>
+                        <th scope="col">Back</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in recent_rows %}
+                    <tr data-report-row>
+                        <td class="vi-dash-recent-time">{{ row.log.timestamp|date:"Y-m-d H:i" }}</td>
+                        <td class="vi-dash-recent-part">{{ row.log.part_number|default:"—" }}</td>
+                        <td class="vi-dash-recent-name" title="{{ row.part_name|default:'—' }}">{{ row.part_name|default:"—" }}</td>
+                        <td class="vi-dash-recent-employee">{{ row.employee_or_station|default:"—" }}</td>
+                        <td><span class="vi-badge {{ row.result_badge }}">{{ row.result_label }}</span></td>
+                        <td><span class="vi-badge {{ row.front_badge }}">{{ row.front_label|default:"—" }}</span></td>
+                        <td><span class="vi-badge {{ row.back_badge }}">{{ row.back_label|default:"—" }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="vi-dash-recent-empty" role="status">
+            No inspections match the current filter.
+        </div>
+        {% endif %}
+    </section>
+    {% endif %}
 </div>
 {% endblock %}

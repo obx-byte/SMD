@@ -16,6 +16,7 @@
 <script>
     window.__VI_MASTERS__ = {
         collection: "employee",
+        readOnly: {% if can_manage_employees %}false{% else %}true{% endif %},
         pageSize: 15,
         primaryLabel: "Employee",
         searchPlaceholder: "Search employee ID or name…",

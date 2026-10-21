@@ -654,13 +654,43 @@ class VisionInspectionSession(models.Model):
         ordering = ["-started_at"]
         permissions = [
             ("perform_inspection", "Can perform an inspection"),
+            ("view_inspection_dashboard", "Can view the inspection dashboard"),
+            ("view_inspection_history", "Can view inspection history"),
             ("view_inspection_reports", "Can view inspection reports"),
             ("export_inspection_reports", "Can export inspection reports"),
+            ("view_master_data", "Can view master data"),
+            ("create_master_data", "Can create master data"),
+            ("change_master_data", "Can change master data"),
+            ("delete_master_data", "Can delete master data"),
             ("change_part_vision_configuration", "Can change Part Vision configuration"),
             ("change_camera_roi_settings", "Can change camera and ROI settings"),
+            ("view_camera_setup", "Can view camera setup"),
+            ("view_storage_settings", "Can view storage settings"),
+            ("change_storage_settings", "Can change storage settings"),
+            ("view_model_configuration", "Can view model configuration"),
+            ("change_model_configuration", "Can change model configuration"),
+            ("view_approved_models", "Can view approved models"),
+            ("manage_approved_models", "Can manage approved models"),
+            ("view_yolo_models", "Can view YOLO models"),
+            ("manage_yolo_models", "Can manage YOLO models"),
+            ("view_training_jobs", "Can view training jobs"),
+            ("manage_training_jobs", "Can manage training jobs"),
             ("manage_inspection_users", "Can manage inspection users"),
+            ("manage_inspection_permissions", "Can manage inspection permissions"),
             ("view_inspection_audit_log", "Can view inspection audit logs"),
             ("view_part_vision_configuration", "Can view Part Vision configuration"),
+            ("view_inspection_state", "Can view inspection state"),
+            ("view_inspection_logs", "Can view inspection logs"),
+            ("view_roi_configuration", "Can view ROI configuration"),
+            ("change_roi_configuration", "Can change ROI configuration"),
+            ("view_trigger_zone_configuration", "Can view trigger zone configuration"),
+            ("change_trigger_zone_configuration", "Can change trigger zone configuration"),
+            ("view_inspection_presets", "Can view inspection presets"),
+            ("change_inspection_presets", "Can change inspection presets"),
+            ("view_master_images", "Can view master images"),
+            ("change_master_images", "Can change master images"),
+            ("view_system_settings", "Can view system settings"),
+            ("change_system_settings", "Can change system settings"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -697,6 +727,46 @@ class VisionInspectionAuditLog(models.Model):
     class Meta:
         db_table = "vision_inspection_audit_log"
         ordering = ["-created_at"]
+
+
+class VisionInspectionPermissionOverride(models.Model):
+    """Admin-managed per-user exception to the user's role permissions."""
+
+    user = models.ForeignKey(
+        "auth.User",
+        on_delete=models.CASCADE,
+        related_name="vision_inspection_permission_overrides",
+    )
+    permission = models.ForeignKey(
+        "auth.Permission",
+        on_delete=models.CASCADE,
+        related_name="vision_inspection_user_overrides",
+    )
+    granted = models.BooleanField(
+        help_text="True grants the permission; False explicitly denies it."
+    )
+    updated_by = models.ForeignKey(
+        "auth.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="vision_inspection_permission_changes",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vision_inspection_permission_override"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "permission"),
+                name="uniq_vi_user_permission_override",
+            ),
+        ]
+        ordering = ("user__username", "permission__codename")
+
+    def __str__(self):
+        decision = "grant" if self.granted else "deny"
+        return f"{self.user.get_username()}: {decision} {self.permission.codename}"
 
 
 # =========================================================================== #
@@ -1417,7 +1487,6 @@ class StorageMigrationJob(models.Model):
 # =========================================================================== #
 #  End of Storage Models
 # =========================================================================== #
-
 
 
 

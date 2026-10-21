@@ -18,6 +18,8 @@ import re
 import uuid as uuid_module
 from urllib.parse import urlencode
 
+from django.db.models import Count, Q
+
 from VisionInspection.models import (
     VisionInspectionEmployee,
     VisionInspectionLog,
@@ -171,10 +173,18 @@ def filter_logs(logs, filters):
 def summarize(logs):
     """Summary counts of *logs*, all taken from the same filtered queryset."""
     logs = logs if logs is not None else VisionInspectionLog.objects.all()
-    total = logs.count()
-    ok = logs.filter(result=RESULT_OK).count()
-    not_ok = logs.filter(result=RESULT_NOT_OK).count()
-    incomplete_error = logs.filter(result__in=(RESULT_INCOMPLETE, RESULT_ERROR)).count()
+    counts = logs.aggregate(
+        total=Count("pk"),
+        ok=Count("pk", filter=Q(result=RESULT_OK)),
+        not_ok=Count("pk", filter=Q(result=RESULT_NOT_OK)),
+        incomplete_error=Count(
+            "pk", filter=Q(result__in=(RESULT_INCOMPLETE, RESULT_ERROR))
+        ),
+    )
+    total = counts["total"]
+    ok = counts["ok"]
+    not_ok = counts["not_ok"]
+    incomplete_error = counts["incomplete_error"]
 
     def percentage(value):
         return round(100.0 * value / total, 1) if total else 0.0

@@ -28,6 +28,7 @@ from VisionInspection.models import (
 )
 from VisionInspection.services import inspection_records as records
 from VisionInspection.services import report_exports
+from VisionInspection.services.access_control import has_permission, is_admin
 from VisionInspection.services.part_configuration import common_roi_camera_error
 
 logger = logging.getLogger(__name__)
@@ -44,8 +45,25 @@ def favicon(request):
     )
 
 
-def _parts_for_filter():
+def _parts_for_filter(logs=None):
     """Parts offered in the part filter of the Dashboard / Report pages."""
+    if logs is not None:
+        part_numbers = list(
+            logs.exclude(part_number__isnull=True)
+            .exclude(part_number="")
+            .values_list("part_number", flat=True)
+            .distinct()
+            .order_by("part_number")
+        )
+        names = dict(
+            VisionInspectionPart.objects.filter(
+                part_number__in=part_numbers
+            ).values_list("part_number", "part_name")
+        )
+        return [
+            {"part_number": number, "part_name": names.get(number) or ""}
+            for number in part_numbers
+        ]
     return [
         {"part_number": part.part_number, "part_name": part.part_name or ""}
         for part in VisionInspectionPart.objects.all().order_by("part_number")
@@ -61,10 +79,15 @@ def dashboard(request):
     """
     filters = records.read_filters(request.GET)
     from VisionInspection.services.access_control import scope_logs
-    logs = scope_logs(request.user, records.filter_logs(None, filters))
+
+    accessible_logs = scope_logs(request.user, VisionInspectionLog.objects.all())
+    logs = records.filter_logs(accessible_logs, filters)
     summary = records.summarize(logs)
 
-    parts = _parts_for_filter()
+    can_view_master_data = has_permission(request.user, "view_master_data")
+    parts = _parts_for_filter(
+        None if can_view_master_data else accessible_logs
+    )
     part_names = {part["part_number"]: part["part_name"] for part in parts}
     grouped_parts = list(
         logs.values("part_number")
@@ -91,6 +114,32 @@ def dashboard(request):
         }
         for row in grouped_parts
     ]
+    show_recent_inspections = has_permission(
+        request.user, "view_inspection_reports"
+    )
+    recent_rows = []
+    if show_recent_inspections:
+        recent_logs = (
+            logs.select_related("session", "session__operator")
+            .order_by("-timestamp", "-pk")[: records.RECENT_LIMIT]
+        )
+        recent_rows = records.build_rows(recent_logs, parts=part_names)
+        for row in recent_rows:
+            session = row["session"]
+            row["employee_or_station"] = (
+                row["employee_label"]
+                if row["employee_code"]
+                else (
+                    (session.employee_code if session else "")
+                    or (
+                        session.operator.get_username()
+                        if session and session.operator_id
+                        else ""
+                    )
+                    or (session.station_id if session else "")
+                    or "—"
+                )
+            )
 
     context = {
         "sidebar_active": "dashboard",
@@ -110,6 +159,9 @@ def dashboard(request):
             else 0
         ),
         "part_rows": part_rows,
+        "recent_rows": recent_rows,
+        "show_recent_inspections": show_recent_inspections,
+        "can_view_reports": show_recent_inspections,
         "chart_max": chart_max,
         "chart_mid": round(chart_max / 2),
     }
@@ -139,6 +191,15 @@ def employee_list(request):
         "q": q,
         "is_active": is_active,
         "sidebar_active": "employees",
+        "can_manage_employees": (
+            request.user.is_authenticated
+            and request.user.is_active
+            and (
+                is_admin(request.user)
+                or has_permission(request.user, "create_master_data")
+                or has_permission(request.user, "change_master_data")
+            )
+        ),
     }
     return render(request, "VisionInspection/ui/employee_list.html", context)
 
@@ -161,7 +222,15 @@ def part_list(request):
         "q": q,
         "is_active": is_active,
         "sidebar_active": "parts",
-        "can_manage_parts": request.user.is_staff,
+        "can_manage_parts": (
+            request.user.is_authenticated
+            and request.user.is_active
+            and (
+                is_admin(request.user)
+                or has_permission(request.user, "create_master_data")
+                or has_permission(request.user, "change_master_data")
+            )
+        ),
     }
     return render(request, "VisionInspection/ui/part_list.html", context)
 
@@ -565,7 +634,15 @@ def storage_settings(request):
     return render(
         request,
         "VisionInspection/ui/storage_settings.html",
-        {"sidebar_active": "storage", "storage_state": storage_state(), "csrf_token": get_token(request)},
+        {
+            "sidebar_active": "storage",
+            "storage_state": storage_state(),
+            "csrf_token": get_token(request),
+            "can_change_storage": (
+                is_admin(request.user)
+                or has_permission(request.user, "change_storage_settings")
+            ),
+        },
     )
 
 

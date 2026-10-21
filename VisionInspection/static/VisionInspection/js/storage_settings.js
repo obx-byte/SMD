@@ -10,6 +10,19 @@
     var notice = document.getElementById("storageNotice");
     var testResult = document.getElementById("storageTestResult");
     var busy = false;
+    var canChange = cfg.canChange !== false;
+
+    if (!canChange) {
+        document.querySelectorAll(
+            "#storagePage input:not([type='hidden']), #storagePage select, #storagePage textarea, #storagePage button:not(#storageRefreshBtn)"
+        ).forEach(function (control) {
+            control.disabled = true;
+        });
+        var readOnlyNote = document.createElement("p");
+        readOnlyNote.className = "storage-notice";
+        readOnlyNote.textContent = "View-only access. An Administrator must change storage configuration.";
+        document.querySelector(".storage-heading").appendChild(readOnlyNote);
+    }
 
     function el(id) { return document.getElementById(id); }
     function csrf() { return cfg.csrf || ""; }
@@ -113,6 +126,7 @@
             loadButton.type = "button";
             loadButton.className = "storage-button storage-small";
             loadButton.textContent = "LOAD";
+            loadButton.disabled = !canChange;
             loadButton.addEventListener("click", function () { loadDestination(destination); });
             actionWrap.appendChild(loadButton);
             actionCell.appendChild(actionWrap);

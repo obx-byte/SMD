@@ -1226,6 +1226,11 @@
         startActivityMonitoring();
         window.addEventListener("pagehide", stopActivityMonitoring);
         window.addEventListener("pageshow", startActivityMonitoring);
+        window.addEventListener("vi:signout", function () {
+            state.requestVersion += 1;
+            clearTransientState();
+            stopActivityMonitoring();
+        });
         showStage("Scan");
         restoreSession();
     }

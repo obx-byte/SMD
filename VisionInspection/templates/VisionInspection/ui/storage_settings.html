@@ -144,6 +144,7 @@
 window.__VI_STORAGE__ = {
     state: JSON.parse(document.getElementById("storage-state").textContent),
     csrf: document.querySelector('input[name="csrfmiddlewaretoken"]').value,
+    canChange: {% if can_change_storage %}true{% else %}false{% endif %},
     urls: {
         state: "{% url 'VisionInspection:storage-state' %}",
         automaticSettings: "{% url 'VisionInspection:storage-automatic-settings' %}",
