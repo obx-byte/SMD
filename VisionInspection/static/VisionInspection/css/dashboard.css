@@ -1,30 +1,79 @@
 .vi-dash {
-    --dash-ink: #172B4D;
+    --dash-ink: #243653;
     --dash-text: #334155;
     --dash-muted: #64748B;
-    --dash-teal: #0D9488;
+    --dash-supporting: #64748B;
+    --dash-teal: #0F766E;
     --dash-green: #16A34A;
     --dash-red: #E11D48;
     --dash-warning: #D97706;
     --dash-line: #E2E8F0;
+    --dash-surface: #FFFFFF;
     width: 100%;
     max-width: 1680px;
     margin: 0 auto;
     color: var(--dash-text);
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
 }
 
-body.vi-dashboard-chrome .vi-content {
-    background: #F3F6FA;
+body.vi-dashboard-chrome .vi-main-wrapper > .vi-content {
+    background: #F5F7FC;
 }
 
-.vi-dash-filter-actions .vi-btn-primary {
+body.vi-dashboard-chrome .vi-top-header .vi-header-title {
+    color: #E2E8F0;
+    font-size: 13px;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-header-datetime {
+    color: #17335F;
+    font-size: 13px;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-btn {
+    color: #16305F;
+    font-size: 14px;
+    font-family: inherit;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-signout-btn {
+    font-size: 14px;
+}
+
+@media (max-width: 600px) {
+    body.vi-dashboard-chrome .vi-top-header .vi-header-datetime {
+        font-size: 11px;
+    }
+
+    body.vi-dashboard-chrome .vi-top-header #viProfileName {
+        max-width: clamp(76px, calc(100vw - 280px), 120px);
+        font-size: 13px;
+    }
+
+    body.vi-dashboard-chrome .vi-top-header .vi-signout-btn {
+        font-size: 13px;
+    }
+}
+
+@media (max-width: 420px) {
+    body.vi-dashboard-chrome .vi-top-header .vi-header-datetime {
+        max-width: 116px;
+        font-size: 11px;
+    }
+
+    body.vi-dashboard-chrome .vi-top-header .vi-profile-btn {
+        font-size: 13px;
+    }
+}
+
+.vi-content .vi-dash .vi-dash-filter-actions .vi-btn-primary {
     background: var(--dash-teal);
     border-color: var(--dash-teal);
 }
 
-.vi-dash-filter-actions .vi-btn-primary:hover {
-    background: #0F766E;
-    border-color: #0F766E;
+.vi-content .vi-dash .vi-dash-filter-actions .vi-btn-primary:hover {
+    background: #115E59;
+    border-color: #115E59;
 }
 
 .vi-dash-filter-actions .vi-btn-secondary {
@@ -45,49 +94,53 @@ body.vi-dashboard-chrome .vi-content {
 .vi-dash-card-eyebrow {
     margin: 0 0 4px;
     color: var(--dash-teal);
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 1.2px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
 }
 
-.vi-dash .vi-page-title {
+body.vi-dashboard-chrome .vi-content .vi-dash .vi-page-title {
     margin: 0;
     color: var(--dash-ink);
-    font-size: clamp(20px, 2vw, 26px);
+    font-size: clamp(26px, 2.2vw, 30px);
     line-height: 1.2;
 }
 
 .vi-dash .vi-page-subtitle {
     margin: 5px 0 0;
     color: var(--dash-muted);
-    font-size: 13px;
+    font-size: 14px;
+    line-height: 1.45;
 }
 
-.vi-dash-start {
+body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-start {
     flex: none;
     display: inline-flex;
     align-items: center;
     gap: 8px;
     border-radius: 9px;
-    padding: 11px 16px;
+    min-height: 42px;
+    padding: 10px 16px;
     background: var(--dash-teal);
     border-color: var(--dash-teal);
     box-shadow: 0 4px 10px rgba(13, 148, 136, .16);
+    font-size: 14px;
+    font-weight: 650;
 }
 
-.vi-dash-start:hover,
-.vi-dash .vi-btn-primary:hover {
-    background: #0F766E;
-    border-color: #0F766E;
+body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-start:hover,
+body.vi-dashboard-chrome .vi-content .vi-dash .vi-btn-primary:hover {
+    background: #115E59;
+    border-color: #115E59;
 }
 
 .vi-dash-filter,
 .vi-dash-kpi,
 .vi-dash-chart-card {
-    background: #fff;
+    background: var(--dash-surface);
     border: 1px solid var(--dash-line);
-    border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(23, 43, 77, .045);
+    border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(23, 43, 77, .035), 0 4px 12px rgba(23, 43, 77, .035);
 }
 
 .vi-dash-filter {
@@ -110,10 +163,8 @@ body.vi-dashboard-chrome .vi-content {
 
 .vi-dash-filter-field label {
     color: var(--dash-muted);
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: .8px;
-    text-transform: uppercase;
+    font-size: 12px;
+    font-weight: 650;
 }
 
 .vi-dash .vi-control {
@@ -121,8 +172,10 @@ body.vi-dashboard-chrome .vi-content {
     min-width: 0;
     border: 1px solid var(--dash-line);
     border-radius: 8px;
-    background: #ffffff;
+    min-height: 42px;
+    background: var(--dash-surface);
     color: var(--dash-ink);
+    font-size: 14px;
 }
 
 .vi-dash .vi-control:focus-visible {
@@ -136,15 +189,16 @@ body.vi-dashboard-chrome .vi-content {
     gap: 8px;
 }
 
-.vi-dash-filter-actions .vi-btn {
-    min-height: 38px;
+.vi-content .vi-dash .vi-dash-filter-actions .vi-btn {
+    min-height: 42px;
     border-radius: 8px;
+    font-size: 14px;
 }
 
 .vi-dash-filter-note {
     align-self: center;
     margin: 0 0 0 4px;
-    color: var(--dash-muted);
+    color: var(--dash-supporting);
     font-size: 12px;
 }
 
@@ -161,7 +215,7 @@ body.vi-dashboard-chrome .vi-content {
     min-width: 0;
     align-items: center;
     gap: 13px;
-    padding: 16px 18px;
+    padding: 17px 18px;
     border-left: 4px solid transparent;
 }
 
@@ -191,7 +245,7 @@ body.vi-dashboard-chrome .vi-content {
     height: 42px;
     flex: none;
     place-items: center;
-    border-radius: 12px;
+    border-radius: 10px;
     background: #E6F4F3;
     color: var(--dash-teal);
     font-size: 19px;
@@ -216,22 +270,24 @@ body.vi-dashboard-chrome .vi-content {
 .vi-dash-kpi-label {
     margin: 0;
     color: var(--dash-muted);
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
 }
 
 .vi-dash-kpi-value {
     margin: 3px 0 1px;
     color: var(--dash-ink);
-    font-size: clamp(22px, 2.3vw, 29px);
-    font-weight: 800;
+    font-size: clamp(28px, 2.5vw, 32px);
+    font-weight: 750;
     line-height: 1.1;
 }
 
 .vi-dash-kpi-note {
     margin: 0;
-    color: var(--dash-muted);
-    font-size: 10px;
+    color: var(--dash-supporting);
+    font-size: 12px;
+    line-height: 1.35;
 }
 
 .vi-dash-kpi[data-tone="green"] .vi-dash-kpi-note {
@@ -257,7 +313,7 @@ body.vi-dashboard-chrome .vi-content {
     display: flex;
     flex-direction: column;
     min-width: 0;
-    padding: 16px;
+    padding: 18px;
 }
 
 .vi-dash-card-heading {
@@ -268,17 +324,18 @@ body.vi-dashboard-chrome .vi-content {
     margin-bottom: 12px;
 }
 
-.vi-dash-card-heading h3 {
+body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-card-heading h3 {
     margin: 0;
     color: var(--dash-ink);
-    font-size: 15px;
-    font-weight: 750;
+    font-size: 17px;
+    font-weight: 650;
+    line-height: 1.35;
 }
 
 .vi-dash-card-eyebrow {
     color: var(--dash-muted);
-    font-size: 9px;
-    letter-spacing: .9px;
+    font-size: 11px;
+    letter-spacing: .06em;
 }
 
 .vi-dash-part-chip {
@@ -287,7 +344,7 @@ body.vi-dashboard-chrome .vi-content {
     border-radius: 7px;
     background: #E6F4F3;
     color: #0F766E;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
 }
 
@@ -322,19 +379,19 @@ body.vi-dashboard-chrome .vi-content {
     align-items: center;
     justify-content: center;
     border-radius: 50%;
-    background: #fff;
+    background: var(--dash-surface);
 }
 
 .vi-dash-donut-hole strong {
     color: var(--dash-ink);
-    font-size: 25px;
+    font-size: 28px;
     line-height: 1.1;
 }
 
 .vi-dash-donut-hole span {
     margin-top: 4px;
     color: var(--dash-muted);
-    font-size: 9px;
+    font-size: 11px;
 }
 
 .vi-dash-legend {
@@ -350,7 +407,8 @@ body.vi-dashboard-chrome .vi-content {
     align-items: center;
     gap: 8px;
     color: var(--dash-ink);
-    font-size: 11px;
+    font-size: 13px;
+    line-height: 1.4;
 }
 
 .vi-dash-legend-dot,
@@ -378,12 +436,14 @@ body.vi-dashboard-chrome .vi-content {
 .vi-dash .vi-dash-chart-key .is-not-ok { background: var(--dash-red); }
 
 .vi-dash-legend-item strong {
-    font-size: 12px;
+    color: var(--dash-ink);
+    font-size: 13px;
 }
 
 .vi-dash-legend-item small {
-    min-width: 39px;
-    color: var(--dash-muted);
+    min-width: 44px;
+    color: var(--dash-supporting);
+    font-size: 12px;
     text-align: right;
 }
 
@@ -392,7 +452,7 @@ body.vi-dashboard-chrome .vi-content {
     flex: none;
     gap: 10px;
     color: var(--dash-muted);
-    font-size: 10px;
+    font-size: 12px;
 }
 
 .vi-dash-chart-key span {
@@ -417,7 +477,7 @@ body.vi-dashboard-chrome .vi-content {
 .vi-dash-bar-axis {
     margin: 0 0 6px;
     color: var(--dash-muted);
-    font-size: 9px;
+    font-size: 11px;
 }
 
 .vi-dash-bar-axis > div {
@@ -447,7 +507,7 @@ body.vi-dashboard-chrome .vi-content {
 .vi-dash-bar-label strong {
     overflow: hidden;
     color: var(--dash-ink);
-    font-size: 11px;
+    font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -455,7 +515,7 @@ body.vi-dashboard-chrome .vi-content {
 .vi-dash-bar-label span {
     overflow: hidden;
     color: var(--dash-muted);
-    font-size: 10px;
+    font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -474,7 +534,7 @@ body.vi-dashboard-chrome .vi-content {
 
 .vi-dash-bar-line > b {
     color: var(--dash-text);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-align: right;
 }
@@ -498,7 +558,7 @@ body.vi-dashboard-chrome .vi-content {
 
 .vi-dash-bar-total {
     color: var(--dash-muted);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-align: right;
 }
@@ -521,12 +581,12 @@ body.vi-dashboard-chrome .vi-content {
 
 .vi-dash-empty strong {
     color: var(--dash-ink);
-    font-size: 12px;
+    font-size: 14px;
 }
 
 .vi-dash-empty p {
     margin: 5px 0 0;
-    font-size: 10px;
+    font-size: 12px;
 }
 
 .vi-dash-recent {
@@ -542,13 +602,13 @@ body.vi-dashboard-chrome .vi-content {
 .vi-dash-report-link {
     flex: none;
     color: var(--dash-teal);
-    font-size: 12px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 650;
     text-decoration: none;
 }
 
 .vi-dash-report-link:hover {
-    color: #0F766E;
+    color: #115E59;
     text-decoration: underline;
 }
 
@@ -570,7 +630,8 @@ body.vi-dashboard-chrome .vi-content {
     table-layout: fixed;
     border-collapse: collapse;
     color: var(--dash-text);
-    font-size: 12px;
+    font-size: 13px;
+    line-height: 1.45;
 }
 
 .vi-dash-recent-table th:nth-child(1) { width: 16%; }
@@ -597,8 +658,8 @@ body.vi-dashboard-chrome .vi-content {
 .vi-dash-recent-table th {
     color: var(--dash-muted);
     background: #F8FAFC;
-    font-size: 10px;
-    font-weight: 800;
+    font-size: 12px;
+    font-weight: 650;
     letter-spacing: .04em;
     text-transform: uppercase;
     white-space: nowrap;
@@ -623,13 +684,13 @@ body.vi-dashboard-chrome .vi-content {
 
 .vi-dash-recent-part {
     color: var(--dash-ink);
-    font-weight: 700;
+    font-weight: 650;
     white-space: nowrap;
 }
 
 .vi-dash-recent-name {
     overflow: hidden;
-    color: var(--dash-muted);
+    color: var(--dash-supporting);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -644,18 +705,21 @@ body.vi-dashboard-chrome .vi-content {
     display: inline-flex;
     justify-content: center;
     min-width: 62px;
-    min-height: 22px;
+    min-height: 26px;
     align-items: center;
+    padding: 4px 9px;
+    font-size: 12px;
+    font-weight: 600;
     white-space: nowrap;
 }
 
 .vi-dash-recent-empty {
-    padding: 18px 10px;
-    color: var(--dash-muted);
+    padding: 20px 12px;
+    color: var(--dash-supporting);
     background: #F8FAFC;
     border: 1px dashed var(--dash-line);
     border-radius: 8px;
-    font-size: 12px;
+    font-size: 13px;
     text-align: center;
 }
 
@@ -721,9 +785,10 @@ body.vi-dashboard-chrome .vi-content {
         gap: 12px;
     }
 
-    .vi-dash-start {
-        padding: 9px 10px;
-        font-size: 11px;
+    body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-start {
+        min-height: 40px;
+        padding: 9px 12px;
+        font-size: 13px;
     }
 
     .vi-dash-kpis {

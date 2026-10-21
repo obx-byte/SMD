@@ -190,15 +190,15 @@ class ModelRegistry:
                 return [], "The model could not be loaded."
             model = entry.model
             task = entry.task
-        t0 = time.perf_counter()
-        try:
-            detections = self._predict_ultralytics(
-                model, frame, conf, iou, classes, task
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Inference failed for %s: %s", entry.path, exc)
-            return [], f"Inference failed: {exc}"
-        return detections, round((time.perf_counter() - t0) * 1000.0, 2)
+            t0 = time.perf_counter()
+            try:
+                detections = self._predict_ultralytics(
+                    model, frame, conf, iou, classes, task
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Inference failed for %s: %s", entry.path, exc)
+                return [], f"Inference failed: {exc}"
+            return detections, round((time.perf_counter() - t0) * 1000.0, 2)
 
     def predict_segmentation(
         self, model_path, frame, conf=0.50, show_masks=True, show_boxes=True

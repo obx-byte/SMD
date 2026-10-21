@@ -25,6 +25,12 @@
 {% if side.detections %}<h4>Detection evidence</h4><table class="vi-table"><thead><tr><th>Class</th><th>Confidence</th></tr></thead><tbody>{% for d in side.detections %}<tr><td>{{ d.class|default:"?" }}</td><td>{{ d.confidence|floatformat:2 }}</td></tr>{% endfor %}</tbody></table>{% endif %}
 </section>{% endfor %}
 </div>
-{% else %}<div class="vi-card"><div class="vi-card-title">Legacy inspection evidence</div>{% if inspection_image_url %}<img src="{{ inspection_image_url }}" alt="Stored inspection image" style="width:100%;max-width:760px;max-height:500px;object-fit:contain">{% else %}<div class="vi-trace-empty">Image not captured</div>{% endif %}<p>This older record has no linked front/back session. Side assignment cannot be determined from its stored data.</p></div>{% endif %}
+{% else %}<div class="vi-card"><div class="vi-card-title">Legacy inspection evidence</div>
+<div class="vi-trace-meta"><span>Model: {% if log.yolo_model_name %}{{ log.yolo_model_name }}{% if log.yolo_model_version %} v{{ log.yolo_model_version }}{% endif %}{% else %}<strong>MODEL NOT CONFIGURED</strong>{% endif %}</span><span>Employee: {{ log.employee_code|default:"—" }}</span><span>Barcode: {{ log.barcode|default:"—" }}</span></div>
+{% if inspection_image_url %}<img src="{{ inspection_image_url }}" alt="Stored inspection image" style="width:100%;max-width:760px;max-height:500px;object-fit:contain">{% else %}<div class="vi-trace-empty">No image stored. Not captured.</div>{% endif %}
+<p>Annotation Not generated. This older record has no linked front/back session, so side assignment cannot be determined from its stored data.</p>
+{% if roi_config %}<h3>Stored ROI results</h3><table class="vi-table"><thead><tr><th>ROI</th><th>Result</th><th>Details</th></tr></thead><tbody>{% for item in roi_config %}<tr><td>{{ item.roi_name }}</td><td>{{ item.result|default:"—" }}</td><td>{{ item.details|default:"—" }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+{% if detections %}<h3>Detections</h3><table class="vi-table"><thead><tr><th>Class</th><th>Confidence</th><th>Bounding box</th></tr></thead><tbody>{% for detection in detections %}<tr><td>{{ detection.class|default:"—" }}</td><td>{{ detection.confidence|floatformat:2 }}</td><td>{{ detection.bbox|default:"—" }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+</div>{% endif %}
 {% if log.error_details %}<div class="vi-card" style="margin-top:16px"><div class="vi-card-title">Failure reason</div><p>{{ log.error_details }}</p></div>{% endif %}
 {% endblock %}

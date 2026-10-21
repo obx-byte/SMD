@@ -501,6 +501,11 @@ class CameraService:
                 _release_device(self._camera_index)
                 return False
 
+            # Keep the first successful probe frame so the very first
+            # inspection request sees a valid image immediately instead of
+            # waiting for the background thread to capture the next frame.
+            self.push_frame(_probe)
+
             # Publish only a fully working device to the shared slot.
             self._store_capture(cap)
             self._status = CAMERA_STATES["ON"]

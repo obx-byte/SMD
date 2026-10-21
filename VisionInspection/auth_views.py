@@ -21,6 +21,7 @@ from VisionInspection.services.access_control import (
     ROLE_OPERATOR,
     ROLE_SUPERVISOR,
     cancel_user_workflows,
+    has_permission,
     is_admin,
 )
 
@@ -39,9 +40,19 @@ def _role_group(role):
         group.permissions.add(*permissions)
     return group
 
+
+def _post_login_url(user):
+    if has_permission(user, "perform_inspection"):
+        return reverse("VisionInspection:inspection")
+    if has_permission(user, "view_inspection_dashboard"):
+        return reverse("VisionInspection:dashboard")
+    if has_permission(user, "view_inspection_reports"):
+        return reverse("VisionInspection:ui-reports")
+    return reverse("VisionInspection:password-change")
+
 def employee_login(request):
     if request.user.is_authenticated:
-        return redirect("VisionInspection:inspection")
+        return redirect(_post_login_url(request.user))
     error = ""
     if request.method == "POST":
         employee_id = (request.POST.get("username") or "").strip().upper()
@@ -55,7 +66,7 @@ def employee_login(request):
             next_url = request.POST.get("next") or ""
             if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
                 return redirect(next_url)
-            return redirect("VisionInspection:inspection")
+            return redirect(_post_login_url(user))
         error = "Employee ID or password is incorrect, or this account is inactive."
     return render(request, "VisionInspection/ui/login.html", {"error": error, "next": request.GET.get("next", "")})
 
@@ -74,7 +85,7 @@ def change_password(request):
         from django.contrib.auth import update_session_auth_hash
         update_session_auth_hash(request, user)
         messages.success(request, "Password changed.")
-        return redirect("VisionInspection:inspection")
+        return redirect(_post_login_url(user))
     return render(request, "VisionInspection/ui/password_change.html", {"form": form})
 
 def _audit(request, user, action, message):
@@ -167,20 +178,23 @@ def user_management_permissions(request):
     if set(permissions_by_code) != set(permission_codes):
         raise RuntimeError("Permission catalog is incomplete; apply VisionInspection migrations.")
 
-    supervisors = User.objects.filter(
+    manageable_users = User.objects.filter(
         is_active=True,
-        groups__name=ROLE_SUPERVISOR,
+        groups__name__in=(ROLE_OPERATOR, ROLE_SUPERVISOR),
     ).exclude(
         is_superuser=True
     ).exclude(
         groups__name=ROLE_ADMIN
-    ).order_by("username").distinct()
+    ).prefetch_related("groups").order_by("username").distinct()
     selected_user_id = (
         request.POST.get("user_id")
         if request.method == "POST"
         else request.GET.get("user_id")
     )
-    selected_user = supervisors.filter(pk=selected_user_id).first() if selected_user_id else supervisors.first()
+    selected_user = (
+        manageable_users.filter(pk=selected_user_id).first()
+        if selected_user_id else manageable_users.first()
+    )
 
     if request.method == "POST":
         action = request.POST.get("action")
@@ -237,9 +251,9 @@ def user_management_permissions(request):
                 )
                 messages.success(request, f"{role} permissions updated.")
             elif action == "save_user_overrides":
-                target = supervisors.filter(pk=selected_user_id).first()
+                target = manageable_users.filter(pk=selected_user_id).first()
                 if target is None:
-                    messages.error(request, "Choose an active Supervisor account.")
+                    messages.error(request, "Choose an active Operator or Supervisor account.")
                     return redirect("VisionInspection:user-management-permissions")
                 decisions = {
                     codename: request.POST.get(f"override_{codename}", "inherit")
@@ -308,7 +322,7 @@ def user_management_permissions(request):
                             "permissions": changes,
                         },
                     )
-                messages.success(request, "Supervisor permission exceptions updated.")
+                messages.success(request, "User permission exceptions updated.")
                 return redirect(
                     f"{reverse('VisionInspection:user-management-permissions')}?user_id={target.pk}"
                 )
@@ -365,7 +379,7 @@ def user_management_permissions(request):
         {
             "roles": role_rows,
             "permission_rows": permission_rows,
-            "supervisors": supervisors,
+            "manageable_users": manageable_users,
             "selected_user": selected_user,
             "overrides": overrides,
         },

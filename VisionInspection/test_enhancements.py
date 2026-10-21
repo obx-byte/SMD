@@ -40,6 +40,18 @@ class AccountAndRoleAcceptanceTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertNotIn("_auth_user_id", self.client.session)
 
+    def test_supervisor_login_lands_on_dashboard(self):
+        supervisor = self.make_user("S-LOGIN", ROLE_SUPERVISOR)
+
+        response = self.client.post(reverse("VisionInspection:login"), {
+            "username": supervisor.username,
+            "password": "CorrectHorseBattery77",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("VisionInspection:dashboard"))
+        self.assertEqual(self.client.get(response.url).status_code, 200)
+
     def test_user_switch_starts_with_a_clean_session(self):
         first = self.make_user("E-SWITCH-1", ROLE_OPERATOR)
         second = self.make_user("E-SWITCH-2", ROLE_SUPERVISOR)
@@ -123,7 +135,7 @@ class AccountAndRoleAcceptanceTests(TestCase):
         supervisor = self.make_user("S-DEFAULT", ROLE_SUPERVISOR)
 
         self.assertTrue(has_permission(operator, "perform_inspection"))
-        self.assertTrue(has_permission(operator, "view_inspection_history"))
+        self.assertFalse(has_permission(operator, "view_inspection_history"))
         self.assertFalse(has_permission(operator, "view_inspection_dashboard"))
         self.assertFalse(has_permission(operator, "view_inspection_reports"))
 
@@ -149,7 +161,7 @@ class AccountAndRoleAcceptanceTests(TestCase):
         response = self.client.get(reverse("VisionInspection:storage-image", args=[metadata.pk]))
         self.assertEqual(response.status_code, 403)
 
-    def test_operator_can_view_own_inspection_evidence(self):
+    def test_operator_cannot_fetch_inspection_evidence_without_an_exception(self):
         operator = self.make_user("E-OWN-IMAGE", ROLE_OPERATOR)
         session = VisionInspectionSession.objects.create(
             part_number="P-OWN-IMG",
@@ -173,7 +185,7 @@ class AccountAndRoleAcceptanceTests(TestCase):
                 reverse("VisionInspection:storage-image", args=[metadata.pk])
             )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 403)
 
     def test_operator_cannot_open_another_employees_traceability_detail(self):
         operator = self.make_user("E-301", ROLE_OPERATOR)
@@ -212,7 +224,7 @@ class AccountAndRoleAcceptanceTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Default role access")
-        self.assertContains(response, "Supervisor access overrides")
+        self.assertContains(response, "Account access overrides")
 
         supervisor = self.make_user("S-PERM", ROLE_SUPERVISOR)
         self.client.force_login(supervisor)
@@ -405,6 +417,15 @@ class SessionTraceabilityAcceptanceTests(TestCase):
         user = User.objects.create_user("E-501", password="StrongPasswordForTest11")
         user.groups.add(Group.objects.get(name=ROLE_OPERATOR))
         VisionInspectionUserProfile.objects.create(user=user)
+        history_permission = Permission.objects.get(
+            content_type__app_label="vision_inspection",
+            codename="view_inspection_history",
+        )
+        VisionInspectionPermissionOverride.objects.create(
+            user=user,
+            permission=history_permission,
+            granted=True,
+        )
         self.client.force_login(user)
         response = self.client.get(reverse("VisionInspection:traceability-detail", args=[log.pk]))
         self.assertEqual(response.status_code, 200)

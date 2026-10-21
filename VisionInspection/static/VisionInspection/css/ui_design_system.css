@@ -3,13 +3,13 @@
 html[data-theme="purple"],
 html[data-theme="green"] {
     color-scheme: light;
-    --vi-bg: #F3F6FA;
+    --vi-bg: #F5F7FC;
     --vi-bg-card: #FFFFFF;
-    --vi-bg-dark: #0F766E;
+    --vi-bg-dark: #EDF2F7;
     --vi-border: #E2E8F0;
     --vi-text: #334155;
     --vi-text-muted: #64748B;
-    --vi-text-bright: #172B4D;
+    --vi-text-bright: #243653;
     --vi-accent: #0D9488;
     --vi-accent-light: #0F766E;
     --vi-warning: #D97706;
@@ -30,11 +30,11 @@ html[data-theme="green"] {
     --vi-sidebar-text: #CBD5E1;
     --vi-sidebar-text-bright: #FFFFFF;
     --vi-sidebar-hover: rgba(148, 163, 184, 0.12);
-    --vi-sidebar-active: rgba(13, 148, 136, 0.22);
+    --vi-sidebar-active: rgba(138, 116, 220, 0.2);
     --vi-sidebar-active-text: #FFFFFF;
-    --vi-shadow: 0 1px 2px rgba(23, 43, 77, 0.04), 0 5px 16px rgba(23, 43, 77, 0.045);
+    --vi-shadow: 0 1px 2px rgba(23, 43, 77, 0.035), 0 4px 12px rgba(23, 43, 77, 0.035);
 
-    --smd-ink: #172B4D;
+    --smd-ink: #243653;
     --smd-muted: #64748B;
     --smd-border: #E2E8F0;
     --smd-ok: #16A34A;
@@ -51,28 +51,46 @@ html[data-theme="green"] {
     --ui-space-5: 20px;
     --ui-space-6: 24px;
     --ui-radius-sm: 6px;
-    --ui-radius: 10px;
-    --ui-radius-lg: 12px;
+    --ui-radius: 8px;
+    --ui-radius-lg: 8px;
 }
 
 html[data-theme="green"] {
     --vi-accent: #0F766E;
     --vi-accent-light: #115E59;
     --vi-blue: #0F766E;
-    --vi-sidebar-active: rgba(13, 148, 136, 0.22);
+    --vi-sidebar-active: rgba(138, 116, 220, 0.2);
     --smd-primary: #0F766E;
     --smd-primary-dark: #115E59;
 }
 
 body:not(.vi-inspection-chrome) {
-    background: #F3F6FA;
-    color: #334155;
-    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    background: var(--vi-bg);
+    color: var(--vi-text);
+    font-family: "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased;
 }
 
 body:not(.vi-inspection-chrome) .vi-content {
-    background: #F3F6FA;
+    background: var(--vi-bg);
+}
+
+body:not(.vi-inspection-chrome) .vi-top-header .vi-header-title {
+    color: #E2E8F0;
+}
+
+body:not(.vi-inspection-chrome) .vi-top-header .vi-header-datetime {
+    font-size: 13px;
+}
+
+body:not(.vi-inspection-chrome) .vi-top-header .vi-profile-btn,
+body:not(.vi-inspection-chrome) .vi-top-header #viProfileName {
+    font-family: inherit;
+    font-size: 14px;
+}
+
+body:not(.vi-inspection-chrome) .vi-top-header .vi-signout-btn {
+    font-size: 14px;
 }
 
 /* Keep the established navy shell regardless of the selected light accent. */
@@ -88,13 +106,13 @@ html:not([data-theme]) .vi-sidebar {
 }
 
 .vi-sidebar .vi-sidebar-link.active {
-    background: rgba(13, 148, 136, 0.2);
+    background: rgba(138, 116, 220, 0.2);
     color: #FFFFFF;
-    box-shadow: inset 3px 0 #2DD4BF;
+    box-shadow: inset 3px 0 #A78BFA;
 }
 
 .vi-sidebar .vi-sidebar-link.active .vi-sidebar-icon {
-    color: #5EEAD4;
+    color: #C4B5FD;
 }
 
 .vi-sidebar .vi-sidebar-section-title.has-active,
@@ -103,10 +121,10 @@ html:not([data-theme]) .vi-sidebar {
 }
 
 .vi-content :is(.vi-card, .vi-summary-card, .vi-panel) {
-    border: 1px solid #E2E8F0;
-    border-radius: 12px;
-    background: #FFFFFF;
-    box-shadow: 0 1px 2px rgba(23, 43, 77, 0.04), 0 4px 12px rgba(23, 43, 77, 0.035);
+    border: 1px solid var(--vi-border);
+    border-radius: var(--ui-radius);
+    background: var(--vi-bg-card);
+    box-shadow: var(--vi-shadow);
 }
 
 .vi-content .vi-card-title,
@@ -114,14 +132,20 @@ html:not([data-theme]) .vi-sidebar {
 .vi-content .vi-page-title,
 .vi-content h2,
 .vi-content h3 {
-    color: #172B4D;
+    color: var(--vi-text-bright);
 }
 
 .vi-content .vi-page-subtitle,
 .vi-content .vi-help-text,
 .vi-content .vi-muted,
 .vi-content .vi-filter-note {
-    color: #64748B;
+    color: var(--vi-text-muted);
+}
+
+.vi-content .vi-card-title {
+    font-size: 17px;
+    font-weight: 650;
+    line-height: 1.35;
 }
 
 .vi-content :is(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea),
@@ -130,11 +154,35 @@ html:not([data-theme]) .vi-sidebar {
 .vi-content .vi-form-group input,
 .vi-content .vi-form-group select,
 .vi-content .vi-form-group textarea {
-    border: 1px solid #CBD5E1;
+    min-height: 42px;
+    border: 1px solid var(--vi-input-border);
     border-radius: 8px;
-    background-color: #FFFFFF;
-    color: #172B4D;
+    background-color: var(--vi-input-bg);
+    color: var(--vi-text-bright);
     font: inherit;
+}
+
+.vi-content .vi-control-sm {
+    min-height: 36px;
+}
+
+.vi-content form label:not(.vi-sr-only):not(.storage-checkbox):not(.vi-permissions-checkbox) {
+    color: var(--vi-text);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: normal;
+    line-height: 1.35;
+}
+
+.vi-content :is(.vi-field-help, .vi-field-error, .vi-filter-note, .vi-help-text) {
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.vi-content .vi-field-help,
+.vi-content .vi-filter-note,
+.vi-content .vi-help-text {
+    color: var(--vi-text-muted);
 }
 
 .vi-content :is(input, select, textarea, button, a):focus-visible,
@@ -142,26 +190,33 @@ html:not([data-theme]) .vi-sidebar {
 .vi-content .vi-master-control:focus {
     outline: 3px solid rgba(13, 148, 136, 0.2);
     outline-offset: 1px;
-    border-color: #0D9488;
+    border-color: var(--vi-accent);
 }
 
 .vi-content .vi-btn {
-    min-height: 38px;
-    padding: 8px 14px;
-    border-radius: 8px;
+    min-height: 42px;
+    padding: 9px 14px;
+    border-radius: var(--ui-radius);
+    font-size: 14px;
     font-weight: 650;
     transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
+.vi-content .vi-btn.vi-btn-sm {
+    min-height: 36px;
+    padding: 7px 10px;
+    font-size: 13px;
+}
+
 .vi-content .vi-btn-primary {
-    background: #0D9488;
-    border-color: #0D9488;
+    background: var(--vi-accent);
+    border-color: var(--vi-accent);
     color: #FFFFFF;
 }
 
 .vi-content .vi-btn-primary:hover {
-    background: #0F766E;
-    border-color: #0F766E;
+    background: var(--vi-accent-light);
+    border-color: var(--vi-accent-light);
 }
 
 .vi-content .vi-btn-secondary,
@@ -195,20 +250,24 @@ html:not([data-theme]) .vi-sidebar {
 }
 
 .vi-content .vi-table {
-    color: #334155;
+    color: var(--vi-text);
     font-size: 13px;
 }
 
 .vi-content .vi-table th {
     background: #F1F5F9;
-    color: #334155;
-    border-bottom: 1px solid #CBD5E1;
-    font-size: 11px;
+    color: var(--vi-text);
+    border-bottom: 1px solid var(--vi-input-border);
+    padding: 11px 12px;
+    font-size: 12px;
+    font-weight: 650;
     letter-spacing: 0.04em;
+    line-height: 1.35;
 }
 
 .vi-content .vi-table td {
-    border-bottom-color: #E2E8F0;
+    padding: 10px 12px;
+    border-bottom-color: var(--vi-border);
     line-height: 1.45;
 }
 
@@ -221,13 +280,14 @@ html:not([data-theme]) .vi-sidebar {
 }
 
 .vi-content .vi-table tbody tr:hover {
-    background: #F1F7F8;
+    background: #F3F6FB;
 }
 
 .vi-content .vi-badge {
-    padding: 3px 8px;
+    padding: 4px 9px;
     border-radius: 6px;
-    font-size: 10px;
+    font-size: 12px;
+    font-weight: 600;
     letter-spacing: 0.025em;
 }
 
@@ -265,8 +325,16 @@ html:not([data-theme]) .vi-sidebar {
 }
 
 .vi-content :is(.vi-page-header h2, .vi-page-title) {
+    font-size: 28px;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
+    line-height: 1.25;
+}
+
+.vi-content h3 {
+    font-size: 17px;
+    font-weight: 650;
+    line-height: 1.35;
 }
 
 /* Inspection Master has its own workflow controls; only adjust its palette. */
@@ -338,18 +406,18 @@ html:not([data-theme]) .vi-sidebar {
 }
 
 body.vi-inspection-chrome .vi-content {
-    background: #F3F6FA;
+    background: #F5F7FC;
 }
 
 /* Standalone preset configuration uses the same tokens without the shared shell. */
 body.vi-configuration-page {
-    --vi-bg: #F3F6FA;
+    --vi-bg: #F5F7FC;
     --vi-bg-card: #FFFFFF;
     --vi-bg-dark: #F1F5F9;
     --vi-border: #E2E8F0;
     --vi-text: #334155;
     --vi-text-muted: #64748B;
-    --vi-text-bright: #172B4D;
+    --vi-text-bright: #243653;
     --vi-accent: #0D9488;
     --vi-accent-light: #0F766E;
     --vi-warning: #D97706;
@@ -361,7 +429,7 @@ body.vi-configuration-page {
     --vi-red: #E11D48;
     --vi-yellow: #D97706;
     --vi-blue: #0D9488;
-    background: #F3F6FA;
+    background: #F5F7FC;
 }
 
 body.vi-configuration-page :is(.vi-tab-content, .vi-form-section, .vi-config-nav) {

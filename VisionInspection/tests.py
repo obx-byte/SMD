@@ -25,6 +25,20 @@ def _post(client, url, payload):
     return client.post(url, data=json.dumps(payload), content_type="application/json")
 
 
+def _role_client(role, username=None):
+    from django.contrib.auth.models import Group, User
+    from django.test import Client
+
+    username = username or "TEST-" + role.upper().replace(" ", "-")
+    user, _created = User.objects.get_or_create(username=username)
+    user.set_password("test-password")
+    user.save(update_fields=["password"])
+    user.groups.add(Group.objects.get(name=role))
+    client = Client()
+    client.force_login(user)
+    return client, user
+
+
 def _emp_create_url():
     return reverse("VisionInspection:employee-create")
 
@@ -210,6 +224,9 @@ from VisionInspection.models import VisionInspectionLog  # noqa: E402
 
 
 class TraceabilityTests(TestCase):
+    def setUp(self):
+        self.client, self.user = _role_client("Administrator", "TRACE-ADMIN")
+
     def _make_log(self, **kw):
         defaults = dict(
             part_number="PART-001",
@@ -321,6 +338,35 @@ class CameraBufferTests(TestCase):
         self.assertFalse(started)
         retire.assert_not_called()
         self.assertEqual(CameraService.get_status(), "ON")
+
+    def test_connect_opencv_keeps_initial_probe_frame_for_first_inspection(self):
+        service = CameraService()
+        probe = np.zeros((12, 16, 3), dtype=np.uint8)
+
+        with mock.patch("VisionInspection.services.camera_service._claim_device", return_value=True), \
+                mock.patch("VisionInspection.services.camera_service.cv2.VideoCapture") as capture_cls, \
+                mock.patch("VisionInspection.services.camera_service._release_device"):
+            cap = capture_cls.return_value
+            cap.isOpened.return_value = True
+            cap.read.return_value = (True, probe)
+
+            service._source = "opencv"
+            service._camera_index = 0
+            service._target_fps = 30
+            service._frame_time = 1 / 30
+            service._status = "OFF"
+            service._state = "STOPPED"
+            service._error_message = None
+
+            ok = service._connect_opencv()
+
+        self.assertTrue(ok)
+        self.assertIsNotNone(service._latest_frame)
+        self.assertTrue(np.array_equal(service._latest_frame, probe))
+        got_ok, frame, meta = service.get_frame_with_meta()
+        self.assertTrue(got_ok)
+        self.assertTrue(np.array_equal(frame, probe))
+        self.assertEqual(meta["seq"], 1)
 
 
 class ContinuousROIDSATests(TestCase):
@@ -995,6 +1041,30 @@ class InspectionWorkflowTests(TestCase):
         self.assertEqual(s.front_results[0]["stitch"], "perimeter")
         self.assertEqual(s.front_results[0]["status"], "NO_RULE")
 
+    def test_camera_first_available_frame_runs_normal_inspection_inference(self):
+        model = self._model_obj()
+        session = self._session(
+            model=model,
+            front_roi=self._roi("front"),
+            front_status="PENDING",
+            stage="front",
+        )
+        frame = _fake_frame()
+        with mock.patch.object(self.wf._camera, "get_status", return_value="ON"), \
+                mock.patch(
+                    "VisionInspection.services.inspection_workflow.CameraService.get_frame_with_meta",
+                    return_value=(True, frame, {"seq": 1, "age_ms": 1.0, "dropped": 0}),
+                ), mock.patch.object(self.wf._yolo, "detect", wraps=self.wf._yolo.detect) as detect:
+            result = self.wf.run_side(str(session.session_id), "front")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["state"], "front_completed")
+        detect.assert_called_once()
+        session.refresh_from_db()
+        self.assertEqual(session.front_status, "COMPLETED")
+        self.assertEqual(session.front_detections[0]["class"], "perimeter")
+        self.assertTrue(session.front_annotated)
+
     def test_front_and_back_evidence_are_saved_to_independent_fields(self):
         model = self._model_obj()
         roi = self._roi("front")
@@ -1363,6 +1433,7 @@ class CameraConfigWorkflowTests(TestCase):
     """One-time camera ROI config: saved once, reused across parts (no redraw)."""
 
     def setUp(self):
+        self.client, self.user = _role_client("Administrator", "CAMERA-ADMIN")
         self.part = VisionInspectionPart.objects.create(part_number="AB-100", part_name="Airbag")
         self.wf = InspectionWorkflow()
         self.wf._yolo = _FakeYolo()
@@ -1651,7 +1722,31 @@ def _staff_client():
 
 
 class StationAccessTests(TestCase):
-    """Acceptance: the application URL opens the Dashboard, with no login."""
+    """Acceptance: station pages are scoped to authenticated roles."""
+
+    def setUp(self):
+        self.client, self.admin = _role_client("Administrator", "STATION-ADMIN")
+        self.operator_client, self.operator = _role_client("Operator", "STATION-OPERATOR")
+        self.supervisor_client, self.supervisor = _role_client("Supervisor", "STATION-SUPERVISOR")
+
+    def test_admin_audit_log_renders_account_target(self):
+        from VisionInspection.models import VisionInspectionAuditLog
+
+        client, user = _staff_client()
+        VisionInspectionAuditLog.objects.create(
+            actor=user,
+            action="account.updated",
+            target_type="auth.User",
+            target_id=str(user.pk),
+            details={"message": "Account permissions updated"},
+        )
+
+        response = client.get(reverse("VisionInspection:audit-log"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Administrative audit log")
+        self.assertContains(response, f"auth.User #{user.pk}")
+        self.assertContains(response, "Account permissions updated")
 
     def test_root_url_opens_dashboard(self):
         r = self.client.get("/vision-inspection/")
@@ -1672,13 +1767,16 @@ class StationAccessTests(TestCase):
             r = self.client.get("/vision-inspection/")
             self.assertEqual(r.status_code, 200)
 
-    def test_station_stays_anonymous(self):
-        """No session is created â€” no user identity is invented."""
-        self.client.get("/vision-inspection/")
-        self.assertEqual(self.client.session.get("_auth_user_id"), None)
+    def test_dashboard_requires_an_authenticated_role(self):
+        from django.test import Client
 
-    def test_live_inspection_page_needs_no_login(self):
-        r = self.client.get(reverse("VisionInspection:inspection"))
+        response = Client().get("/vision-inspection/")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/vision-inspection/login/", response.url)
+        self.assertEqual(self.client.get("/vision-inspection/").status_code, 200)
+
+    def test_live_inspection_page_requires_inspection_permission(self):
+        r = self.operator_client.get(reverse("VisionInspection:inspection"))
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "wfBarcode")  # barcode scan step of the workflow
 
@@ -1704,7 +1802,7 @@ class StationAccessTests(TestCase):
         state = self.client.get(reverse("VisionInspection:storage-state"))
         self.assertEqual(state.status_code, 200)
 
-    def test_part_setup_and_part_configuration_need_no_login(self):
+    def test_part_setup_and_configuration_require_master_data_access(self):
         part = VisionInspectionPart.objects.create(
             part_number="SET-01", part_name="Operator accessible part"
         )
@@ -1721,12 +1819,15 @@ class StationAccessTests(TestCase):
         self.assertContains(config_page, "Save Model Configuration")
         self.assertContains(config_page, reverse("VisionInspection:part-model-upload"))
 
-    def test_inspection_master_page_needs_no_login(self):
+    def test_inspection_master_page_requires_camera_setup_access(self):
+        self.assertEqual(
+            self.operator_client.get(reverse("VisionInspection:inspection-master")).status_code,
+            403,
+        )
         r = self.client.get(reverse("VisionInspection:inspection-master"))
         self.assertEqual(r.status_code, 200)
-        self.assertNotContains(r, "/login/")
 
-    def test_history_and_traceability_need_no_login(self):
+    def test_history_and_traceability_require_report_access(self):
         for name in ("VisionInspection:history", "VisionInspection:ui-traceability"):
             r = self.client.get(reverse(name))
             self.assertEqual(r.status_code, 200, name)
@@ -1739,17 +1840,103 @@ class StationAccessTests(TestCase):
             r = self.client.get(reverse("VisionInspection:inspection-master"))
             self.assertContains(r, "ST-42")
 
-    def test_station_hides_admin_entry_points_for_anonymous(self):
-        """Privileged links are not advertised to station operators."""
-        r = self.client.get("/vision-inspection/")
+    def test_station_hides_admin_entry_points_for_supervisors(self):
+        """Admin-only links are not advertised to read-only Supervisors."""
+        r = self.supervisor_client.get("/vision-inspection/")
         self.assertNotContains(r, "Admin Panel")
         self.assertNotContains(r, "Employee Master")
+
+
+class RoleBoundaryTests(TestCase):
+    def setUp(self):
+        from django.contrib.auth.models import Group, User
+
+        self.operator = User.objects.create_user(
+            username="ROLE-OPERATOR", password="test-password"
+        )
+        self.operator.groups.add(Group.objects.get(name="Operator"))
+        self.supervisor = User.objects.create_user(
+            username="ROLE-SUPERVISOR", password="test-password"
+        )
+        self.supervisor.groups.add(Group.objects.get(name="Supervisor"))
+        self.admin = User.objects.create_user(
+            username="ROLE-ADMIN", password="test-password"
+        )
+        self.admin.groups.add(Group.objects.get(name="Administrator"))
+
+    def test_operator_defaults_to_inspection_only_and_is_denied_direct_pages(self):
+        from VisionInspection.services.access_control import has_permission
+
+        self.assertTrue(has_permission(self.operator, "perform_inspection"))
+        self.assertFalse(has_permission(self.operator, "view_inspection_dashboard"))
+        self.assertFalse(has_permission(self.operator, "view_inspection_history"))
+        self.assertFalse(has_permission(self.operator, "view_inspection_reports"))
+
+        self.client.force_login(self.operator)
+        self.assertEqual(
+            self.client.get(reverse("VisionInspection:inspection")).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.get(reverse("VisionInspection:dashboard")).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(reverse("VisionInspection:ui-reports")).status_code,
+            403,
+        )
+
+    def test_supervisor_has_read_only_default_access(self):
+        self.client.force_login(self.supervisor)
+        for route_name in (
+            "VisionInspection:dashboard",
+            "VisionInspection:ui-reports",
+            "VisionInspection:ui-parts",
+            "VisionInspection:storage-settings",
+        ):
+            with self.subTest(route_name=route_name):
+                self.assertEqual(self.client.get(reverse(route_name)).status_code, 200)
+        self.assertEqual(
+            self.client.get(reverse("VisionInspection:inspection-master")).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(reverse("VisionInspection:user-management")).status_code,
+            403,
+        )
+
+    def test_admin_can_grant_an_operator_a_per_user_exception(self):
+        from VisionInspection.services.access_control import has_permission
+
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse("VisionInspection:user-management-permissions"),
+            {
+                "action": "save_user_overrides",
+                "user_id": self.operator.pk,
+                "override_view_inspection_reports": "grant",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(has_permission(self.operator, "view_inspection_reports"))
+
+    def test_admin_only_permission_page_lists_operator_override_targets(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse("VisionInspection:user-management-permissions")
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Operator or Supervisor account")
+        self.assertContains(response, "ROLE-OPERATOR")
 
 
 class StationApiTests(TestCase):
     """Acceptance: station APIs work anonymously and keep server validation."""
 
     def setUp(self):
+        self.client, self.admin = _role_client("Administrator", "API-ADMIN")
+        from django.test import Client
+        self.anonymous_client = Client()
         self.part = VisionInspectionPart.objects.create(
             part_number="AB-100", part_name="Airbag"
         )
@@ -1865,8 +2052,13 @@ class StationApiTests(TestCase):
         self.assertIn("ONNX Runtime is unavailable", response.json()["message"])
 
     def test_inspection_inference_errors_return_server_error(self):
-        import uuid
         from unittest.mock import patch
+        from VisionInspection.models import VisionInspectionSession
+
+        session = VisionInspectionSession.objects.create(
+            part_number=self.part.part_number,
+            operator=self.admin,
+        )
 
         with patch("VisionInspection.views._workflow") as workflow:
             workflow.return_value.run_side.return_value = {
@@ -1880,7 +2072,7 @@ class StationApiTests(TestCase):
                     "VisionInspection:workflow-inspect-side",
                     kwargs={"side": "front"},
                 ),
-                {"session_id": str(uuid.uuid4())},
+                {"session_id": str(session.session_id)},
             )
 
         self.assertEqual(response.status_code, 500)
@@ -1888,8 +2080,13 @@ class StationApiTests(TestCase):
         self.assertIn("invalid ONNX output", response.json()["message"])
 
     def test_duplicate_side_inference_returns_conflict(self):
-        import uuid
         from unittest.mock import patch
+        from VisionInspection.models import VisionInspectionSession
+
+        session = VisionInspectionSession.objects.create(
+            part_number=self.part.part_number,
+            operator=self.admin,
+        )
 
         with patch("VisionInspection.views._workflow") as workflow:
             workflow.return_value.run_side.return_value = {
@@ -1903,7 +2100,7 @@ class StationApiTests(TestCase):
                     "VisionInspection:workflow-inspect-side",
                     kwargs={"side": "front"},
                 ),
-                {"session_id": str(uuid.uuid4())},
+                {"session_id": str(session.session_id)},
             )
 
         self.assertEqual(response.status_code, 409)
@@ -2078,14 +2275,13 @@ class StationApiTests(TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["model_id"], 42)
 
-    def test_camera_status_api_needs_no_login(self):
-        r = self.client.get(reverse("VisionInspection:camera-status"))
-        self.assertEqual(r.status_code, 200)
-        self.assertIn("status", r.json())
+    def test_camera_status_api_rejects_anonymous_access(self):
+        r = self.anonymous_client.get(reverse("VisionInspection:camera-status"))
+        self.assertEqual(r.status_code, 302)
 
-    def test_camera_stop_api_needs_no_login(self):
-        r = self.client.get(reverse("VisionInspection:camera-stop"))
-        self.assertEqual(r.status_code, 200)
+    def test_camera_stop_api_rejects_anonymous_access(self):
+        r = self.anonymous_client.get(reverse("VisionInspection:camera-stop"))
+        self.assertEqual(r.status_code, 302)
 
     def test_roi_camera_start_reuses_matching_active_camera(self):
         with mock.patch(
@@ -2155,8 +2351,15 @@ class StationApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["reused"])
 
-    def test_part_validation_needs_no_login(self):
-        r = self.client.post(
+    def test_part_validation_requires_inspection_permission(self):
+        anonymous = self.anonymous_client.post(
+            reverse("VisionInspection:api-part-validate"),
+            data=json.dumps({"part_number": "ab-100"}),
+            content_type="application/json",
+        )
+        self.assertEqual(anonymous.status_code, 302)
+        operator_client, _operator = _role_client("Operator", "API-OPERATOR")
+        r = operator_client.post(
             reverse("VisionInspection:api-part-validate"),
             data=json.dumps({"part_number": "ab-100"}),
             content_type="application/json",
@@ -2164,11 +2367,14 @@ class StationApiTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json()["valid"])
 
-    def test_part_list_is_public_and_hides_inactive_parts(self):
+    def test_part_list_requires_master_data_permission_and_includes_inactive_parts(self):
         VisionInspectionPart.objects.create(part_number="OLD-01", part_name="Inactive", is_active=False)
         response = self.client.get(reverse("VisionInspection:api-part-list"))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([row["part_number"] for row in response.json()["items"]], ["AB-100"])
+        self.assertEqual(
+            [row["part_number"] for row in response.json()["items"]],
+            ["AB-100", "OLD-01"],
+        )
 
     def test_part_configuration_api_is_part_scoped(self):
         response = self.client.get(
@@ -2179,7 +2385,7 @@ class StationApiTests(TestCase):
         self.assertIsNone(response.json()["configuration"])
         self.assertEqual(response.json()["available_models"], [])
 
-    def test_part_configuration_page_exposes_anonymous_upload_endpoint(self):
+    def test_part_configuration_page_is_protected(self):
         response = self.client.get(
             reverse("VisionInspection:part-vision-configuration", args=[self.part.pk])
         )
@@ -2845,6 +3051,7 @@ class StationApiTests(TestCase):
         from django.test import Client
 
         strict_client = Client(enforce_csrf_checks=True)
+        strict_client.force_login(self.admin)
         page = strict_client.get(
             reverse("VisionInspection:part-vision-configuration", args=[self.part.pk])
         )
@@ -2856,9 +3063,9 @@ class StationApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
-    def test_inspection_state_api_needs_no_login(self):
-        r = self.client.get(reverse("VisionInspection:api-state"))
-        self.assertEqual(r.status_code, 200)
+    def test_inspection_state_api_rejects_anonymous_access(self):
+        r = self.anonymous_client.get(reverse("VisionInspection:api-state"))
+        self.assertEqual(r.status_code, 302)
 
     def test_workflow_scan_unknown_barcode_is_rejected(self):
         r = self.client.post(
@@ -2898,11 +3105,8 @@ class StationApiTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_workflow_submit_accepts_post_only(self):
-        from django.test import Client
-
-        client = Client()
         self.assertEqual(
-            client.get(reverse("VisionInspection:workflow-submit")).status_code,
+            self.client.get(reverse("VisionInspection:workflow-submit")).status_code,
             405,
         )
 
@@ -2975,6 +3179,67 @@ class ModelPathResolutionTests(TestCase):
         self.assertFalse(info["ok"])
         self.assertIn(configured_path, info["error"])
         self.assertIn(str(Path(configured_path).resolve()), info["error"])
+
+
+class ModelRegistryConcurrencyTests(TestCase):
+    def test_concurrent_predictions_for_same_model_are_serialized(self):
+        import threading
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import ModelRegistry
+
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_entered = threading.Event()
+        call_lock = threading.Lock()
+        calls = 0
+
+        def infer(*args, **kwargs):
+            nonlocal calls
+            with call_lock:
+                calls += 1
+                call_number = calls
+            if call_number == 1:
+                first_entered.set()
+                release_first.wait(2)
+            else:
+                second_entered.set()
+            return []
+
+        with tempfile.NamedTemporaryFile(suffix=".pt") as model_file:
+            registry = ModelRegistry()
+            entry = registry._entry(model_file.name, task="segment")
+            entry.model = object()
+            entry.task = "segment"
+            results = []
+            with patch.object(registry, "_refresh_if_stale"), patch.object(
+                registry, "_predict_ultralytics", side_effect=infer
+            ):
+                first = threading.Thread(
+                    target=lambda: results.append(
+                        registry.predict(model_file.name, object(), task="segment")
+                    )
+                )
+                second = threading.Thread(
+                    target=lambda: results.append(
+                        registry.predict(model_file.name, object(), task="segment")
+                    )
+                )
+                first.start()
+                self.assertTrue(first_entered.wait(2))
+                second.start()
+                try:
+                    self.assertFalse(second_entered.wait(0.05))
+                finally:
+                    release_first.set()
+                first.join(2)
+                second.join(2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertTrue(second_entered.is_set())
+        self.assertEqual(calls, 2)
+        self.assertEqual(len(results), 2)
 
 
 class ModelRuntimeImportTests(TestCase):
@@ -3396,6 +3661,7 @@ class SegmentationPreviewRegistryTests(TestCase):
 
 class SegmentationPreviewApiTests(TestCase):
     def setUp(self):
+        self.client, self.admin = _role_client("Administrator", "PREVIEW-ADMIN")
         from VisionInspection.models import (
             VisionPartConfiguration,
             VisionPartModel,
@@ -3567,7 +3833,7 @@ class SegmentationPreviewApiTests(TestCase):
 
         predict.assert_not_called()
 
-    def test_inspection_route_returns_session_not_found_not_route_not_found(self):
+    def test_inspection_route_does_not_disclose_unknown_session(self):
         import uuid
 
         response = self.client.post(
@@ -3579,8 +3845,8 @@ class SegmentationPreviewApiTests(TestCase):
             content_type="application/json",
         )
 
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["message"], "Session not found.")
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("permission", response.json()["message"].lower())
 
 
 class AdminProtectionTests(TestCase):
@@ -3616,7 +3882,7 @@ class AdminProtectionTests(TestCase):
                 )
                 r = self.client.get(url)
                 self.assertEqual(r.status_code, 302, name)
-                self.assertIn("/admin/login/", r.url, name)
+                self.assertIn("/vision-inspection/login/", r.url, name)
 
     def test_staff_can_access_configuration(self):
         client, _user = _staff_client()
@@ -3728,6 +3994,9 @@ class InspectionWorkspaceUiTests(TestCase):
 
     URL = "/vision-inspection/inspection/"
 
+    def setUp(self):
+        self.client, self.operator = _role_client("Operator", "WORKFLOW-OPERATOR")
+
     # Required operator controls and workflow targets.
     TOOLBAR_IDS = ["wsApp", "wsError"]
     WORKFLOW_IDS = [
@@ -3752,7 +4021,7 @@ class InspectionWorkspaceUiTests(TestCase):
     def _all_ids(self):
         return list(self.TOOLBAR_IDS) + list(self.WORKFLOW_IDS)
 
-    def test_page_renders_without_login(self):
+    def test_page_renders_for_an_operator(self):
         self.assertEqual(self.client.get(self.URL).status_code, 200)
 
     def test_inspection_header_navigation_remains_available_for_camera_stage(self):
@@ -3782,7 +4051,7 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertIn("vi-camera-fullscreen .vi-sidebar", css)
         self.assertIn("body.vi-camera-fullscreen .vi-top-header", css)
         self.assertNotIn("body.vi-camera-fullscreen .vi-sidebar,\nbody.vi-camera-fullscreen .vi-top-header", css)
-        self.assertIn("inspection_workspace.css?v=20261017-1", html)
+        self.assertIn("inspection_workspace.css?v=20261022-1", html)
 
     def test_camera_result_status_uses_backend_side_status_and_verdict(self):
         from django.conf import settings
@@ -3845,7 +4114,7 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertIn('changePart(byId("wfChangePartBtn"))', script)
         self.assertIn('submitButton.dataset.completed = "false"', script)
 
-    def test_scan_validation_starts_inspection_after_model_validation(self):
+    def test_scan_validation_enables_explicit_inspection_start(self):
         from django.conf import settings
 
         html = self._page()
@@ -3862,7 +4131,9 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertIn('addEventListener("click", startInspection)', script)
         self.assertIn("partData.ok !== true", script)
         self.assertIn("modelData.ok !== true", script)
-        self.assertIn("await startInspection(byId(\"wfStartInspectionBtn\"));", script)
+        self.assertIn("state.validatedModelId = Number(modelData.model_id);", script)
+        self.assertIn('byId("wfStartInspectionBtn").disabled = false;', script)
+        self.assertIn('byId("wfStartInspectionBtn").addEventListener("click", startInspection)', script)
         self.assertIn("partVisionPreview", html)
         self.assertIn("confidence=0.30", script)
         self.assertNotIn("No detections | Total: 0", script)
@@ -4082,6 +4353,9 @@ class InspectionWorkspaceUiTests(TestCase):
 
 
 class PartConfigurationValidationTests(TestCase):
+    def setUp(self):
+        self.client, self.admin = _role_client("Administrator", "CONFIG-ADMIN")
+
     def _configuration(self, mode="FRONT_BACK", side="BOTH"):
         from VisionInspection.models import (
             VisionClassConfiguration,
@@ -4380,6 +4654,9 @@ class PartConfigurationValidationTests(TestCase):
             },
         ):
             result = workflow.validate_model(part_number=configuration.part.part_number)
+            repeated = workflow.validate_model(
+                part_number=configuration.part.part_number
+            )
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["state"], "configuration_invalid")
@@ -4393,9 +4670,6 @@ class PartConfigurationValidationTests(TestCase):
         )
         self.assertFalse(configuration.is_active)
         self.assertEqual(configuration.validation_errors, result["validation_errors"])
-        repeated = workflow.validate_model(
-            part_number=configuration.part.part_number
-        )
         self.assertFalse(repeated["ok"])
         self.assertEqual(repeated["state"], "configuration_invalid")
         self.assertEqual(
@@ -4453,6 +4727,9 @@ class StationDuplicateSubmissionTests(TestCase):
         CameraService.stop_camera()
         super().tearDown()
 
+    def setUp(self):
+        self.client, self.operator = _role_client("Operator", "SUBMIT-OPERATOR")
+
     def _submit(self, client):
         return client.post(
             reverse("VisionInspection:workflow-submit"),
@@ -4493,8 +4770,8 @@ class StationDuplicateSubmissionTests(TestCase):
 
         self.assertEqual(VisionInspectionSession.objects.count(), 1)
 
-    def test_next_part_can_be_submitted_without_login(self):
-        """After a session is cancelled, the station is ready for the next part."""
+    def test_next_part_can_be_submitted_by_the_operator(self):
+        """After a session is cancelled, the authenticated station can inspect the next part."""
         VisionInspectionPart.objects.create(part_number="AB-100", part_name="Airbag")
         model, _ = VisionYOLOModel.objects.get_or_create(
             name="mtest", model_path=__file__,

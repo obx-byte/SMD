@@ -1284,8 +1284,8 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
 }
 
 .vi-top-header {
-    background: linear-gradient(90deg, var(--smd-navy-900) 0%, var(--smd-navy-700) 55%, var(--smd-navy-600) 100%);
-    border-bottom: 1px solid var(--smd-navy-700);
+    background: #1D4F91;
+    border-bottom: 1px solid #173F78;
     color: #ffffff;
     gap: 12px;
 }

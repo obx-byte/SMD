@@ -116,8 +116,8 @@ body.vi-inspection-chrome .vi-profile {
 }
 
 body.vi-inspection-chrome .vi-top-header {
-    background: linear-gradient(180deg, #0d2149 0%, #0b1c3d 100%);
-    border-bottom: 1px solid #071432;
+    background: #1D4F91;
+    border-bottom: 1px solid #173F78;
     padding: 0 16px;
 }
 
@@ -125,9 +125,9 @@ body.vi-inspection-chrome .vi-header-title {
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    font-size: 25px;
-    font-weight: 800;
-    letter-spacing: 0.2px;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0;
     color: #ffffff;
     text-transform: none;
 }
@@ -1650,12 +1650,12 @@ body.vi-inspection-chrome .vi-content {
 }
 
 .ws {
-    --wf-bg: #07162d;
-    --wf-surface: #102746;
-    --wf-border: #294566;
-    --wf-blue: #1783d6;
-    --wf-text: #f1f6fc;
-    --wf-muted: #a9bbcf;
+    --wf-bg: #F5F7FC;
+    --wf-surface: #FFFFFF;
+    --wf-border: #E2E8F0;
+    --wf-blue: #0D9488;
+    --wf-text: #243653;
+    --wf-muted: #64748B;
     position: relative;
     flex: 1 1 auto;
     width: 100%;
@@ -1694,21 +1694,28 @@ body.vi-inspection-chrome .vi-content {
     padding: clamp(20px, 4vh, 40px);
     border: 1px solid var(--wf-border);
     border-radius: 6px;
-    background: linear-gradient(145deg, #102746, #0b1e37);
+    background: #FFFFFF;
+    box-shadow: 0 1px 3px rgba(36, 54, 83, 0.06);
 }
 
 .wf-kicker {
-    color: #65b7fa;
+    color: #0F766E;
     font-size: 12px;
     font-weight: 800;
-    letter-spacing: 1.2px;
+    letter-spacing: 0;
 }
 
 .wf-stage h2 {
     margin: 5px 0 4px;
-    color: var(--wf-text);
+    color: #243653;
+    font-weight: 800;
+    letter-spacing: 0;
     font-size: clamp(24px, 4vh, 34px);
     line-height: 1.12;
+}
+
+#wfScanTitle {
+    color: #243653;
 }
 
 .wf-subtitle,
@@ -1727,6 +1734,7 @@ body.vi-inspection-chrome .vi-content {
     display: block;
     margin-bottom: 8px;
     font-weight: 700;
+    color: #334155;
 }
 
 .wf-scan-row {
@@ -1739,46 +1747,46 @@ body.vi-inspection-chrome .vi-content {
     min-width: 0;
     height: 58px;
     padding: 0 15px;
-    border: 2px solid #426182;
+    border: 2px solid #CBD5E1;
     border-radius: 5px;
-    background: #07182d;
+    background: #FFFFFF;
     color: var(--wf-text);
     font: 600 20px/1.2 "Segoe UI", sans-serif;
 }
 
 .wf-scan-row .vi-master-control:focus {
-    border-color: #51b4ff;
-    outline: 2px solid #51b4ff;
+    border-color: #0D9488;
+    outline: 2px solid rgba(13, 148, 136, 0.22);
     outline-offset: 2px;
 }
 
 .wf-button {
     min-height: 58px;
     padding: 0 24px;
-    border: 1px solid #328cce;
+    border: 1px solid #CBD5E1;
     border-radius: 5px;
-    background: #12395e;
-    color: #fff;
-    font: 800 16px/1.2 "Segoe UI", sans-serif;
+    background: #FFFFFF;
+    color: #334155;
+    font: 650 14px/1.2 "Segoe UI", sans-serif;
     cursor: pointer;
 }
 
-.wf-button:hover:not(:disabled) { background: #185083; }
+.wf-button:hover:not(:disabled) { background: #F1F5F9; }
 .wf-button:disabled { cursor: wait; opacity: 0.62; }
-.wf-button.wf-primary { background: var(--wf-blue); border-color: #39a1eb; }
-.wf-button.wf-primary:hover:not(:disabled) { background: #0c6db8; }
+.wf-button.wf-primary { background: var(--wf-blue); border-color: var(--wf-blue); color: #FFFFFF; }
+.wf-button.wf-primary:hover:not(:disabled) { background: #0F766E; }
 #wfScanBtn {
     width: auto;
     min-width: 180px;
     height: auto;
     padding: 0 18px;
-    border: 1px solid #39a1eb;
+    border: 1px solid #0D9488;
     border-radius: 5px;
     background: var(--wf-blue);
     color: #fff;
-    font-size: 16px;
+    font-size: 14px;
 }
-#wfScanBtn:hover:not(:disabled) { background: #0c6db8; border-color: #39a1eb; }
+#wfScanBtn:hover:not(:disabled) { background: #0F766E; border-color: #0F766E; }
 
 .wf-scan-actions {
     display: flex;
@@ -1796,7 +1804,7 @@ body.vi-inspection-chrome .vi-content {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
+    color: #334155;
     text-align: center;
     text-decoration: none;
 }
@@ -1806,10 +1814,10 @@ body.vi-inspection-chrome .vi-content {
     overflow-y: auto;
     margin: 10px 0 0;
     padding: 9px 11px;
-    border: 1px solid #a6474d;
+    border: 1px solid #FDA4AF;
     border-radius: 4px;
-    background: rgba(96, 25, 35, 0.32);
-    color: #ffb0b4;
+    background: #FFF1F2;
+    color: #9F1239;
     font-size: 13px;
     line-height: 1.45;
     overflow-wrap: anywhere;
@@ -1832,10 +1840,10 @@ body.vi-inspection-chrome .vi-content {
     padding: 8px 10px;
     border: 1px solid var(--wf-border);
     border-radius: 4px;
-    background: rgba(4, 17, 34, 0.55);
+    background: #F8FAFC;
 }
 
-.wf-validation span:not(.wf-indicator) { color: var(--wf-muted); }
+.wf-validation span:not(.wf-indicator) { color: #64748B; }
 .wf-validation strong { overflow-wrap: anywhere; text-align: right; font-size: 14px; }
 .wf-indicator { width: 10px; height: 10px; border-radius: 50%; background: #73869b; }
 .wf-indicator.is-working { background: #f0b84b; box-shadow: 0 0 0 4px #f0b84b22; }
@@ -1873,16 +1881,17 @@ body.vi-inspection-chrome .vi-content {
     padding: 9px 12px;
     border: 1px solid var(--wf-border);
     border-radius: 4px;
-    color: #d0d9e5;
+    color: #334155;
+    background: #FFFFFF;
     font-size: 12px;
     font-weight: 800;
     white-space: nowrap;
 }
 
 .wf-camera-status i { width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
-.wf-camera-status.is-on { color: #44d495; border-color: #23875d; }
-.wf-camera-status.is-error { color: #ff777e; border-color: #a6474d; }
-.wf-camera-status.is-connecting { color: #f2bf5c; }
+.wf-camera-status.is-on { color: #166534; border-color: #86EFAC; background: #ECFDF3; }
+.wf-camera-status.is-error { color: #9F1239; border-color: #FDA4AF; background: #FFF1F2; }
+.wf-camera-status.is-connecting { color: #92400E; border-color: #FCD34D; background: #FFFBEB; }
 
 .wf-camera-frame {
     position: relative;
@@ -1927,24 +1936,30 @@ body.vi-inspection-chrome .vi-content {
     max-height: 34px;
     overflow: auto;
     margin-top: 3px;
-    color: #b9cbe0;
+    color: #475569;
     font-size: 11px;
     line-height: 1.35;
 }
-.wf-side-result.is-ok { color: #44d495; }
-.wf-side-result.is-pending { color: #f2bf5c; }
-.wf-side-result.is-inspecting { color: #70baff; }
+.wf-side-result.is-ok { color: #166534; }
+.wf-side-result.is-pending { color: #92400E; }
+.wf-side-result.is-inspecting { color: #1D4F91; }
 .wf-side-result.is-not_ok,
-.wf-side-result.is-error { color: #ff777e; }
-.wf-side-result.is-not_required { color: #c1ccda; }
+.wf-side-result.is-error { color: #9F1239; }
+.wf-side-result.is-not_required { color: #475569; }
 .wf-scan-result { display: block; margin: 10px 0; font-size: 14px; font-weight: 800; }
+.wf-scan-result.wf-side-result { display: inline-flex; padding: 5px 10px; border: 1px solid #E2E8F0; border-radius: 5px; background: #F1F5F9; }
+.wf-scan-result.is-ok { border-color: #86EFAC; background: #ECFDF3; }
+.wf-scan-result.is-not_ok,
+.wf-scan-result.is-error { border-color: #FDA4AF; background: #FFF1F2; }
+.wf-scan-result.is-pending,
+.wf-scan-result.is-inspecting { border-color: #FCD34D; background: #FFFBEB; }
 .wf-submit { min-width: min(310px, 42vw); min-height: 60px; font-size: 18px; }
 .wf-retry { min-height: 44px; padding: 0 15px; font-size: 13px; }
 
 .wf-final-panel { text-align: center; }
 .wf-verdict { margin: 12px 0 20px !important; font-size: clamp(48px, 10vh, 82px) !important; font-weight: 900; }
-.wf-verdict.is-ok { color: #45d394; }
-.wf-verdict.is-not-ok { color: #ff7078; }
+.wf-verdict.is-ok { color: #15803D; }
+.wf-verdict.is-not-ok { color: #BE123C; }
 .wf-final-meta {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1954,7 +1969,7 @@ body.vi-inspection-chrome .vi-content {
     background: var(--wf-border);
     text-align: left;
 }
-.wf-final-meta div { min-width: 0; padding: 12px; background: #0b1e37; }
+.wf-final-meta div { min-width: 0; padding: 12px; background: #F8FAFC; }
 .wf-final-meta span { display: block; color: var(--wf-muted); font-size: 10px; font-weight: 800; }
 .wf-final-meta strong { display: block; margin-top: 5px; overflow-wrap: anywhere; font-size: 14px; }
 .wf-final-panel > .wf-button { margin-top: 18px; min-width: 250px; }
@@ -1964,7 +1979,7 @@ body.vi-inspection-chrome .vi-content {
 .wf-error {
     height: 24px;
     overflow: hidden;
-    color: #ff858b;
+    color: #9F1239;
     font-size: 13px;
     font-weight: 700;
     text-overflow: ellipsis;

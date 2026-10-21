@@ -12,7 +12,7 @@
     <header class="vi-permissions-heading">
         <div>
             <h1>Role Permissions</h1>
-            <p>Configure the default access for each role and optional Supervisor-specific grants.</p>
+            <p>Configure default role access and account-specific exceptions.</p>
         </div>
         <a class="vi-permissions-button vi-permissions-button--secondary"
            href="{% url 'VisionInspection:user-management' %}">Employee accounts</a>
@@ -35,7 +35,7 @@
                     <div>
                         <h3>{{ role.name }}</h3>
                         {% if role.editable %}
-                            <p>Changes apply to all users in this role unless a Supervisor override is set.</p>
+                            <p>Changes apply to all users in this role unless an account override is set.</p>
                         {% else %}
                             <p>Administrative permissions are fixed and cannot be edited from this matrix.</p>
                         {% endif %}
@@ -83,21 +83,21 @@
         {% endfor %}
     </section>
 
-    <section class="vi-permissions-panel" aria-labelledby="supervisor-overrides-heading">
+    <section class="vi-permissions-panel" aria-labelledby="user-overrides-heading">
         <div class="vi-permissions-panel__heading">
             <div>
-                <h2 id="supervisor-overrides-heading">Supervisor access overrides</h2>
-                <p>Grant or deny an individual Supervisor access beyond the role defaults. Inherit keeps the default.</p>
+                <h2 id="user-overrides-heading">Account access overrides</h2>
+                <p>Grant or deny an individual Operator or Supervisor access beyond the role defaults. Inherit keeps the default.</p>
             </div>
         </div>
 
         <form class="vi-permissions-user-picker" method="get">
-            <label for="permission-user">Supervisor account</label>
+            <label for="permission-user">Operator or Supervisor account</label>
             <select id="permission-user" name="user_id">
-                <option value="">Choose a Supervisor</option>
-                {% for supervisor in supervisors %}
-                    <option value="{{ supervisor.pk }}" {% if selected_user and selected_user.pk == supervisor.pk %}selected{% endif %}>
-                        {{ supervisor.get_username }}{% if supervisor.get_full_name %} — {{ supervisor.get_full_name }}{% endif %}
+                <option value="">Choose an account</option>
+                {% for target_user in manageable_users %}
+                    <option value="{{ target_user.pk }}" {% if selected_user and selected_user.pk == target_user.pk %}selected{% endif %}>
+                        {{ target_user.get_username }}{% if target_user.get_full_name %} — {{ target_user.get_full_name }}{% endif %} ({{ target_user.groups.all|join:", " }})
                     </option>
                 {% endfor %}
             </select>
@@ -138,14 +138,14 @@
                 </div>
                 <div class="vi-permissions-submit-row">
                     <button class="vi-permissions-button vi-permissions-button--primary" type="submit">
-                        Save Supervisor overrides
+                        Save account overrides
                     </button>
                 </div>
             </form>
-        {% elif not supervisors %}
-            <p class="vi-permissions-empty">There are no Supervisor accounts to configure.</p>
+        {% elif not manageable_users %}
+            <p class="vi-permissions-empty">There are no Operator or Supervisor accounts to configure.</p>
         {% else %}
-            <p class="vi-permissions-empty">Choose a Supervisor account to manage individual access.</p>
+            <p class="vi-permissions-empty">Choose an account to manage individual access.</p>
         {% endif %}
     </section>
 </div>

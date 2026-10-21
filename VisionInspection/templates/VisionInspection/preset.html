@@ -7,7 +7,7 @@
     <title>Preset Management - Vision Inspection</title>
     <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}?v=20261015-1">
     <link rel="stylesheet" href="{% static 'VisionInspection/css/configuration.css' %}">
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-1">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-2">
 </head>
 <body class="vi-configuration-page">
 <div class="vi-container">
@@ -48,7 +48,7 @@
                     <td>{{ preset.name }}</td>
                     <td>v{{ preset.version }}</td>
                     <td>{{ preset.part_class }}</td>
-                    <td>{{ preset.yolo_model.name if preset.yolo_model else "—" }}</td>
+                    <td>{% if preset.yolo_model %}{{ preset.yolo_model.name }}{% else %}&mdash;{% endif %}</td>
                     <td>{{ preset.stable_frames }}</td>
                     <td>
                         <span class="vi-badge {% if preset.is_active %}vi-badge-active{% else %}vi-badge-inactive{% endif %}">

@@ -21,7 +21,7 @@
     <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}?v=20261015-1">
     <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261021-4">
     {% block extra_head %}{% endblock %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-1">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-3">
 </head>
 {# The Airbag Stitch Inspection station page uses the dark reference chrome. #}
 <body class="{% if sidebar_active == 'inspection_master' or sidebar_active == 'inspection' %}vi-fullscreen-chrome{% if sidebar_active == 'inspection' %} vi-inspection-chrome{% endif %}{% endif %}{% if sidebar_active == 'dashboard' %} vi-dashboard-chrome{% endif %}">
@@ -96,6 +96,7 @@
             </div>
             {% endif %}
 
+            {# Intentionally omitted from this station sidebar: Traceability, ROI Setup, Inspection Logs, and Inspection History. #}
             <!-- REPORTS -->
             {% if vi_access.reports %}<div class="vi-sidebar-section">
                 <button class="vi-sidebar-section-title" type="button" data-target="section-reports" aria-controls="section-reports" aria-expanded="{% if sidebar_active == 'reports' %}true{% else %}false{% endif %}">Reports <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
@@ -135,9 +136,9 @@
                 <div class="vi-header-datetime">
                     <span class="vi-header-clock" id="viClock" aria-label="Current date and time"></span>
                 </div>
-                <a href="{% url 'VisionInspection:inspection' %}" class="vi-header-inspect" title="Open the operator inspection screen" aria-label="Inspection">
+                {% if vi_access.inspection %}<a href="{% url 'VisionInspection:inspection' %}" class="vi-header-inspect" title="Open the operator inspection screen" aria-label="Inspection">
                     <span aria-hidden="true">&#9679;</span> Inspection
-                </a>
+                </a>{% endif %}
                 {% block header_actions %}{% endblock %}
                 {% if user.is_authenticated %}
                 <div class="vi-profile" id="viProfile">

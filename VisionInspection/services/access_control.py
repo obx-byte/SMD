@@ -20,7 +20,6 @@ ROLE_QUALITY = "Quality User"
 PERMISSION_CATALOG = (
     ("view_inspection_dashboard", "Dashboard", "View"),
     ("perform_inspection", "Start Inspection", "Perform"),
-    ("view_inspection_history", "Inspection History", "View"),
     ("view_inspection_reports", "Inspection Report", "View"),
     ("export_inspection_reports", "Inspection Report", "Export"),
     ("view_master_data", "Master Data", "View"),
@@ -45,7 +44,6 @@ PERMISSION_CATALOG = (
     ("manage_inspection_permissions", "User Management", "Manage permissions"),
     ("view_inspection_audit_log", "Audit Log", "View"),
     ("view_inspection_state", "Inspection State", "View"),
-    ("view_inspection_logs", "Inspection Logs", "View"),
     ("view_roi_configuration", "ROI Configuration", "View"),
     ("change_roi_configuration", "ROI Configuration", "Configure"),
     ("view_trigger_zone_configuration", "Trigger Zone Configuration", "View"),
@@ -59,7 +57,7 @@ PERMISSION_CATALOG = (
 )
 
 DEFAULT_ROLE_PERMISSIONS = {
-    ROLE_OPERATOR: {"perform_inspection", "view_inspection_history"},
+    ROLE_OPERATOR: {"perform_inspection"},
     ROLE_SUPERVISOR: {
         "view_inspection_dashboard",
         "view_inspection_reports",
