@@ -82,6 +82,11 @@ from VisionInspection.services.model_registry import (
     ModelRuntimeUnavailableError,
     registry,
 )
+from VisionInspection.services.model_paths import (
+    ModelPathResolutionError,
+    model_storage_root,
+    resolve_model_path,
+)
 from VisionInspection.services.yolo_service import YOLOModelService
 
 logger = logging.getLogger(__name__)
@@ -443,7 +448,8 @@ def history_view(request):
     part_number = _clean(request.GET.get("part_number"))
     result = _clean(request.GET.get("result")).upper()
 
-    logs = VisionInspectionLog.objects.all()
+    from VisionInspection.services.access_control import scope_logs, can_view_log
+    logs = scope_logs(request.user, VisionInspectionLog.objects.all())
     if part_number:
         logs = logs.filter(part_number__icontains=part_number)
     if result in ("OK", "NOT_OK", "ERROR"):
@@ -469,7 +475,11 @@ def history_view(request):
 
 def history_detail(request, inspection_id):
     """Inspection history detail — only the evidence that was really stored."""
-    log = get_object_or_404(VisionInspectionLog, pk=inspection_id)
+    from django.core.exceptions import PermissionDenied
+    from VisionInspection.services.access_control import can_view_log
+    log = get_object_or_404(VisionInspectionLog.objects.select_related("session"), pk=inspection_id)
+    if not can_view_log(request.user, log):
+        raise PermissionDenied
     from VisionInspection.services.storage_service import image_url
 
     context = {
@@ -1859,7 +1869,7 @@ def workflow_validate_model(request):
 def workflow_submit(request):
     """Step 3 — submit a part and open its inspection session."""
     data = _body_json(request)
-    result = _workflow().submit(data.get("part_number"), data.get("model_id"))
+    result = _workflow().submit(data.get("part_number"), data.get("model_id"), operator=request.user)
     return _json_response(result, status=200 if result.get("ok") else 400)
 
 
@@ -1867,6 +1877,16 @@ def workflow_progress(request, session_id):
     """Poll the live progress of an inspection session."""
     result = _workflow().get_progress(str(session_id))
     status = 200 if result.get("ok") else 404
+    if result.get("ok") and result.get("inspection_status") in (
+        "OKAY PART",
+        "NOT OKAY PART",
+        "ERROR",
+    ):
+        logger.info(
+            "Inspection session status returned: session=%s status=%s",
+            result.get("session_id"),
+            result.get("inspection_status"),
+        )
     return _json_response(result, status=status)
 
 
@@ -1895,14 +1915,37 @@ def workflow_inspect_side(request, side):
             request.content_type,
         )
         return _error("A session_id is required.")
-    result = _workflow().run_side(str(session_id), side)
+    try:
+        session_id = str(uuid.UUID(str(session_id)))
+    except (TypeError, ValueError, AttributeError):
+        logger.warning(
+            "Inspection request rejected: invalid session UUID side=%s value=%s",
+            side,
+            session_id,
+        )
+        return _error("A valid inspection session UUID is required.")
+    logger.info(
+        "Inspection request received: session=%s side=%s",
+        session_id,
+        side,
+    )
+    result = _workflow().run_side(session_id, side)
     if result.get("ok"):
+        progress = result.get("progress") or {}
+        logger.info(
+            "Inspection API response returned: session=%s side=%s state=%s status=%s",
+            session_id,
+            side,
+            result.get("state"),
+            progress.get("inspection_status", ""),
+        )
         return _json_response(result)
     state = result.get("state")
     if state == "error":
         status = 404
     elif state in (
         "session_inactive",
+        "side_in_progress",
         "side_already_completed",
         "side_not_required",
         "incomplete",
@@ -1922,6 +1965,12 @@ def workflow_inspect_side(request, side):
         side,
         state,
         result.get("message", ""),
+    )
+    logger.info(
+        "Inspection API response returned: session=%s side=%s state=%s",
+        session_id,
+        side,
+        state,
     )
     return _json_response(result, status=status)
 
@@ -2042,6 +2091,17 @@ def api_part_vision_preview(request, part_id):
     """Infer and render predictions from the shared camera's latest frame."""
     part = get_object_or_404(VisionInspectionPart, pk=part_id)
     side = _clean(request.GET.get("side", "FRONT")).upper()
+
+    def conflict(message, configuration_id=None):
+        logger.warning(
+            "Prediction preview conflict: part_id=%s configuration_id=%s side=%s reason=%s",
+            part.pk,
+            configuration_id if configuration_id is not None else "unavailable",
+            side.lower(),
+            message,
+        )
+        return _error(message, status=409)
+
     if side not in (VisionPartConfiguration.SIDE_FRONT, VisionPartConfiguration.SIDE_BACK):
         return _error("side must be FRONT or BACK.")
     try:
@@ -2063,7 +2123,7 @@ def api_part_vision_preview(request, part_id):
         .first()
     )
     if configuration is None:
-        return _error("Save a Part Vision configuration before starting preview.", status=409)
+        return conflict("No Part Vision configuration is saved.")
     if (
         side == VisionPartConfiguration.SIDE_FRONT
         and not configuration.requires_front
@@ -2071,7 +2131,7 @@ def api_part_vision_preview(request, part_id):
         side == VisionPartConfiguration.SIDE_BACK
         and not configuration.requires_back
     ):
-        return _error(f"The {side.title()} side is not enabled in this configuration.", status=409)
+        return conflict(f"The {side.title()} side is not enabled.", configuration.pk)
 
     model_id = _as_int(request.GET.get("model_id"), 0)
     part_models = configuration.part_models.filter(
@@ -2082,10 +2142,7 @@ def api_part_vision_preview(request, part_id):
         part_models = part_models.filter(model_id=model_id)
     association = part_models.order_by("id").first()
     if association is None:
-        return _error(
-            "Select an enabled segmentation model for this part configuration.",
-            status=409,
-        )
+        return conflict("No enabled segmentation model matches the requested model.", configuration.pk)
 
     expected_source = (
         configuration.front_camera_source
@@ -2103,9 +2160,9 @@ def api_part_vision_preview(request, part_id):
     }
     camera_state = CameraService.get_state()
     if camera_state != "RUNNING":
-        return _error(
+        return conflict(
             f"The configured camera is {camera_state.lower()}; waiting for it to produce a frame.",
-            status=409,
+            configuration.pk,
         )
     current_source = CameraService.get_source()
     current_index = CameraService.get_camera_index()
@@ -2113,26 +2170,70 @@ def api_part_vision_preview(request, part_id):
         current_source != CAMERA_SOURCES["PICAMERA"]
         and current_index != expected_index
     ):
-        return _error(
+        return conflict(
             f"The running camera does not match the configured {side.title()} camera source and index.",
-            status=409,
+            configuration.pk,
         )
 
     frame_ok, frame, frame_meta = CameraService.get_frame_with_meta()
     if not frame_ok or frame is None:
-        return _error("The running camera has not produced a frame yet.", status=409)
+        return conflict("The running camera has not produced a frame yet.", configuration.pk)
     frame_height, frame_width = frame.shape[:2]
     roi = active_roi(configuration)
     roi_rect = roi.pixel_rect(frame_width, frame_height) if roi else None
-    offset_x = roi_rect["x"] if roi_rect else 0
-    offset_y = roi_rect["y"] if roi_rect else 0
-    inference_frame = (
-        frame[
-            offset_y : offset_y + roi_rect["height"],
-            offset_x : offset_x + roi_rect["width"],
-        ]
-        if roi_rect
-        else frame
+    if roi is None:
+        logger.warning(
+            "Prediction preview rejected: part_id=%s configuration_id=%s side=%s "
+            "frame_seq=%s roi_status=missing",
+            part.pk,
+            configuration.pk,
+            side.lower(),
+            frame_meta.get("seq"),
+        )
+        return conflict(f"No compatible ROI is configured for the {side.title()} side.", configuration.pk)
+    roi_values = (roi.x, roi.y, roi.width, roi.height)
+    roi_is_valid = (
+        all(math.isfinite(float(value)) for value in roi_values)
+        and roi.ref_width > 0
+        and roi.ref_height > 0
+        and roi.x >= 0
+        and roi.y >= 0
+        and roi.width > 0
+        and roi.height > 0
+        and roi.x + roi.width <= roi.ref_width
+        and roi.y + roi.height <= roi.ref_height
+    )
+    if not roi_is_valid or roi_rect is None:
+        logger.warning(
+            "Prediction preview rejected: part_id=%s configuration_id=%s side=%s "
+            "frame_seq=%s roi_id=%s roi_status=invalid frame=%sx%s",
+            part.pk,
+            configuration.pk,
+            side.lower(),
+            frame_meta.get("seq"),
+            roi.pk,
+            frame_width,
+            frame_height,
+        )
+        return conflict(
+            f"The configured ROI for the {side.title()} side is invalid for this camera frame.",
+            configuration.pk,
+        )
+    offset_x = roi_rect["x"]
+    offset_y = roi_rect["y"]
+    inference_frame = frame[
+        offset_y : offset_y + roi_rect["height"],
+        offset_x : offset_x + roi_rect["width"],
+    ]
+    logger.debug(
+        "Prediction preview inference started: part_id=%s configuration_id=%s "
+        "side=%s frame_seq=%s roi_id=%s model_path=%s",
+        part.pk,
+        configuration.pk,
+        side.lower(),
+        frame_meta.get("seq"),
+        roi.pk,
+        association.model.model_path,
     )
 
     try:
@@ -2144,7 +2245,28 @@ def api_part_vision_preview(request, part_id):
             show_boxes=show_boxes,
         )
     except ModelLoadError as exc:
+        logger.exception(
+            "Prediction preview inference failed: part_id=%s configuration_id=%s "
+            "side=%s frame_seq=%s roi_id=%s model_path=%s",
+            part.pk,
+            configuration.pk,
+            side.lower(),
+            frame_meta.get("seq"),
+            roi.pk,
+            association.model.model_path,
+        )
         return _error(str(exc), status=503)
+    logger.debug(
+        "Prediction preview inference completed: part_id=%s configuration_id=%s "
+        "side=%s frame_seq=%s roi_id=%s detections=%s inference_ms=%.1f",
+        part.pk,
+        configuration.pk,
+        side.lower(),
+        frame_meta.get("seq"),
+        roi.pk,
+        len(detections),
+        inference_ms,
+    )
 
     try:
         output_frame = frame.copy()
@@ -2236,7 +2358,7 @@ def part_model_upload(request):
     if upload.size <= 0 or upload.size > max_size:
         return _error("Model file size is not allowed.", {"model_file": f"Maximum size is {max_size // (1024 * 1024)} MB."}, status=413)
 
-    model_root = Path(getattr(settings, "VISION_MODEL_OUTPUT_DIR", settings.BASE_DIR / "data" / "models")).resolve()
+    model_root = model_storage_root()
     try:
         model_root.mkdir(parents=True, exist_ok=True)
         destination = (model_root / f"{uuid.uuid4().hex}{suffix}").resolve()
@@ -2539,6 +2661,11 @@ def yolo_model_upload(request):
     if not name or not model_path:
         return _error("Both a model name and a model path are required.")
 
+    try:
+        model_path = str(resolve_model_path(model_path))
+    except ModelPathResolutionError as exc:
+        return _error(str(exc), {"model_path": str(exc)})
+
     if Path(model_path).suffix.lower() not in (".pt", ".onnx"):
         return _error(
             "Unsupported model format.",
@@ -2546,8 +2673,8 @@ def yolo_model_upload(request):
         )
     if not os.path.isfile(model_path):
         return _error(
-            "The model file was not found on the server: " + model_path,
-            {"model_path": "File does not exist on this system."},
+            f"The model file does not exist. Configured path: {data.get('model_path')}. Checked path: {model_path}.",
+            {"model_path": "Upload the model to the configured model-storage directory or correct this path."},
         )
 
     try:
@@ -2587,9 +2714,13 @@ def _detect_with_active_model(frame):
     model = _active_model()
     if model is None:
         return None, "No active inspection model is configured."
-    if not service.is_loaded() or service.get_model_path() != model.model_path:
-        if not service.load_model(model.model_path):
-            return None, f"The configured model could not be loaded: {model.model_path}"
+    try:
+        model_path = str(resolve_model_path(model.model_path))
+    except ModelPathResolutionError as exc:
+        return None, f"The configured model path is invalid: {exc}"
+    if not service.is_loaded() or service.get_model_path() != model_path:
+        if not service.load_model(model_path):
+            return None, f"The configured model could not be loaded: {model_path}"
     return service, None
 
 
@@ -2885,11 +3016,7 @@ def api_part_vision_roi(request, part_id):
                 "message": "This part has no vision configuration yet.",
             }
         )
-    roi = (
-        VisionPartROI.objects.filter(configuration=configuration, is_active=True)
-        .order_by("-version")
-        .first()
-    )
+    roi = active_roi(configuration)
     return _json_response(
         {
             "saved": roi is not None,

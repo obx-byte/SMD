@@ -10,6 +10,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from VisionInspection.models import StorageDestination, StorageImageMetadata, StorageMigrationJob
 from VisionInspection.services import storage_service
+from VisionInspection.services.access_control import can_view_log, can_view_session, is_admin
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,20 @@ def migration_status(request, job_id):
 
 @require_GET
 def image(request, metadata_id):
-    metadata = get_object_or_404(StorageImageMetadata.objects.select_related("destination"), pk=metadata_id)
+    metadata = get_object_or_404(
+        StorageImageMetadata.objects.select_related(
+            "destination", "inspection_log", "inspection_session"
+        ),
+        pk=metadata_id,
+    )
+    if metadata.inspection_session_id:
+        if not can_view_session(request.user, metadata.inspection_session):
+            return _json({"ok": False, "message": "You cannot access this inspection evidence."}, 403)
+    elif metadata.inspection_log_id:
+        if not can_view_log(request.user, metadata.inspection_log):
+            return _json({"ok": False, "message": "You cannot access this inspection evidence."}, 403)
+    elif not is_admin(request.user):
+        return _json({"ok": False, "message": "This image is not linked to an authorized inspection."}, 403)
     try:
         stream = storage_service.open_image(metadata)
     except storage_service.StorageOperationError as exc:

@@ -244,10 +244,11 @@ def _compute_metric(metric_name, epoch, total_epochs):
 
 def _save_trained_model(model, training_project):
     """Save the trained model and return its path."""
-    from django.conf import settings
-    output_dir = getattr(settings, "VISION_MODEL_OUTPUT_DIR", "/data/models")
+    from VisionInspection.services.model_paths import model_storage_root
+
+    output_dir = model_storage_root()
     os.makedirs(output_dir, exist_ok=True)
-    model_path = os.path.join(output_dir, f"{training_project}_trained.pt")
+    model_path = os.path.join(str(output_dir), f"{training_project}_trained.pt")
     if model is not None:
         try:
             model.save(model_path)

@@ -14,6 +14,7 @@ Rules enforced here (never bypassed, never guessed):
 """
 
 import logging
+import math
 import threading
 
 from django.db import transaction
@@ -61,13 +62,71 @@ def active_configuration(part_number):
 
 
 def active_roi(configuration):
-    """The single common ROI of *configuration* (or ``None``)."""
+    """Return this configuration's ROI, or a compatible earlier part ROI."""
     if configuration is None:
         return None
-    return (
+    roi = (
         VisionPartROI.objects.filter(configuration=configuration, is_active=True)
         .order_by("-version")
         .first()
+    )
+    if roi is not None:
+        return roi
+
+    current_roles = camera_roles(configuration)
+    if not current_roles or common_roi_camera_error(configuration):
+        return None
+
+    previous_rois = (
+        VisionPartROI.objects.filter(
+            configuration__part_id=configuration.part_id,
+            configuration__version__lt=configuration.version,
+            is_active=True,
+        )
+        .select_related("configuration")
+        .order_by("-configuration__version", "-version")
+    )
+    for previous_roi in previous_rois:
+        if not _roi_coordinates_valid(previous_roi):
+            continue
+        previous_roles = camera_roles(previous_roi.configuration)
+        if common_roi_camera_error(previous_roi.configuration):
+            continue
+        source_side = "front" if "front" in previous_roles else "back"
+        source_camera = previous_roles.get(source_side)
+        if source_camera is None:
+            continue
+        if all(
+            current_camera["source"] == source_camera["source"]
+            and (
+                current_camera["source"] != VisionPartConfiguration.SOURCE_OPENCV
+                or current_camera["index"] == source_camera["index"]
+            )
+            for current_camera in current_roles.values()
+        ):
+            return previous_roi
+    return None
+
+
+def _roi_coordinates_valid(roi):
+    """Check saved source-frame coordinates without relying on crop clamping."""
+    try:
+        x, y, width, height = (
+            float(roi.x), float(roi.y), float(roi.width), float(roi.height)
+        )
+        frame_width, frame_height = int(roi.ref_width), int(roi.ref_height)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return (
+        all(math.isfinite(value) for value in (x, y, width, height))
+        and frame_width > 0
+        and frame_height > 0
+        and x >= 0
+        and y >= 0
+        and width > 2
+        and height > 2
+        and x + width <= frame_width
+        and y + height <= frame_height
     )
 
 
@@ -340,7 +399,10 @@ def validate_configuration(configuration, discovered=None):
     # configuration (it is configured separately in ROI Setup) but it does
     # block inspection — the submit path enforces that.
     roi = active_roi(configuration)
-    if roi is not None and roi.pixel_rect(roi.ref_width, roi.ref_height) is None:
+    if roi is not None and (
+        not _roi_coordinates_valid(roi)
+        or roi.pixel_rect(roi.ref_width, roi.ref_height) is None
+    ):
         errors.append("The saved ROI is outside the source frame or too small.")
     if roi is not None:
         camera_error = common_roi_camera_error(configuration)

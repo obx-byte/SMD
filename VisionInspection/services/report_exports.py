@@ -377,8 +377,7 @@ def pdf_response(title, meta, headers, weights, rows):
     # Page footers — added to every page once the layout is complete.
     total_pages = document.page_count
     for index, ops in enumerate(document.pages, start=1):
-        document._emit(
-            ops,
+        ops.append(
             "BT /F1 8 Tf 0.45 0.49 0.60 rg 1 0 0 1 %.2f %.2f Tm (%s) Tj ET\n"
             % (
                 document.page_width / 2.0 - 30,

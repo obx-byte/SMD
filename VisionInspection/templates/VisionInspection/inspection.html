@@ -4,7 +4,7 @@
 {% block title %}Airbag Stitch Inspection{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_workspace.css' %}?v=20261015-3">
+<link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_workspace.css' %}?v=20261017-1">
 {% endblock %}
 
 {% block header_title %}Airbag Stitch Inspection{% endblock %}
@@ -16,6 +16,7 @@
             <div class="wf-kicker">AIRBAG STITCH INSPECTION</div>
             <h2 id="wfScanTitle">Scan Part</h2>
             <p class="wf-subtitle">Scan the part barcode to validate its inspection configuration.</p>
+            <strong class="wf-scan-result wf-side-result is-pending" id="wfScanResult" role="status" aria-live="polite">REQUEST PENDING</strong>
             <form id="wfScanForm" class="wf-scan-form">
                 <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
                 <label for="wfBarcode">Part barcode</label>
@@ -35,52 +36,69 @@
             </div>
             <p class="wf-message" id="wfPartInfo" aria-live="polite">Ready to scan.</p>
             <p class="wf-model-detail" id="wfModelDetail" role="status" aria-live="polite" hidden></p>
+            <section class="wf-guidance" id="wfOperatorGuidance" aria-live="polite" hidden>
+                <h3>Inspection Instructions</h3>
+                <p id="wfInstructionPart"></p>
+                <ol id="wfInstructionSides"></ol>
+            </section>
         </div>
     </section>
 
-    <section class="wf-stage wf-inspection" id="wfStageFront" hidden aria-labelledby="wfFrontTitle">
-        <header class="wf-stage-head">
-            <div><div class="wf-kicker">FRONT INSPECTION</div><h2 id="wfFrontTitle">Front Camera</h2></div>
-            <div class="wf-session-meta"><span>PART <b id="wfFrontPart">&mdash;</b></span><span>SESSION <b id="wfFrontSession">&mdash;</b></span></div>
-            <button id="wfFrontNextPartBtn" class="wf-button wf-change-part" type="button">CHANGE PART</button>
-            <span class="wf-camera-status" id="wfFrontCameraStatus"><i></i> CONNECTING</span>
-        </header>
+    <section class="wf-stage wf-inspection wf-camera-stage" id="wfStageFront" hidden aria-labelledby="wfFrontTitle">
         <div class="wf-camera-frame">
             <img id="feedFront" alt="Configured front camera live feed">
             <div class="wf-camera-overlay" id="ovFront">Connecting to configured front camera...</div>
-        </div>
-        <footer class="wf-stage-foot">
-            <div class="wf-stage-result">
-                <strong id="wfFrontResult">RESULT PENDING</strong>
-                <p id="wfFrontMessage">Live camera ready for front inspection.</p>
-                <div class="wf-detections" id="wfFrontDetections" aria-live="polite">Segmentation results will appear after inspection.</div>
+            <div class="wf-camera-topbar">
+                <div class="wf-camera-heading">
+                    <h2 id="wfFrontTitle">Front Camera</h2>
+                    <p class="wf-camera-instruction" id="wfFrontInstruction"></p>
+                </div>
+                <div class="wf-camera-top-meta">
+                    <span class="wf-camera-status" id="wfFrontCameraStatus"><i></i> CONNECTING</span>
+                    <time class="wf-inactivity-countdown" id="wfInactivityCountdown" aria-label="Time until screen saver">05:00</time>
+                    <time class="wf-camera-clock" id="wfCameraClock"></time>
+                    <span class="wf-camera-station">{{ station_id|default:"—" }}</span>
+                </div>
             </div>
-            <button id="wfFrontRetryCamera" class="wf-button wf-retry" type="button" hidden>RETRY CAMERA</button>
-            <button id="wfFrontSubmitBtn" class="wf-button wf-primary wf-submit" type="button" disabled>SUBMIT FRONT</button>
-        </footer>
+            <div class="wf-stage-result wf-camera-result is-pending">
+                <strong class="wf-side-result is-pending" id="wfFrontResult" role="status" aria-live="polite">REQUEST PENDING</strong>
+            </div>
+            <div class="wf-camera-actions">
+                <button id="wfFrontRetryCamera" class="wf-button wf-retry" type="button" hidden>RETRY CAMERA</button>
+                <button id="wfFrontSubmitBtn" class="wf-button wf-primary wf-submit" type="button" disabled>SUBMIT FRONT</button>
+            </div>
+        </div>
     </section>
 
-    <section class="wf-stage wf-inspection" id="wfStageBack" hidden aria-labelledby="wfBackTitle">
-        <header class="wf-stage-head">
-            <div><div class="wf-kicker">BACK INSPECTION</div><h2 id="wfBackTitle">Back Camera</h2></div>
-            <div class="wf-session-meta"><span>PART <b id="wfBackPart">&mdash;</b></span><span>SESSION <b id="wfBackSession">&mdash;</b></span><span>FRONT <b id="wfBackFrontResult">&mdash;</b></span></div>
-            <button id="wfBackNextPartBtn" class="wf-button wf-change-part" type="button">CHANGE PART</button>
-            <span class="wf-camera-status" id="wfBackCameraStatus"><i></i> CONNECTING</span>
-        </header>
+    <section class="wf-stage wf-inspection wf-camera-stage" id="wfStageBack" hidden aria-labelledby="wfBackTitle">
         <div class="wf-camera-frame">
             <img id="feedBack" alt="Configured back camera live feed">
             <div class="wf-camera-overlay" id="ovBack">Connecting to configured back camera...</div>
-        </div>
-        <footer class="wf-stage-foot">
-            <div class="wf-stage-result">
-                <strong id="wfBackResult">RESULT PENDING</strong>
-                <p id="wfBackMessage">Live camera ready for back inspection.</p>
-                <div class="wf-detections" id="wfBackDetections" aria-live="polite">Segmentation results will appear after inspection.</div>
+            <div class="wf-camera-topbar">
+                <div class="wf-camera-heading">
+                    <h2 id="wfBackTitle">Back Camera</h2>
+                    <p class="wf-camera-instruction" id="wfBackInstruction"></p>
+                </div>
+                <div class="wf-camera-top-meta">
+                    <span class="wf-camera-status" id="wfBackCameraStatus"><i></i> CONNECTING</span>
+                    <time class="wf-inactivity-countdown" aria-label="Time until screen saver">05:00</time>
+                    <time class="wf-camera-clock"></time>
+                    <span class="wf-camera-station">{{ station_id|default:"—" }}</span>
+                </div>
             </div>
-            <button id="wfBackRetryCamera" class="wf-button wf-retry" type="button" hidden>RETRY CAMERA</button>
-            <button id="wfBackSubmitBtn" class="wf-button wf-primary wf-submit" type="button" disabled>SUBMIT BACK &amp; FINISH</button>
-        </footer>
+            <div class="wf-stage-result wf-camera-result is-pending">
+                <strong class="wf-side-result is-pending" id="wfBackResult" role="status" aria-live="polite">REQUEST PENDING</strong>
+            </div>
+            <div class="wf-camera-actions">
+                <button id="wfBackRetryCamera" class="wf-button wf-retry" type="button" hidden>RETRY CAMERA</button>
+                <button id="wfBackSubmitBtn" class="wf-button wf-primary wf-submit" type="button" disabled>SUBMIT BACK</button>
+            </div>
+        </div>
     </section>
+
+    <div class="wf-screen-saver" id="wfScreenSaver" hidden role="status" aria-live="polite">
+        <span>SCREEN SAVER ACTIVE</span>
+    </div>
 
     <section class="wf-stage wf-saving" id="wfStageSaving" hidden aria-live="polite">
         <div class="wf-final-panel">
@@ -138,5 +156,5 @@
         csrf: (document.cookie.split("; ").find(function (c) { return c.indexOf("csrftoken=") === 0; }) || "").split("=")[1] || ""
     };
 </script>
-<script src="{% static 'VisionInspection/js/inspection_workflow_ui.js' %}?v=20261015-5" defer></script>
+<script src="{% static 'VisionInspection/js/inspection_workflow_ui.js' %}?v=20261017-2" defer></script>
 {% endblock %}

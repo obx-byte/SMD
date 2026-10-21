@@ -12,6 +12,7 @@ from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
+from django.urls import reverse
 
 from VisionInspection.models import (
     VisionInspectionEmployee,
@@ -59,7 +60,8 @@ def dashboard(request):
     charts alike.
     """
     filters = records.read_filters(request.GET)
-    logs = records.filter_logs(None, filters)
+    from VisionInspection.services.access_control import scope_logs
+    logs = scope_logs(request.user, records.filter_logs(None, filters))
     summary = records.summarize(logs)
 
     parts = _parts_for_filter()
@@ -423,7 +425,8 @@ def reports(request):
     use the same selection, and the newest records come first.
     """
     filters = records.read_filters(request.GET)
-    logs = records.filter_logs(None, filters)
+    from VisionInspection.services.access_control import scope_logs
+    logs = scope_logs(request.user, records.filter_logs(None, filters))
     ordered = logs.order_by("-timestamp", "-pk")
 
     paginator = Paginator(ordered, records.read_page_size(request.GET))
@@ -434,6 +437,7 @@ def reports(request):
         {"value": "", "label": "All Results"},
         {"value": records.RESULT_OK, "label": "OK"},
         {"value": records.RESULT_NOT_OK, "label": "NOT OK"},
+        {"value": records.RESULT_INCOMPLETE, "label": "INCOMPLETE"},
         {"value": records.RESULT_ERROR, "label": "Error"},
     ]
 
@@ -461,9 +465,10 @@ def reports(request):
 def _report_export_rows(request):
     """Filtered export data shared by the Excel and PDF exports."""
     filters = records.read_filters(request.GET)
-    logs = records.filter_logs(None, filters).order_by("-timestamp", "-pk")
+    from VisionInspection.services.access_control import scope_logs
+    logs = scope_logs(request.user, records.filter_logs(None, filters)).order_by("-timestamp", "-pk")
     rows = records.export_rows(records.build_rows(list(logs)))
-    summary = records.summarize(records.filter_logs(None, filters))
+    summary = records.summarize(scope_logs(request.user, records.filter_logs(None, filters)))
     meta = report_exports.meta_lines(filters, summary, len(rows))
     return filters, meta, rows, summary
 
@@ -584,6 +589,7 @@ _RESULT_BADGE = {
     "OK": "vi-badge-ok",
     "NOT_OK": "vi-badge-not-ok",
     "ERROR": "vi-badge-error",
+    "INCOMPLETE": "vi-badge-pending",
 }
 
 
@@ -603,14 +609,15 @@ def traceability(request):
     result = request.GET.get("result", "").strip().upper()
     page = request.GET.get("page", 1)
 
-    logs = VisionInspectionLog.objects.all()
+    from VisionInspection.services.access_control import scope_logs, can_view_log
+    logs = scope_logs(request.user, VisionInspectionLog.objects.all())
     if q:
         logs = logs.filter(
             Q(part_number__icontains=q)
             | Q(employee_code__icontains=q)
             | Q(preset_name__icontains=q)
         )
-    if result in ("OK", "NOT_OK", "ERROR"):
+    if result in ("OK", "NOT_OK", "INCOMPLETE", "ERROR"):
         logs = logs.filter(result=result)
 
     paginator = Paginator(logs.order_by("-timestamp"), 15)
@@ -640,7 +647,12 @@ def traceability_detail(request, inspection_id):
     images are only referenced when they were actually captured; otherwise their
     absence is stated plainly rather than substituting another image.
     """
-    log = get_object_or_404(VisionInspectionLog, pk=inspection_id)
+    from django.core.exceptions import PermissionDenied
+    from django.utils.http import url_has_allowed_host_and_scheme
+    from VisionInspection.services.access_control import can_view_log
+    log = get_object_or_404(VisionInspectionLog.objects.select_related("session"), pk=inspection_id)
+    if not can_view_log(request.user, log):
+        raise PermissionDenied
     from VisionInspection.services.storage_service import image_url
 
     # ROI configuration snapshot preserved with this record.
@@ -654,28 +666,55 @@ def traceability_detail(request, inspection_id):
             }
         )
 
+    session = log.session
+    if session is None and log.preset_name and log.preset_name.startswith("SESSION#"):
+        from VisionInspection.models import VisionInspectionSession
+        session = VisionInspectionSession.objects.filter(session_id=log.preset_name[8:]).first()
+    sides = []
+    if session:
+        for side, title in (("front", "Front"), ("back", "Back")):
+            sides.append({
+                "key": side, "title": title,
+                "result": getattr(session, f"{side}_verdict", "") or "INCOMPLETE",
+                "status": getattr(session, f"{side}_status", "") or "INCOMPLETE",
+                "captured_at": getattr(session, f"{side}_completed_at", None),
+                "detections": getattr(session, f"{side}_detections", []) or [],
+                "results": [
+                    {
+                        **item,
+                        "stitch_label": item.get("stitch") or item.get("class") or "?",
+                        "actual_label": item.get("actual_count", item.get("count", "?")),
+                        "expected_label": item.get("expected_count", item.get("expected", "?")),
+                    }
+                    for item in (getattr(session, f"{side}_results", []) or [])
+                    if isinstance(item, dict)
+                ],
+                "original_url": image_url(session, f"{side}_image"),
+                "annotated_url": image_url(session, f"{side}_annotated"),
+                "roi_url": image_url(session, f"{side}_roi_image"),
+            })
     detections = log.detected_objects or []
-    evidence = {
-        "original": bool(log.inspection_image),
-        "cropped_roi": False,   # not persisted by the current workflows
-        "annotated": False,     # only generated when a real model predicts
-    }
+    evidence = {"original": bool(log.inspection_image), "cropped_roi": False, "annotated": False}
     model_configured = bool(log.yolo_model_name)
-    if not model_configured:
-        # Without a configured model the pipeline does not emit predictions.
-        detections = []
-
     context = {
-        "sidebar_active": "traceability",
-        "log": log,
+        "sidebar_active": "traceability", "log": log, "session": session,
         "inspection_image_url": image_url(log, "inspection_image"),
         "result_badge": _RESULT_BADGE.get(log.result, "vi-badge-skip"),
-        "roi_config": roi_config,
-        "detections": detections,
-        "detections_count": len(detections),
-        "evidence": evidence,
-        "model_configured": model_configured,
-        "part_bbox": log.part_bbox,
-        "trigger_zone": log.trigger_zone_polygon,
+        "roi_config": roi_config, "detections": detections,
+        "detections_count": len(detections), "evidence": evidence,
+        "model_configured": model_configured, "part_bbox": log.part_bbox,
+        "trigger_zone": log.trigger_zone_polygon, "sides": sides,
+        "back_url": request.GET.get("next", ""),
+        "part": VisionInspectionPart.objects.filter(part_number=log.part_number).first(),
+        "employee": VisionInspectionEmployee.objects.filter(employee_code=log.employee_code).first(),
+        "employee_display": (
+            (VisionInspectionEmployee.objects.filter(employee_code=log.employee_code).values_list("employee_name", flat=True).first() or "")
+            or (session.operator.get_full_name() if session and session.operator_id else "")
+        ),
     }
+    requested_back = request.GET.get("next", "")
+    if requested_back and url_has_allowed_host_and_scheme(requested_back, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+        context["back_url"] = requested_back
+    else:
+        context["back_url"] = reverse("VisionInspection:ui-reports")
     return render(request, "VisionInspection/ui/traceability_detail.html", context)

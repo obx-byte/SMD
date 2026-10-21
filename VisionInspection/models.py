@@ -274,6 +274,7 @@ class VisionInspectionLog(models.Model):
         choices=[
             ("OK", "OK"),
             ("NOT_OK", "NOT OK"),
+            ("INCOMPLETE", "INCOMPLETE"),
             ("ERROR", "INSPECTION ERROR"),
         ],
         default="ERROR",
@@ -289,6 +290,15 @@ class VisionInspectionLog(models.Model):
     inspection_image = models.ImageField(
         upload_to="vision_inspection/results/", blank=True, null=True
     )
+    session = models.ForeignKey(
+        "VisionInspectionSession", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="inspection_logs",
+    )
+    operator = models.ForeignKey(
+        "auth.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="vision_inspection_logs",
+    )
+    employee_name = models.CharField(max_length=150, blank=True, default="")
     stable_frames_used = models.PositiveIntegerField(default=0)
     part_bbox = models.JSONField(blank=True, null=True)
     trigger_zone_polygon = models.JSONField(blank=True, null=True)
@@ -555,6 +565,12 @@ class VisionInspectionSession(models.Model):
     session_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     part_number = models.CharField(max_length=40, db_index=True)
     barcode = models.CharField(max_length=80, blank=True, default="")
+    employee_code = models.CharField(max_length=100, blank=True, default="")
+    station_id = models.CharField(max_length=50, blank=True, default="")
+    operator = models.ForeignKey(
+        "auth.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="vision_inspection_sessions",
+    )
     model = models.ForeignKey(
         VisionYOLOModel, on_delete=models.SET_NULL, null=True, blank=True
     )
@@ -614,6 +630,14 @@ class VisionInspectionSession(models.Model):
     )
     front_results = models.JSONField(default=list, blank=True)
     back_results = models.JSONField(default=list, blank=True)
+    front_detections = models.JSONField(default=list, blank=True)
+    back_detections = models.JSONField(default=list, blank=True)
+    front_roi_image = models.ImageField(
+        upload_to="vision_inspection/sessions/front_roi/", null=True, blank=True
+    )
+    back_roi_image = models.ImageField(
+        upload_to="vision_inspection/sessions/back_roi/", null=True, blank=True
+    )
 
     started_at = models.DateTimeField(auto_now_add=True)
     front_completed_at = models.DateTimeField(null=True, blank=True)
@@ -628,6 +652,16 @@ class VisionInspectionSession(models.Model):
     class Meta:
         db_table = "vision_inspection_session"
         ordering = ["-started_at"]
+        permissions = [
+            ("perform_inspection", "Can perform an inspection"),
+            ("view_inspection_reports", "Can view inspection reports"),
+            ("export_inspection_reports", "Can export inspection reports"),
+            ("change_part_vision_configuration", "Can change Part Vision configuration"),
+            ("change_camera_roi_settings", "Can change camera and ROI settings"),
+            ("manage_inspection_users", "Can manage inspection users"),
+            ("view_inspection_audit_log", "Can view inspection audit logs"),
+            ("view_part_vision_configuration", "Can view Part Vision configuration"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=("part_number",),
@@ -638,6 +672,31 @@ class VisionInspectionSession(models.Model):
 
     def __str__(self):
         return f"Session {self.session_id} — {self.part_number} ({self.stage}/{self.overall})"
+
+
+class VisionInspectionUserProfile(models.Model):
+    """Optional station scope attached to an authenticated Django account."""
+    user = models.OneToOneField("auth.User", on_delete=models.CASCADE, related_name="vision_inspection_profile")
+    station_scope = models.CharField(max_length=50, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vision_inspection_user_profile"
+
+
+class VisionInspectionAuditLog(models.Model):
+    """Append-only record of user and configuration administration actions."""
+    actor = models.ForeignKey("auth.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="vision_inspection_audit_events")
+    action = models.CharField(max_length=80)
+    target_type = models.CharField(max_length=100, blank=True, default="")
+    target_id = models.CharField(max_length=100, blank=True, default="")
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "vision_inspection_audit_log"
+        ordering = ["-created_at"]
 
 
 # =========================================================================== #

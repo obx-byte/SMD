@@ -11,6 +11,11 @@ import os
 import threading
 from typing import Any
 
+from VisionInspection.services.model_paths import (
+    ModelPathResolutionError,
+    resolve_model_path,
+)
+
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
@@ -56,6 +61,12 @@ class YOLOModelService:
             ``True`` if the model was loaded successfully.
         """
         with self._lock:
+            try:
+                model_path = str(resolve_model_path(model_path))
+            except ModelPathResolutionError as exc:
+                logger.error("Invalid YOLO model path: %s", exc)
+                return False
+
             if self._model is not None and self._model_path == model_path:
                 return True
 

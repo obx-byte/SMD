@@ -19,6 +19,11 @@ import threading
 import time
 import zipfile
 
+from VisionInspection.services.model_paths import (
+    ModelPathResolutionError,
+    resolve_model_path,
+)
+
 logger = logging.getLogger(__name__)
 
 SUPPORTED_SUFFIXES = (".pt", ".onnx")
@@ -84,6 +89,7 @@ class ModelRegistry:
         The result is always derived from the file.  ``classes`` is a list of
         ``{"id": int, "name": str}`` in the model's own class order.
         """
+        configured_path = str(model_path or "").strip()
         info = {
             "ok": False,
             "path": model_path,
@@ -92,12 +98,17 @@ class ModelRegistry:
             "task": "",
             "error": "",
         }
-        path = str(model_path or "").strip()
-        if not path:
-            info["error"] = "No model file was supplied."
+        try:
+            path = str(resolve_model_path(configured_path))
+        except ModelPathResolutionError as exc:
+            info["error"] = str(exc)
             return info
+        info["path"] = path
         if not os.path.isfile(path):
-            info["error"] = "The model file does not exist on this server."
+            info["error"] = (
+                "The model file does not exist. "
+                f"Configured path: {configured_path}. Checked path: {path}."
+            )
             return info
         if not path.lower().endswith(SUPPORTED_SUFFIXES):
             info["error"] = (
@@ -162,7 +173,17 @@ class ModelRegistry:
         returned as polygon point lists so the caller can draw a real overlay.
         Nothing is fabricated: an error is returned verbatim.
         """
-        entry = self._entry(str(model_path or "").strip(), task=task)
+        configured_path = str(model_path or "").strip()
+        try:
+            path = str(resolve_model_path(configured_path))
+        except ModelPathResolutionError as exc:
+            return [], str(exc)
+        if not os.path.isfile(path):
+            return [], (
+                "The model file does not exist. "
+                f"Configured path: {configured_path}. Checked path: {path}."
+            )
+        entry = self._entry(path, task=task)
         with entry.lock:
             self._refresh_if_stale(entry, task=task)
             if entry.model is None:
@@ -183,11 +204,18 @@ class ModelRegistry:
         self, model_path, frame, conf=0.50, show_masks=True, show_boxes=True
     ):
         """Run cached segmentation inference and return detections and its rendered frame."""
-        path = str(model_path or "").strip()
+        configured_path = str(model_path or "").strip()
+        try:
+            path = str(resolve_model_path(configured_path))
+        except ModelPathResolutionError as exc:
+            raise ModelLoadError(str(exc)) from exc
         if not path.lower().endswith(SUPPORTED_SUFFIXES):
             raise ModelLoadError("Only .pt and .onnx segmentation models are supported.")
         if not os.path.isfile(path):
-            raise ModelLoadError("The selected model file does not exist.")
+            raise ModelLoadError(
+                "The model file does not exist. "
+                f"Configured path: {configured_path}. Checked path: {path}."
+            )
 
         entry = self._entry(path, task="segment")
         with self._preview_lock, entry.lock:
@@ -209,6 +237,8 @@ class ModelRegistry:
                     conf=conf,
                     task="segment",
                     verbose=False,
+                    imgsz=640,
+                    show_boxes=show_boxes,
                 )
                 detections = []
                 rendered = frame.copy()
@@ -266,7 +296,13 @@ class ModelRegistry:
         return detections, rendered, elapsed_ms
 
     def _predict_ultralytics(self, model, frame, conf, iou, classes, task=""):
-        options = {"source": frame, "conf": conf, "iou": iou, "verbose": False}
+        options = {
+            "source": frame,
+            "conf": conf,
+            "iou": iou,
+            "imgsz": 640,
+            "verbose": False,
+        }
         if task == "segment":
             options["task"] = "segment"
         results = model.predict(**options)
@@ -299,7 +335,7 @@ class ModelRegistry:
                 detection = {
                     "class": str(name),
                     "class_id": cls_id,
-                    "confidence": round(confidence, 4),
+                    "confidence": confidence,
                     "x1": x1,
                     "y1": y1,
                     "x2": x2,
@@ -389,13 +425,18 @@ class ModelRegistry:
         YOLO = self._import_ultralytics()
         if YOLO is None:
             raise ModelRuntimeUnavailableError(
-                "Ultralytics is unavailable; install a compatible Ultralytics "
-                "runtime to load ONNX models."
+                "Ultralytics is unavailable because it could not be imported "
+                "for ONNX model loading. "
+                "Install the pinned dependencies from "
+                "requirements-model-runtime.txt in the server environment; "
+                "the original import traceback is in the server log."
             )
         if self._import_onnx() is None:
             raise ModelRuntimeUnavailableError(
-                "ONNX Runtime is unavailable. Install the CPU onnxruntime package "
-                "compatible with this Python version and system architecture."
+                "ONNX Runtime is unavailable because it could not be imported. "
+                "Install the pinned "
+                "dependencies from requirements-model-runtime.txt in the server "
+                "environment; the original import traceback is in the server log."
             )
         try:
             model = YOLO(entry.path, task=task) if task else YOLO(entry.path)
@@ -421,6 +462,7 @@ class ModelRegistry:
 
             return YOLO
         except Exception:
+            logger.exception("Failed to import the Ultralytics YOLO runtime")
             return None
 
     @staticmethod
@@ -428,6 +470,7 @@ class ModelRegistry:
         try:
             return importlib.import_module("onnxruntime")
         except Exception:
+            logger.exception("Failed to import the ONNX Runtime package")
             return None
 
     @staticmethod

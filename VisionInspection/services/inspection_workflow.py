@@ -9,6 +9,7 @@ fabricated OK or NOT OK.
 import base64
 import io
 import logging
+import math
 import re
 import threading
 import uuid
@@ -26,7 +27,6 @@ from VisionInspection.models import (
     VisionYOLOModel,
     VisionPartConfiguration,
     VisionPartModel,
-    VisionPartROI,
 )
 from VisionInspection.services.camera_service import (
     CAMERA_STATES,
@@ -34,6 +34,10 @@ from VisionInspection.services.camera_service import (
     get_camera_capabilities,
 )
 from VisionInspection.services.yolo_service import YOLOModelService
+from VisionInspection.services.model_paths import (
+    ModelPathResolutionError,
+    resolve_model_path,
+)
 from VisionInspection.services.model_registry import (
     ModelLoadError,
     ModelRegistry,
@@ -41,6 +45,7 @@ from VisionInspection.services.model_registry import (
 )
 from VisionInspection.services import storage_service
 from VisionInspection.services.part_configuration import (
+    active_roi,
     store_validation,
     validate_configuration,
 )
@@ -48,6 +53,7 @@ from VisionInspection.services.part_configuration import (
 logger = logging.getLogger(__name__)
 
 _S = VisionInspectionSession  # alias
+_CONFIGURED_MODEL_CONFIDENCE = 0.30
 
 # Stitch rules are optional engineering configuration.  If absent, per-stitch
 # status is reported as unrulled and the session cannot be classified OK.
@@ -65,6 +71,30 @@ def station_id() -> str:
 
 def _clean(value) -> str:
     return str(value or "").strip()
+
+
+def _normalized_roi_is_valid(roi):
+    try:
+        x, y, width, height = (
+            float(roi[key]) for key in ("x", "y", "w", "h")
+        )
+        ref_width = int(roi["ref_width"])
+        ref_height = int(roi["ref_height"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+    return (
+        all(math.isfinite(value) for value in (x, y, width, height))
+        and ref_width > 0
+        and ref_height > 0
+        and x >= 0
+        and y >= 0
+        and width > 0
+        and height > 0
+        and x + width <= 1
+        and y + height <= 1
+        and int(width * ref_width) > 1
+        and int(height * ref_height) > 1
+    )
 
 
 def _encode_jpeg(image, quality=85) -> bytes | None:
@@ -183,8 +213,6 @@ class InspectionWorkflow:
                 is_saved=False,
             )
             .exclude(stage__in=["saved", "cancelled"])
-            .exclude(front_status=_S.ERROR)
-            .exclude(back_status=_S.ERROR)
             .order_by("-started_at")
             .first()
         )
@@ -285,25 +313,51 @@ class InspectionWorkflow:
                 updated_by=updated_by or "",
             )
 
-    def _resolve_side_roi(self, part_number, view):
+    def _resolve_side_roi(self, part_number, view, expected_camera=None):
         """Resolve a session ROI: prefer the active camera config, else per-part."""
         conf = self.get_camera_config(view)
+        if conf is not None and expected_camera:
+            expected_source = (
+                "picamera"
+                if expected_camera.get("source") == VisionPartConfiguration.SOURCE_RPI
+                else "opencv"
+            )
+            source_matches = str(conf.camera_source).lower() == expected_source
+            index_matches = (
+                expected_source != "opencv"
+                or int(conf.camera_index) == int(expected_camera.get("index", 0))
+            )
+            if not source_matches or not index_matches:
+                conf = None
         if conf:
-            return {
+            roi = {
                 "x": conf.roi_x, "y": conf.roi_y, "w": conf.roi_w, "h": conf.roi_h,
                 "ref_width": conf.frame_width, "ref_height": conf.frame_height,
                 "source": "config", "version": conf.version,
-            }, "config"
-        roi = VisionInspectionMasterROI.objects.filter(
-            part_number=part_number, view=view, is_active=True
-        ).first()
-        if roi:
-            return {
-                "x": roi.x, "y": roi.y, "w": roi.width, "h": roi.height,
-                "ref_width": roi.ref_width, "ref_height": roi.ref_height,
+            }
+            source = "config"
+        else:
+            part_roi = VisionInspectionMasterROI.objects.filter(
+                part_number=part_number, view=view, is_active=True
+            ).first()
+            if not part_roi:
+                return None, None
+            roi = {
+                "x": part_roi.x, "y": part_roi.y, "w": part_roi.width, "h": part_roi.height,
+                "ref_width": part_roi.ref_width, "ref_height": part_roi.ref_height,
                 "source": "part", "version": 0,
-            }, "part"
-        return None, None
+            }
+            source = "part"
+        if not _normalized_roi_is_valid(roi):
+            logger.warning(
+                "Inspection ROI lookup rejected part_number=%s side=%s source=%s "
+                "reason=invalid or out-of-bounds coordinates",
+                part_number,
+                view,
+                source,
+            )
+            return None, None
+        return roi, source
 
     # ------------------------------------------------------------------ #
     #  Step 2 — Model validation / load (once, reused)
@@ -322,6 +376,14 @@ class InspectionWorkflow:
                 part=part
             ).order_by("-version").first()
             if latest_configuration:
+                if latest_configuration.status == VisionPartConfiguration.STATUS_VALIDATION_FAILED:
+                    result = self._validate_part_configuration(latest_configuration)
+                    if result.get("ok") and not latest_configuration.is_active:
+                        latest_configuration.is_active = True
+                        latest_configuration.save(
+                            update_fields=["is_active", "updated_at"]
+                        )
+                    return result
                 validation_errors = list(
                     latest_configuration.validation_errors or []
                 )
@@ -346,13 +408,21 @@ class InspectionWorkflow:
                 "state": "model_missing",
                 "message": "No approved inspection model configured for this part.",
             }
-        if not self._yolo.is_loaded() or self._yolo.get_model_path() != model.model_path:
-            loaded = self._yolo.load_model(model.model_path)
+        try:
+            model_path = str(resolve_model_path(model.model_path))
+        except ModelPathResolutionError as exc:
+            return {
+                "ok": False,
+                "state": "model_invalid",
+                "message": f"Model path is invalid: {exc}",
+            }
+        if not self._yolo.is_loaded() or self._yolo.get_model_path() != model_path:
+            loaded = self._yolo.load_model(model_path)
             if not loaded:
                 return {
                     "ok": False,
                     "state": "model_invalid",
-                    "message": f"Model could not be loaded: {model.model_path}",
+                    "message": f"Model could not be loaded: {model_path}",
                 }
         classes = self._yolo.get_class_names() or []
         required = self._required_classes(model)
@@ -381,7 +451,7 @@ class InspectionWorkflow:
         return sorted(rule_classes)
 
     def _configuration_roi(self, configuration):
-        roi = configuration.rois.filter(is_active=True).order_by("-version").first()
+        roi = active_roi(configuration)
         if roi is None:
             return None
         normalized = roi.normalized
@@ -394,6 +464,8 @@ class InspectionWorkflow:
             "ref_height": roi.ref_height,
             "source": "part_configuration",
             "version": roi.version,
+            "configuration_id": roi.configuration_id,
+            "inherited": roi.configuration_id != configuration.pk,
         }
 
     def _validate_part_configuration(self, configuration):
@@ -424,10 +496,18 @@ class InspectionWorkflow:
         class_count = 0
         discovered_classes = {}
         for association in associations:
+            if association.task_type != "segment":
+                return configuration_error(
+                    "model_task_mismatch",
+                    (
+                        f"Airbag stitch inspection requires a segmentation model; "
+                        f"{association.model.name} is configured for {association.task_type}."
+                    ),
+                )
             try:
                 model_info = self._model_registry.inspect(
                     association.model.model_path,
-                    task=association.task_type,
+                    task="segment",
                 )
             except ModelLoadError as exc:
                 logger.warning(
@@ -564,12 +644,12 @@ class InspectionWorkflow:
     # ------------------------------------------------------------------ #
     #  Step 3 — Submit (unique session, front starts; single active session)
     # ------------------------------------------------------------------ #
-    def submit(self, part_number: str, model_id: int | None = None):
+    def submit(self, part_number: str, model_id: int | None = None, operator=None):
         with self._submit_lock:
-            return self._submit_locked(part_number, model_id)
+            return self._submit_locked(part_number, model_id, operator=operator)
 
     @transaction.atomic
-    def _submit_locked(self, part_number: str, model_id: int | None = None):
+    def _submit_locked(self, part_number: str, model_id: int | None = None, operator=None):
         part_number = str(part_number or "").strip()
         if not part_number:
             return {"ok": False, "state": "error", "message": "Part number is required."}
@@ -617,7 +697,25 @@ class InspectionWorkflow:
                 "front": {"source": configuration.front_camera_source, "index": configuration.front_camera_index},
                 "back": {"source": configuration.back_camera_source, "index": configuration.back_camera_index},
             }
-            if common_roi and requires_front and requires_back and camera_settings["front"] != camera_settings["back"]:
+            same_camera_roles = (
+                camera_settings["front"]["source"] == camera_settings["back"]["source"]
+                and (
+                    camera_settings["front"]["source"] != VisionPartConfiguration.SOURCE_OPENCV
+                    or camera_settings["front"]["index"] == camera_settings["back"]["index"]
+                )
+            )
+            if common_roi and requires_front and requires_back and not same_camera_roles:
+                logger.warning(
+                    "Inspection ROI validation failed part_id=%s part_number=%s "
+                    "configuration_id=%s required_sides=%s common_roi_source=%s "
+                    "reason=%s",
+                    getattr(part, "pk", None),
+                    part_number,
+                    configuration.pk,
+                    ["front", "back"],
+                    common_roi.get("source"),
+                    "front and back camera roles differ",
+                )
                 return {
                     "ok": False,
                     "state": "roi_incompatible",
@@ -625,18 +723,62 @@ class InspectionWorkflow:
                 }
             front_norm = common_roi if requires_front and common_roi else None
             back_norm = common_roi if requires_back and common_roi else None
+            front_source = "part_configuration" if front_norm else None
+            back_source = "part_configuration" if back_norm else None
             if requires_front and front_norm is None:
-                front_norm, _front_source = self._resolve_side_roi(part_number, "front")
+                front_norm, front_source = self._resolve_side_roi(
+                    part_number, "front", camera_settings["front"]
+                )
             if requires_back and back_norm is None:
-                back_norm, _back_source = self._resolve_side_roi(part_number, "back")
+                back_norm, back_source = self._resolve_side_roi(
+                    part_number, "back", camera_settings["back"]
+                )
             required_sides = [side for side, required in (("front", requires_front), ("back", requires_back)) if required]
+            roi_sources = {
+                "front": front_source if requires_front else None,
+                "back": back_source if requires_back else None,
+            }
+            logger.info(
+                "Inspection ROI lookup part_id=%s part_number=%s configuration_id=%s "
+                "required_sides=%s common_roi=%s side_sources=%s",
+                getattr(part, "pk", None),
+                part_number,
+                configuration.pk,
+                required_sides,
+                ({
+                    "configuration_id": common_roi.get("configuration_id"),
+                    "version": common_roi.get("version"),
+                    "inherited": common_roi.get("inherited", False),
+                } if common_roi else None),
+                roi_sources,
+            )
             if not required_sides:
                 return {"ok": False, "state": "configuration_invalid", "message": "The configuration requires no inspection sides."}
             if any((front_norm if side == "front" else back_norm) is None for side in required_sides):
+                missing_sides = [
+                    side for side in required_sides
+                    if (front_norm if side == "front" else back_norm) is None
+                ]
+                logger.warning(
+                    "Inspection ROI validation failed part_id=%s part_number=%s "
+                    "configuration_id=%s required_sides=%s missing_sides=%s "
+                    "roi_sources=%s reason=%s",
+                    getattr(part, "pk", None),
+                    part_number,
+                    configuration.pk,
+                    required_sides,
+                    missing_sides,
+                    roi_sources,
+                    "no valid ROI matched the required camera role",
+                )
                 return {
                     "ok": False,
                     "state": "roi_missing",
-                    "message": "A required side has no compatible ROI. Configure the common part ROI or side ROI before inspection.",
+                    "message": (
+                        "No valid ROI matches the required "
+                        f"{', '.join(side.title() for side in missing_sides)} camera role. "
+                        "Configure a compatible common part ROI or side ROI before inspection."
+                    ),
                 }
             selected_models = validation["models"]
             model = VisionYOLOModel.objects.get(pk=selected_models[0]["model_id"])
@@ -651,10 +793,8 @@ class InspectionWorkflow:
                 "models": selected_models,
                 "common_roi": common_roi,
             }
-            initial_front_status = _S.IN_PROGRESS if first_side == "front" else _S.SKIPPED
-            initial_back_status = _S.IN_PROGRESS if first_side == "back" else (
-                _S.PENDING if requires_back else _S.SKIPPED
-            )
+            initial_front_status = _S.PENDING if requires_front else _S.SKIPPED
+            initial_back_status = _S.PENDING if requires_back else _S.SKIPPED
             initial_front_verdict = "PENDING" if requires_front else "NOT_REQUIRED"
             initial_back_verdict = "PENDING" if requires_back else "NOT_REQUIRED"
         else:
@@ -678,7 +818,7 @@ class InspectionWorkflow:
                 }
             model_classes = validation["classes"]
             first_side = "front"
-            initial_front_status = _S.IN_PROGRESS
+            initial_front_status = _S.PENDING
             initial_back_status = _S.PENDING
             initial_front_verdict = initial_back_verdict = "PENDING"
 
@@ -706,6 +846,9 @@ class InspectionWorkflow:
             with transaction.atomic():
                 session = VisionInspectionSession.objects.create(
                     part_number=part_number,
+                    employee_code=(operator.get_username() if operator and operator.is_authenticated else ""),
+                    station_id=station_id(),
+                    operator=(operator if operator and operator.is_authenticated else None),
                     model=model,
                     model_version=validation["model_version"],
                     model_classes=model_classes,
@@ -814,7 +957,7 @@ class InspectionWorkflow:
             "progress": self.get_progress(str(session.session_id)),
         }
 
-    def _configured_side_results(self, session, side, crop):
+    def _configured_side_results(self, session, side, crop, frame_seq=None):
         detections = []
         results = []
         for model_config in session.config_snapshot.get("models", []):
@@ -824,7 +967,7 @@ class InspectionWorkflow:
             ]
             if not rules:
                 continue
-            required_task = model_config.get("task_type", "segment")
+            required_task = "segment"
             try:
                 model_info = self._model_registry.inspect(
                     model_config["path"],
@@ -832,9 +975,10 @@ class InspectionWorkflow:
                 )
             except ModelLoadError as exc:
                 logger.exception(
-                    "Model inspection failed during %s inference for session %s",
-                    side,
+                    "Model inspection failed: session=%s side=%s model_path=%s",
                     session.session_id,
+                    side,
+                    model_config["path"],
                 )
                 return None, None, f"Configured model {model_config['name']} could not be loaded: {exc}"
             if not model_info["ok"]:
@@ -842,6 +986,13 @@ class InspectionWorkflow:
                     f"Configured model {model_config['name']} could not be loaded: "
                     f"{model_info['error']}"
                 )
+            logger.info(
+                "Inspection model ready: session=%s side=%s model_id=%s task=%s",
+                session.session_id,
+                side,
+                model_config["model_id"],
+                model_info.get("task", ""),
+            )
             actual_task = model_info.get("task", "")
             task_matches = actual_task == required_task
             if not task_matches:
@@ -850,47 +1001,149 @@ class InspectionWorkflow:
                     f"{required_task}, but the model file is "
                     f"{actual_task or 'not inference-ready'}."
                 )
-            actual_classes = [item["name"] for item in model_info["classes"]]
-            if actual_classes != [item["name"] for item in model_config["classes"]]:
+            actual_classes = model_info.get("classes")
+            configured_classes = model_config.get("classes")
+            if not isinstance(actual_classes, list) or not isinstance(configured_classes, list):
+                return None, None, f"Configured classes for {model_config['name']} are invalid."
+            def class_map(class_items):
+                mapped = {}
+                for item in class_items:
+                    if not isinstance(item, dict) or "id" not in item or not item.get("name"):
+                        return None
+                    try:
+                        class_id = int(item["id"])
+                    except (TypeError, ValueError):
+                        return None
+                    if class_id in mapped:
+                        return None
+                    mapped[class_id] = str(item["name"])
+                return mapped
+
+            actual_class_map = class_map(actual_classes)
+            configured_class_map = class_map(configured_classes)
+            if actual_class_map is None or configured_class_map is None or actual_class_map != configured_class_map:
                 return None, None, f"Configured classes for {model_config['name']} no longer match the model file."
-            threshold = min(
-                float(rule["front_threshold"] if side == "front" else rule["back_threshold"])
-                for rule in rules
-            )
             class_ids = {int(rule["class_id"]) for rule in rules}
+            logger.info(
+                "Inspection inference started: session=%s side=%s frame_seq=%s "
+                "roi_status=valid model_path=%s",
+                session.session_id,
+                side,
+                frame_seq if frame_seq is not None else "provided",
+                model_config["path"],
+            )
             try:
                 model_detections, inference_time = self._model_registry.predict(
                     model_config["path"],
                     crop,
-                    conf=threshold,
+                    conf=_CONFIGURED_MODEL_CONFIDENCE,
                     classes=class_ids,
                     task=required_task,
                 )
             except ModelLoadError as exc:
                 logger.exception(
-                    "Model loading failed during %s inference for session %s",
-                    side,
+                    "Model loading failed: session=%s side=%s model_path=%s",
                     session.session_id,
+                    side,
+                    model_config["path"],
                 )
                 return None, None, f"Configured model {model_config['name']} could not be loaded: {exc}"
-            if isinstance(inference_time, str):
-                return None, None, (
-                    f"Inference failed for model {model_config['name']}: "
-                    f"{inference_time}"
-                )
-            if required_task == "segment" and any(
-                "polygon" not in detection for detection in model_detections
+            if (
+                isinstance(inference_time, str)
+                or not isinstance(inference_time, (int, float))
+                or not math.isfinite(float(inference_time))
+                or not isinstance(model_detections, list)
             ):
                 return None, None, (
-                    f"Segmentation model {model_config['name']} returned detections "
-                    "without masks. The model output cannot be treated as a valid "
-                    "segmentation result."
+                    f"Inference failed for model {model_config['name']}: "
+                    f"{inference_time if isinstance(inference_time, str) else 'the model returned invalid output'}"
                 )
-            detections.extend({**detection, "model_id": model_config["model_id"]} for detection in model_detections)
+            logger.info(
+                "Inspection inference completed: session=%s side=%s frame_seq=%s "
+                "model_path=%s detections=%s inference_ms=%.1f",
+                session.session_id,
+                side,
+                frame_seq if frame_seq is not None else "provided",
+                model_config["path"],
+                len(model_detections),
+                float(inference_time),
+            )
+            logger.info(
+                "Inspection detections produced: session=%s side=%s model_id=%s "
+                "detections=%s",
+                session.session_id,
+                side,
+                model_config["model_id"],
+                [
+                    {
+                        "class_id": detection.get("class_id"),
+                        "class": detection.get("class"),
+                        "confidence": detection.get("confidence"),
+                    }
+                    for detection in model_detections
+                    if isinstance(detection, dict)
+                ],
+            )
+            eligible_detections = []
+            for detection in model_detections:
+                if not isinstance(detection, dict):
+                    return None, None, f"Inference for model {model_config['name']} returned an invalid detection."
+                class_id = detection.get("class_id")
+                confidence = detection.get("confidence")
+                try:
+                    confidence = float(confidence)
+                except (TypeError, ValueError):
+                    return None, None, f"Inference for model {model_config['name']} returned an invalid confidence."
+                expected_name = actual_class_map.get(class_id) if isinstance(class_id, int) else None
+                if (
+                    expected_name is None
+                    or class_id not in class_ids
+                    or detection.get("class") != expected_name
+                    or not math.isfinite(confidence)
+                    or not 0.0 <= confidence <= 1.0
+                ):
+                    return None, None, f"Inference for model {model_config['name']} returned an invalid class or confidence."
+                try:
+                    box = [float(detection[key]) for key in ("x1", "y1", "x2", "y2")]
+                except (KeyError, TypeError, ValueError):
+                    return None, None, f"Inference for model {model_config['name']} returned an invalid bounding box."
+                if not all(math.isfinite(value) for value in box) or box[2] < box[0] or box[3] < box[1]:
+                    return None, None, f"Inference for model {model_config['name']} returned an invalid bounding box."
+                if required_task == "segment" and (
+                    not isinstance(detection.get("polygon"), list)
+                    or len(detection["polygon"]) < 3
+                ):
+                    return None, None, (
+                        f"Segmentation model {model_config['name']} returned detections "
+                        "without valid masks. The model output cannot be treated as a "
+                        "valid segmentation result."
+                    )
+                if required_task == "segment" and any(
+                    not isinstance(point, (list, tuple))
+                    or len(point) < 2
+                    or not all(
+                        isinstance(value, (int, float)) and math.isfinite(float(value))
+                        for value in point[:2]
+                    )
+                    for point in detection["polygon"]
+                ):
+                    return None, None, (
+                        f"Segmentation model {model_config['name']} returned an invalid mask."
+                    )
+                if confidence >= _CONFIGURED_MODEL_CONFIDENCE:
+                    eligible_detections.append({**detection, "confidence": confidence})
+
+            detections.extend(
+                {**detection, "model_id": model_config["model_id"]}
+                for detection in eligible_detections
+            )
             for rule in rules:
-                threshold = float(rule[f"{side}_threshold"])
+                threshold = max(
+                    _CONFIGURED_MODEL_CONFIDENCE,
+                    float(rule[f"{side}_threshold"]),
+                )
                 matching = [
-                    detection for detection in model_detections
+                    detection for detection in eligible_detections
                     if detection.get("class_id") == rule["class_id"]
                     and float(detection.get("confidence", 0.0)) >= threshold
                 ]
@@ -922,8 +1175,29 @@ class InspectionWorkflow:
                     "threshold": threshold,
                     "required": rule["required"],
                     "status": "OK" if passed else ("NOT_OK" if rule["required"] else "OPTIONAL_NOT_OK"),
+                    "reason": (
+                        f"Expected {expected} detection(s), found {count}."
+                        if not passed else f"{count} detection(s) met the configured rule."
+                    ),
                 })
         results.sort(key=lambda row: (row["priority"], row["model_id"], row["class_id"]))
+        logger.info(
+            "Required-class evaluation complete: session=%s side=%s classes=%s",
+            session.session_id,
+            side,
+            [
+                {
+                    "class_id": row["class_id"],
+                    "class": row["stitch"],
+                    "required": row["required"],
+                    "count": row["actual_count"],
+                    "confidence": row["confidence"],
+                    "threshold": row["threshold"],
+                    "status": row["status"],
+                }
+                for row in results
+            ],
+        )
         return detections, results, None
 
     # ------------------------------------------------------------------ #
@@ -934,7 +1208,19 @@ class InspectionWorkflow:
             return {"ok": False, "state": "invalid_side", "message": "Inspection side is invalid."}
         session = self._get_session(session_id)
         if session is None:
+            logger.warning(
+                "Inspection session lookup failed: session=%s side=%s",
+                session_id,
+                side,
+            )
             return {"ok": False, "state": "error", "message": "Session not found."}
+        logger.info(
+            "Inspection session resolved: session=%s side=%s part=%s status=%s",
+            session.session_id,
+            side,
+            session.part_number,
+            getattr(session, f"{side}_status"),
+        )
         if not session.is_active or session.is_saved or session.stage == "cancelled":
             return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
         side_status = getattr(session, f"{side}_status")
@@ -948,11 +1234,24 @@ class InspectionWorkflow:
                 "results": getattr(session, f"{side}_results"),
                 "progress": self.get_progress(str(session.session_id)),
             }
+        if side_status == _S.IN_PROGRESS:
+            return {
+                "ok": False,
+                "state": "side_in_progress",
+                "message": f"{side.title()} inspection is already in progress.",
+                "progress": self.get_progress(str(session.session_id)),
+            }
         if side_status == _S.SKIPPED:
             return {
                 "ok": False,
                 "state": "side_not_required",
                 "message": f"{side.title()} inspection is not required for this part.",
+            }
+        if side == "back" and session.front_status not in (_S.COMPLETED, _S.SKIPPED):
+            return {
+                "ok": False,
+                "state": "incomplete",
+                "message": "Complete the front inspection before starting the back inspection.",
             }
 
         if session.configuration_id:
@@ -961,6 +1260,50 @@ class InspectionWorkflow:
                 side == "back" and configured_mode == VisionPartConfiguration.MODE_FRONT_ONLY
             ):
                 return {"ok": False, "state": "side_not_required", "message": f"{side.title()} inspection is not required for this part."}
+
+        with transaction.atomic():
+            claimed = VisionInspectionSession.objects.filter(
+                pk=session.pk,
+                is_active=True,
+                is_saved=False,
+                **{f"{side}_status__in": (_S.PENDING, _S.ERROR)},
+            ).update(
+                **{
+                    f"{side}_status": _S.IN_PROGRESS,
+                    "stage": side,
+                    "overall": "PENDING",
+                    "error_message": "",
+                }
+            )
+        if not claimed:
+            session.refresh_from_db()
+            if not session.is_active or session.is_saved or session.stage == "cancelled":
+                return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
+            if getattr(session, f"{side}_status") == _S.COMPLETED:
+                return {
+                    "ok": True,
+                    "state": f"{side}_completed",
+                    "already_completed": True,
+                    "message": f"{side.title()} inspection has already completed; stored results were returned.",
+                    "detections": [],
+                    "results": getattr(session, f"{side}_results"),
+                    "progress": self.get_progress(str(session.session_id)),
+                }
+            if getattr(session, f"{side}_status") == _S.IN_PROGRESS:
+                return {
+                    "ok": False,
+                    "state": "side_in_progress",
+                    "message": f"{side.title()} inspection is already in progress.",
+                    "progress": self.get_progress(str(session.session_id)),
+                }
+            return {
+                "ok": False,
+                "state": "invalid_side_state",
+                "message": f"{side.title()} inspection cannot be started from its current state.",
+            }
+        session.refresh_from_db()
+
+        if session.configuration_id:
             camera = session.config_snapshot.get("camera", {}).get(side, {})
             source = "picamera" if camera.get("source") == VisionPartConfiguration.SOURCE_RPI else "opencv"
             index = int(camera.get("index", 0))
@@ -983,15 +1326,46 @@ class InspectionWorkflow:
                     "x": fk.x, "y": fk.y, "w": fk.width, "h": fk.height,
                     "ref_width": fk.ref_width, "ref_height": fk.ref_height,
                 }
-        if not roi or not roi.get("w"):
+        try:
+            normalized_roi = {
+                key: float(roi[key]) for key in ("x", "y", "w", "h")
+            } if roi else {}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            normalized_roi = {}
+        roi_is_valid = (
+            len(normalized_roi) == 4
+            and all(math.isfinite(value) for value in normalized_roi.values())
+            and 0 <= normalized_roi["x"] < 1
+            and 0 <= normalized_roi["y"] < 1
+            and 0 < normalized_roi["w"] <= 1
+            and 0 < normalized_roi["h"] <= 1
+            and normalized_roi["x"] + normalized_roi["w"] <= 1
+            and normalized_roi["y"] + normalized_roi["h"] <= 1
+        )
+        if not roi_is_valid:
+            logger.warning(
+                "Inspection inference blocked: session=%s side=%s "
+                "frame_seq=unavailable roi_status=missing_or_invalid",
+                session.session_id,
+                side,
+            )
             return self._fail_side(session, side, "No ROI configured for this side.")
 
+        frame_seq = None
         if frame is None:
             if self._camera.get_status() != CAMERA_STATES["ON"]:
                 return self._fail_side(session, side, "Camera is not running.")
-            ok, frame = self._camera.get_frame()
+            ok, frame, frame_meta = CameraService.get_frame_with_meta()
             if not ok or frame is None:
                 return self._fail_side(session, side, "No camera frame available.")
+            frame_seq = frame_meta.get("seq")
+            logger.info(
+                "Inspection camera frame acquired: session=%s side=%s frame_seq=%s age_ms=%s",
+                session.session_id,
+                side,
+                frame_seq,
+                frame_meta.get("age_ms"),
+            )
         if (
             getattr(frame, "ndim", 0) != 3
             or frame.shape[0] <= 0
@@ -1003,18 +1377,59 @@ class InspectionWorkflow:
             return self._fail_side(session, side, "Inspection model is not loaded.")
 
         h, w = frame.shape[:2]
-        px, py = int(roi["x"] * w), int(roi["y"] * h)
-        pw, ph = int(roi["w"] * w), int(roi["h"] * h)
+        px, py = int(normalized_roi["x"] * w), int(normalized_roi["y"] * h)
+        pw, ph = int(normalized_roi["w"] * w), int(normalized_roi["h"] * h)
         if px + pw > w or py + ph > h or pw <= 1 or ph <= 1:
+            logger.warning(
+                "Inspection inference blocked: session=%s side=%s frame_seq=%s "
+                "roi_status=out_of_bounds frame=%sx%s crop=%s,%s,%s,%s",
+                session.session_id,
+                side,
+                frame_seq if frame_seq is not None else "provided",
+                w,
+                h,
+                px,
+                py,
+                pw,
+                ph,
+            )
             return self._fail_side(session, side, "ROI outside frame or invalid.")
         crop = frame[py:py + ph, px:px + pw]  # crop before inference
 
         t0 = timezone.now()
+        logger.info(
+            "Inspection frame acquired: session=%s side=%s frame_seq=%s "
+            "roi_status=valid frame=%sx%s crop=%s,%s,%s,%s",
+            session.session_id,
+            side,
+            frame_seq if frame_seq is not None else "provided",
+            w,
+            h,
+            px,
+            py,
+            pw,
+            ph,
+        )
         if session.configuration_id:
-            detections, results, inference_error = self._configured_side_results(session, side, crop)
+            detections, results, inference_error = self._configured_side_results(
+                session, side, crop, frame_seq=frame_seq
+            )
             if inference_error:
+                logger.error(
+                    "Inspection inference failed: session=%s side=%s frame_seq=%s error=%s",
+                    session.session_id,
+                    side,
+                    frame_seq if frame_seq is not None else "provided",
+                    inference_error,
+                )
                 return self._fail_side(session, side, inference_error)
             verdict = self._side_verdict(results)
+            logger.info(
+                "Inspection side verdict calculated: session=%s side=%s verdict=%s",
+                session.session_id,
+                side,
+                verdict,
+            )
         else:
             detections = self._yolo.detect(crop, conf=float(getattr(settings, "VISION_INFERENCE_CONF", 0.5)))
             results = self._per_stitch(detections)
@@ -1046,10 +1461,12 @@ class InspectionWorkflow:
                 return {"ok": False, "state": "side_already_completed", "message": f"{side.title()} inspection has already completed."}
             try:
                 self._save_image(session, side, "image", _encode_jpeg(frame))
+                self._save_image(session, side, "roi_image", _encode_jpeg(crop))
                 self._save_image(session, side, "annotated", annotated_jpeg)
             except storage_service.StorageOperationError as exc:
                 return self._fail_side(session, side, f"Inspection evidence could not be persisted: {exc}")
 
+            setattr(session, f"{side}_detections", frame_detections)
             setattr(session, f"{side}_results", results)
             setattr(session, f"{side}_verdict", verdict)
             if session.configuration_id:
@@ -1064,6 +1481,13 @@ class InspectionWorkflow:
                 session.back_completed_at = timezone.now()
                 session.stage = "result"
             session.save()
+            logger.info(
+                "Inspection side persisted: session=%s side=%s status=%s verdict=%s",
+                session.session_id,
+                side,
+                _S.COMPLETED,
+                verdict,
+            )
 
         return {
             "ok": True,
@@ -1090,8 +1514,13 @@ class InspectionWorkflow:
             setattr(session, f"{side}_verdict", "ERROR")
             session.overall = _S.OVERALL_INCOMPLETE
             session.error_message = message
-            session.is_active = False
             session.save()
+        logger.error(
+            "Inspection side failed: session=%s side=%s error=%s",
+            session.session_id,
+            side,
+            message,
+        )
         self._stop_camera_for_session(str(session.session_id))
         return {"ok": False, "state": f"{side}_error", "message": message,
                 "progress": self.get_progress(str(session.session_id))}
@@ -1133,7 +1562,8 @@ class InspectionWorkflow:
     def _save_image(self, session, side, kind, jpeg_bytes):
         if not jpeg_bytes:
             raise storage_service.StorageOperationError("The inspection image could not be encoded.")
-        field_name = f"{side}_{'annotated' if kind == 'annotated' else 'image'}"
+        suffix = {"annotated": "annotated", "roi_image": "roi_image"}.get(kind, "image")
+        field_name = f"{side}_{suffix}"
         name = f"{session.session_id}_{side}_{kind}.jpg"
         storage_service.register_image(session, field_name, jpeg_bytes, name)
 
@@ -1164,10 +1594,13 @@ class InspectionWorkflow:
             )]
         if any(status == _S.ERROR or verdict == "ERROR" for status, verdict in required_statuses):
             overall = _S.OVERALL_INCOMPLETE
-        elif required_statuses and all(status == _S.COMPLETED and verdict == "OK" for status, verdict in required_statuses):
-            overall = _S.OVERALL_OK
-        elif any(status == _S.COMPLETED and verdict == "NOT_OK" for status, verdict in required_statuses):
-            overall = _S.OVERALL_NOT_OK
+        elif required_statuses and all(status == _S.COMPLETED for status, _verdict in required_statuses):
+            if all(verdict == "OK" for _status, verdict in required_statuses):
+                overall = _S.OVERALL_OK
+            elif any(verdict == "NOT_OK" for _status, verdict in required_statuses):
+                overall = _S.OVERALL_NOT_OK
+            else:
+                overall = _S.OVERALL_INCOMPLETE
         else:
             overall = _S.OVERALL_INCOMPLETE  # incomplete/indeterminate never OK
         session.overall = overall
@@ -1175,6 +1608,15 @@ class InspectionWorkflow:
             session.stage = "result"
         session.computed_at = timezone.now()
         session.save()
+        logger.info(
+            "Inspection overall verdict calculated: session=%s front=%s back=%s "
+            "required_sides=%s overall=%s",
+            session.session_id,
+            fv,
+            bv,
+            required_statuses,
+            overall,
+        )
         return {"ok": True, "state": "result_ready", "overall": overall,
                 "front_verdict": fv, "back_verdict": bv,
                 "progress": self.get_progress(str(session.session_id))}
@@ -1217,17 +1659,21 @@ class InspectionWorkflow:
         # Reuse the inspection log for history / reports / traceability.
         log = VisionInspectionLog.objects.create(
             part_number=session.part_number,
-            employee_code=station_id(),
+            employee_code=session.employee_code or (session.operator.get_username() if session.operator_id else station_id()),
+            operator=session.operator if session.operator_id else None,
+            employee_name=(session.operator.get_full_name() if session.operator_id else ""),
             preset_name=f"SESSION#{session.session_id}",
+            session=session,
+            barcode=session.barcode,
             preset_version=1,
             yolo_model_name=(session.model.name if session.model else ""),
             yolo_model_version=session.model_version,
-            result=session.overall if session.overall in ("OK", "NOT_OK") else "NOT_OK",
+            result=session.overall if session.overall in ("OK", "NOT_OK", "INCOMPLETE") else "ERROR",
             roi_results=[
                 {"side": "front", "results": session.front_results},
                 {"side": "back", "results": session.back_results},
             ],
-            detected_objects=session.front_results + session.back_results,
+            detected_objects=session.front_detections + session.back_detections,
             inspection_image=None,
             part_bbox={},
             trigger_zone_polygon=[],
@@ -1261,6 +1707,36 @@ class InspectionWorkflow:
         session = self._get_session(session_id)
         if session is None:
             return {"ok": False, "message": "Session not found."}
+        required_sides = [
+            ("front", session.front_status, session.front_verdict),
+            ("back", session.back_status, session.back_verdict),
+        ]
+        if session.configuration_id:
+            mode = session.config_snapshot.get("inspection_mode")
+            required_sides = [
+                (side, status, verdict)
+                for side, status, verdict in required_sides
+                if mode != (
+                    VisionPartConfiguration.MODE_BACK_ONLY
+                    if side == "front"
+                    else VisionPartConfiguration.MODE_FRONT_ONLY
+                )
+            ]
+        if any(status == _S.ERROR or verdict == "ERROR" for _side, status, verdict in required_sides):
+            inspection_status = "ERROR"
+        elif any(status == _S.IN_PROGRESS for _side, status, _verdict in required_sides):
+            inspection_status = "INSPECTING"
+        elif required_sides and all(
+            status == _S.COMPLETED for _side, status, _verdict in required_sides
+        ):
+            if all(verdict == "OK" for _side, _status, verdict in required_sides):
+                inspection_status = "OKAY PART"
+            elif any(verdict == "NOT_OK" for _side, _status, verdict in required_sides):
+                inspection_status = "NOT OKAY PART"
+            else:
+                inspection_status = "ERROR"
+        else:
+            inspection_status = "REQUEST PENDING"
         stages = [
             ("scan", "Part Scanned", bool(session.part_number)),
             ("model", "Model Loaded", bool(session.model)),
@@ -1294,10 +1770,12 @@ class InspectionWorkflow:
             "front_verdict": session.front_verdict,
             "back_verdict": session.back_verdict,
             "overall": session.overall,
+            "inspection_status": inspection_status,
             "is_saved": session.is_saved,
             "is_active": session.is_active,
             "front_results": session.front_results,
             "back_results": session.back_results,
+            "error_message": session.error_message,
             "stages": out,
         }
 

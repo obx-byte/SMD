@@ -29,7 +29,8 @@ from VisionInspection.models import (
 RESULT_OK = "OK"
 RESULT_NOT_OK = "NOT_OK"
 RESULT_ERROR = "ERROR"
-RESULT_CHOICES = (RESULT_OK, RESULT_NOT_OK, RESULT_ERROR)
+RESULT_INCOMPLETE = "INCOMPLETE"
+RESULT_CHOICES = (RESULT_OK, RESULT_NOT_OK, RESULT_INCOMPLETE, RESULT_ERROR)
 
 # Longest values accepted from the query string (model limits + a margin).
 DATE_MAX = 10
@@ -173,7 +174,7 @@ def summarize(logs):
     total = logs.count()
     ok = logs.filter(result=RESULT_OK).count()
     not_ok = logs.filter(result=RESULT_NOT_OK).count()
-    incomplete_error = logs.filter(result=RESULT_ERROR).count()
+    incomplete_error = logs.filter(result__in=(RESULT_INCOMPLETE, RESULT_ERROR)).count()
 
     def percentage(value):
         return round(100.0 * value / total, 1) if total else 0.0
@@ -246,12 +247,16 @@ def build_rows(logs, parts=None, employees=None, sessions=None):
     sessions = sessions_for(logs) if sessions is None else sessions
 
     rows = []
+    from VisionInspection.services.storage_service import image_url
     for log in logs:
-        session = sessions.get(log.preset_name or "")
+        session = getattr(log, "session", None) or sessions.get(log.preset_name or "")
         employee = employees.get(log.employee_code or "")
         part_name = parts.get(log.part_number or "", "")
         employee_code = log.employee_code or ""
-        employee_name = employee.employee_name if employee else ""
+        employee_name = (
+            employee.employee_name if employee
+            else (getattr(log, "employee_name", "") or (session.operator.get_full_name() if session and session.operator_id else ""))
+        )
         # The unique number is the scanned barcode of the inspected unit —
         # stored on the record itself when the station saved it, otherwise read
         # back from the session that produced the record.
@@ -263,6 +268,9 @@ def build_rows(logs, parts=None, employees=None, sessions=None):
         rows.append(
             {
                 "log": log,
+                "session": session,
+                "front_image_url": image_url(session, "front_image") if session else "",
+                "back_image_url": image_url(session, "back_image") if session else "",
                 "part_name": part_name,
                 "employee_code": employee_code,
                 "employee_name": employee_name,
@@ -310,6 +318,7 @@ def result_text(result):
         RESULT_OK: "OK",
         RESULT_NOT_OK: "NOT OK",
         RESULT_ERROR: "Error",
+        RESULT_INCOMPLETE: "INCOMPLETE",
     }.get(result, result or "—")
 
 
@@ -324,6 +333,7 @@ def result_tone(result):
         RESULT_OK: "ok",
         RESULT_NOT_OK: "not_ok",
         RESULT_ERROR: "error",
+        RESULT_INCOMPLETE: "incomplete",
     }.get(result, "")
 
 

@@ -1,6 +1,8 @@
 (function () {
     "use strict";
 
+    var INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+    var INSPECTION_REQUEST_TIMEOUT_MS = 120 * 1000;
     var cfg = window.__VI_WS__ || { urls: {} };
     var URL = cfg.urls || {};
     var STAGE = {
@@ -28,7 +30,16 @@
         busy: false,
         cameraTimer: null,
         cameraInFlight: false,
-        requestVersion: 0
+        sessionPollTimer: null,
+        sessionPollInFlight: false,
+        sessionPollGeneration: 0,
+        requestVersion: 0,
+        cameraStatus: { Front: "OFF", Back: "OFF" },
+        inactivityTimer: null,
+        countdownTimer: null,
+        inactivityDeadline: null,
+        screenSaverActive: false,
+        activityMonitoring: false
     };
     var initialized = false;
 
@@ -43,13 +54,72 @@
             var node = stageNode(item);
             if (node) node.hidden = item !== name;
         });
+        document.body.classList.toggle("vi-camera-fullscreen", name === "Front" || name === "Back");
         state.stage = ({ Scan: STAGE.SCAN_PART, Front: STAGE.FRONT_INSPECTION,
             Back: STAGE.BACK_INSPECTION, Saving: STAGE.SAVING_RESULTS,
             Final: STAGE.FINAL_RESULT })[name] || STAGE.ERROR;
+        syncInactivityTimer();
     }
     function setText(id, value) {
         var node = byId(id);
         if (node) node.textContent = value == null || value === "" ? "—" : String(value);
+    }
+    function renderOperatorInstructions(instructions) {
+        var panel = byId("wfOperatorGuidance");
+        var list = byId("wfInstructionSides");
+        var frontText = byId("wfFrontInstruction");
+        var backText = byId("wfBackInstruction");
+        if (!panel || !list || !instructions || !Array.isArray(instructions.required_sides)) {
+            if (panel) panel.hidden = true;
+            return;
+        }
+        list.replaceChildren();
+        var sideSummaries = {};
+        instructions.required_sides.forEach(function (side, index) {
+            var item = document.createElement("li");
+            var heading = document.createElement("strong");
+            heading.textContent = (index + 1) + ". " + side.side.toUpperCase()
+                + " camera (" + side.camera_source + " " + side.camera_index + ")";
+            item.appendChild(heading);
+
+            var classes = [];
+            (side.required_classes || []).forEach(function (rule) {
+                classes.push(rule.class_name + " required; expected "
+                    + rule.expected_count + "; " + rule.acceptance_rule);
+            });
+            (side.optional_classes || []).forEach(function (rule) {
+                classes.push(rule.class_name + " optional; expected "
+                    + rule.expected_count + "; " + rule.acceptance_rule);
+            });
+            if (classes.length) {
+                var detail = document.createElement("p");
+                detail.textContent = classes.join(" | ");
+                item.appendChild(detail);
+            }
+
+            var roi = side.roi;
+            if (roi && [roi.x, roi.y, roi.w, roi.h].every(Number.isFinite)) {
+                var roiDetail = document.createElement("p");
+                roiDetail.textContent = "Configured ROI: x "
+                    + Math.round(roi.x * 100) + "%, y "
+                    + Math.round(roi.y * 100) + "%, width "
+                    + Math.round(roi.w * 100) + "%, height "
+                    + Math.round(roi.h * 100) + "%. Position the part within the camera frame.";
+                item.appendChild(roiDetail);
+            } else {
+                var noRoi = document.createElement("p");
+                noRoi.textContent = "No ROI guidance is stored for this configuration.";
+                item.appendChild(noRoi);
+            }
+            list.appendChild(item);
+            sideSummaries[side.side] = classes.join(" | ");
+        });
+        setText("wfInstructionPart", (instructions.part_number || "Part")
+            + (instructions.part_name ? " — " + instructions.part_name : "")
+            + " · " + (instructions.inspection_mode || "Inspection"));
+        if (frontText) frontText.textContent = sideSummaries.front || "Front side is not required.";
+        if (backText) backText.textContent = sideSummaries.back || "Back side is not required.";
+        panel.hidden = instructions.required_sides.length === 0;
     }
     function setDot(id, status) {
         var node = byId(id);
@@ -59,6 +129,8 @@
     function setCameraStatus(side, status, message) {
         var node = byId("wf" + side + "CameraStatus");
         var overlay = byId("ov" + side);
+        var previousStatus = state.cameraStatus[side];
+        state.cameraStatus[side] = status;
         if (node) {
             node.className = "wf-camera-status is-" + status.toLowerCase();
             node.innerHTML = "<i></i> " + status;
@@ -73,6 +145,99 @@
         if (button && !state.busy) {
             button.disabled = status !== "ON" || button.dataset.completed === "true";
         }
+        if (status === "ERROR") {
+            setResult(side, "ERROR", "ERROR");
+        }
+        if (previousStatus !== status) syncInactivityTimer();
+    }
+    function activeCameraSide() {
+        if (state.stage === STAGE.FRONT_INSPECTION) return "Front";
+        if (state.stage === STAGE.BACK_INSPECTION) return "Back";
+        return null;
+    }
+    function clearInactivityTimer() {
+        if (state.inactivityTimer) window.clearTimeout(state.inactivityTimer);
+        state.inactivityTimer = null;
+    }
+    function setScreenSaver(active) {
+        state.screenSaverActive = active;
+        var node = byId("wfScreenSaver");
+        if (node) node.hidden = !active;
+    }
+    function updateInactivityCountdown() {
+        var remaining = state.inactivityDeadline
+            ? Math.max(0, state.inactivityDeadline - Date.now()) : INACTIVITY_TIMEOUT_MS;
+        var seconds = Math.ceil(remaining / 1000);
+        var text = String(Math.floor(seconds / 60)).padStart(2, "0") + ":" +
+            String(seconds % 60).padStart(2, "0");
+        document.querySelectorAll(".wf-inactivity-countdown").forEach(function (node) {
+            node.textContent = text;
+        });
+    }
+    function syncInactivityTimer() {
+        var side = activeCameraSide();
+        if (!side || state.cameraStatus[side] !== "ON") {
+            clearInactivityTimer();
+            if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+            state.countdownTimer = null;
+            state.inactivityDeadline = null;
+            updateInactivityCountdown();
+            setScreenSaver(false);
+            return;
+        }
+        if (!state.screenSaverActive) resetInactivityTimer();
+    }
+    function resetInactivityTimer() {
+        clearInactivityTimer();
+        var side = activeCameraSide();
+        if (!side || state.cameraStatus[side] !== "ON") return;
+        if (state.screenSaverActive) setScreenSaver(false);
+        state.inactivityDeadline = Date.now() + INACTIVITY_TIMEOUT_MS;
+        updateInactivityCountdown();
+        if (!state.countdownTimer) {
+            state.countdownTimer = window.setInterval(updateInactivityCountdown, 1000);
+        }
+        state.inactivityTimer = window.setTimeout(function () {
+            state.inactivityTimer = null;
+            var currentSide = activeCameraSide();
+            if (currentSide && state.cameraStatus[currentSide] === "ON") {
+                updateInactivityCountdown();
+                setScreenSaver(true);
+            }
+        }, INACTIVITY_TIMEOUT_MS);
+    }
+    function handleInspectionActivity(event) {
+        var side = activeCameraSide();
+        if (!side || state.cameraStatus[side] !== "ON") return;
+        if (state.screenSaverActive &&
+                (event.type === "keydown" || event.type === "pointerdown" || event.type === "touchstart")) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }
+        resetInactivityTimer();
+    }
+    function startActivityMonitoring() {
+        if (state.activityMonitoring) return;
+        state.activityMonitoring = true;
+        document.addEventListener("pointermove", handleInspectionActivity, true);
+        document.addEventListener("pointerdown", handleInspectionActivity, true);
+        document.addEventListener("keydown", handleInspectionActivity, true);
+        document.addEventListener("touchstart", handleInspectionActivity, { capture: true, passive: false });
+        syncInactivityTimer();
+    }
+    function stopActivityMonitoring() {
+        clearInactivityTimer();
+        if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+        state.countdownTimer = null;
+        state.inactivityDeadline = null;
+        updateInactivityCountdown();
+        if (!state.activityMonitoring) return;
+        state.activityMonitoring = false;
+        document.removeEventListener("pointermove", handleInspectionActivity, true);
+        document.removeEventListener("pointerdown", handleInspectionActivity, true);
+        document.removeEventListener("keydown", handleInspectionActivity, true);
+        document.removeEventListener("touchstart", handleInspectionActivity, true);
+        setScreenSaver(false);
     }
     function showError(message) {
         var node = byId("wsError");
@@ -85,25 +250,52 @@
             button.setAttribute("aria-busy", value ? "true" : "false");
         }
     }
-    async function jsonRequest(url, method, body) {
-        var response = await fetch(url, {
-            method: method || "GET",
-            headers: {
-                Accept: "application/json",
-                "Content-Type": "application/json",
-                "X-CSRFToken": csrf()
-            },
-            body: body ? JSON.stringify(body) : undefined
-        });
+    async function jsonRequest(url, method, body, timeoutMs) {
+        var controller = timeoutMs && typeof AbortController === "function"
+            ? new AbortController() : null;
+        var didTimeout = false;
+        var timeout = controller
+            ? window.setTimeout(function () {
+                didTimeout = true;
+                controller.abort();
+            }, timeoutMs)
+            : null;
+        var response;
+        try {
+            response = await fetch(url, {
+                method: method || "GET",
+                headers: {
+                    Accept: "application/json",
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": csrf()
+                },
+                body: body ? JSON.stringify(body) : undefined,
+                signal: controller ? controller.signal : undefined
+            });
+        } catch (error) {
+            if (didTimeout) {
+                var timeoutError = new Error("Inspection timed out before the server returned a result.");
+                timeoutError.code = "inspection_timeout";
+                throw timeoutError;
+            }
+            throw error;
+        } finally {
+            if (timeout) window.clearTimeout(timeout);
+        }
         var data;
         try { data = await response.json(); }
         catch (error) { throw new Error("The server returned an unreadable response."); }
         if (!response.ok || data.ok === false || data.error) {
             var failure = new Error(data.message || data.error || "Request failed.");
             failure.data = data;
+            failure.status = response.status;
             throw failure;
         }
         return data;
+    }
+    function isSessionId(value) {
+        return typeof value === "string" &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
     }
     async function cameraStatusRequest() {
         var response = await fetch(URL.cameraStatus, {
@@ -148,17 +340,8 @@
         state.backVerdict = "PENDING";
         state.savedRecordId = null;
         state.stage = STAGE.SCAN_PART;
-        setText("wfFrontResult", "RESULT PENDING");
-        setText("wfFrontMessage", "Live camera ready for front inspection.");
-        setText("wfFrontDetections", "Segmentation results will appear after inspection.");
-        setText("wfBackResult", "RESULT PENDING");
-        setText("wfBackMessage", "Live camera ready for back inspection.");
-        setText("wfBackDetections", "Segmentation results will appear after inspection.");
-        setText("wfFrontPart", "—");
-        setText("wfBackPart", "—");
-        setText("wfFrontSession", "—");
-        setText("wfBackSession", "—");
-        setText("wfBackFrontResult", "—");
+        setResult("Front", "PENDING", "PENDING");
+        setResult("Back", "PENDING", "PENDING");
         setText("wfFinalPart", "—");
         setText("wfFinalId", "—");
         setText("wfFinalTitle", "—");
@@ -180,19 +363,14 @@
         setText("wfModelDetail", "");
         byId("wfModelDetail").hidden = true;
         byId("wfPartConfigLink").hidden = true;
+        byId("wfStartInspectionBtn").disabled = true;
+        renderOperatorInstructions(null);
         setDot("wfScanDot", "idle");
         setDot("wfModelDot", "idle");
         showError("");
         byId("wfStartInspectionBtn").disabled = true;
         byId("wfReturnToInspectionBtn").hidden = true;
         showStage("Scan");
-    }
-    function setSessionHeader() {
-        ["Front", "Back"].forEach(function (side) {
-            setText("wf" + side + "Part", state.partNumber);
-            setText("wf" + side + "Session", state.sessionId);
-        });
-        setText("wfBackFrontResult", state.frontVerdict);
     }
     function setFeed(side) {
         var image = byId("feed" + side);
@@ -229,6 +407,71 @@
         state.predictionTimer = null;
     }
 
+    function stopSessionProgressPolling() {
+        state.sessionPollGeneration += 1;
+        if (state.sessionPollTimer) window.clearTimeout(state.sessionPollTimer);
+        state.sessionPollTimer = null;
+        state.sessionPollInFlight = false;
+    }
+
+    function startSessionProgressPolling(side) {
+        stopSessionProgressPolling();
+        var sessionId = state.sessionId;
+        var generation = state.sessionPollGeneration;
+        if (!sessionId) return;
+
+        async function poll() {
+            if (generation !== state.sessionPollGeneration || sessionId !== state.sessionId) return;
+            if (state.sessionPollInFlight) {
+                state.sessionPollTimer = window.setTimeout(poll, 500);
+                return;
+            }
+            state.sessionPollInFlight = true;
+            try {
+                var progress = await loadProgress(sessionId);
+                if (generation !== state.sessionPollGeneration || sessionId !== state.sessionId) return;
+                state.frontVerdict = progress.front_verdict || state.frontVerdict;
+                state.backVerdict = progress.back_verdict || state.backVerdict;
+                setResult("Front", progress.front_status, progress.front_verdict, progress.inspection_status);
+                setResult("Back", progress.back_status, progress.back_verdict, progress.inspection_status);
+                if (progress.inspection_status === "ERROR") {
+                    showError(progress.error_message || "Inspection failed. Retry the failed side.");
+                    console.error("Inspection session polling reported an error", {
+                        session_id: sessionId,
+                        side: side,
+                        message: progress.error_message || ""
+                    });
+                    stopSessionProgressPolling();
+                    return;
+                }
+                if (progress.inspection_status === "OKAY PART" ||
+                        progress.inspection_status === "NOT OKAY PART") {
+                    console.info("Inspection result received and rendered", {
+                        session_id: sessionId,
+                        side: side,
+                        status: progress.inspection_status
+                    });
+                    stopSessionProgressPolling();
+                    return;
+                }
+            } catch (error) {
+                if (generation === state.sessionPollGeneration) {
+                    console.warn("Inspection session status poll failed", {
+                        session_id: sessionId,
+                        side: side,
+                        message: error.message
+                    });
+                }
+            } finally {
+                state.sessionPollInFlight = false;
+            }
+            if (generation === state.sessionPollGeneration && sessionId === state.sessionId) {
+                state.sessionPollTimer = window.setTimeout(poll, 750);
+            }
+        }
+        poll();
+    }
+
     function startPredictionPreview(side) {
         if (!state.partId || !state.validatedModelId) return;
         if (state.predictionSide === side) return;
@@ -249,8 +492,7 @@
         if (state.predictionInFlight || generation !== state.predictionGeneration ||
                 state.predictionSide !== side) return;
         var image = byId(side === "FRONT" ? "feedFront" : "feedBack");
-        var output = byId(side === "FRONT" ? "wfFrontDetections" : "wfBackDetections");
-        if (!image || !output) return;
+        if (!image) return;
         state.predictionInFlight = true;
         try {
             var url = URL.partVisionPreview.replace(
@@ -258,7 +500,7 @@
                 encodeURIComponent(state.partId)
             ) + "?side=" + encodeURIComponent(side) +
                 "&model_id=" + encodeURIComponent(state.validatedModelId) +
-                "&confidence=0.50&show_masks=1&show_boxes=1";
+                "&confidence=0.30&show_masks=1&show_boxes=1";
             var data = await jsonRequest(url, "GET");
             if (generation !== state.predictionGeneration ||
                     state.predictionSide !== side ||
@@ -269,25 +511,20 @@
                 throw new Error("The live prediction response did not contain a valid annotated frame.");
             }
             image.src = data.image;
-            var names = data.detections.map(function (detection) {
-                return detection.class + " — " +
-                    Number(detection.confidence_percent).toFixed(1) + "%";
-            });
-            var counts = Object.keys(data.counts_by_class || {}).map(function (name) {
-                return name + ": " + data.counts_by_class[name];
-            });
-            output.textContent = data.detections.length
-                ? names.join(", ") + " | Counts: " + counts.join(", ") +
-                    " | Total: " + data.detection_count +
-                    " | Inference: " + Number(data.inference_ms).toFixed(1) + " ms"
-                : "No detections | Total: 0 | Inference: " +
-                    Number(data.inference_ms).toFixed(1) + " ms";
+            showError("");
             schedulePredictionPreview(side, generation, 300);
         } catch (error) {
             if (generation === state.predictionGeneration && state.predictionSide === side) {
-                output.textContent = "Live prediction unavailable: " +
-                    (error.message || "Inference failed.");
-                schedulePredictionPreview(side, generation, 1500);
+                var message = error.message || "Live prediction preview failed.";
+                showError(message);
+                var retryableCameraWarmup = error.status === 409 &&
+                    /configured camera is (connecting|starting); waiting for it to produce a frame|camera has not produced a frame yet/i
+                        .test(message);
+                if (!error.status || retryableCameraWarmup) {
+                    schedulePredictionPreview(side, generation, 1500);
+                } else {
+                    stopPredictionPreview();
+                }
             }
         } finally {
             state.predictionInFlight = false;
@@ -353,6 +590,10 @@
             if (!await resetPreviousSession(barcode) || version !== state.requestVersion) return;
             var partData = await jsonRequest(URL.wfScan, "POST", { barcode: barcode });
             if (version !== state.requestVersion) return;
+            if (partData.active_session &&
+                    !isSessionId(partData.active_session.session_id)) {
+                throw new Error("The scan response contained an invalid active session ID.");
+            }
             if (partData.ok !== true || !partData.part ||
                     typeof partData.part.part_number !== "string" ||
                     !partData.part.part_number.trim()) {
@@ -376,6 +617,10 @@
                 clearTransientState();
                 partData = await jsonRequest(URL.wfScan, "POST", { barcode: barcode });
                 if (version !== state.requestVersion) return;
+                if (partData.active_session &&
+                        !isSessionId(partData.active_session.session_id)) {
+                    throw new Error("The scan response contained an invalid active session ID.");
+                }
                 if (partData.ok !== true || !partData.part ||
                         typeof partData.part.part_number !== "string" ||
                         !partData.part.part_number.trim()) {
@@ -438,11 +683,12 @@
                 state.validatedModelId = Number(modelData.model_id);
                 setText("wfModelState", modelData.message || "Model and configuration valid");
                 setDot("wfModelDot", "ready");
+                renderOperatorInstructions(modelData.operator_instructions);
                 byId("wfModelDetail").hidden = true;
-                setText("wfPartInfo", partData.message || ("Part identified: " + partNumber + "."));
+                setText("wfPartInfo", "Review the configured sides and inspection rules, then start the inspection.");
                 persistLocal();
                 setBusy(button, false);
-                await startInspection(byId("wfStartInspectionBtn"));
+                byId("wfStartInspectionBtn").disabled = false;
             } catch (error) {
                 if (version !== state.requestVersion) return;
                 var validationState = error.data && error.data.state;
@@ -480,6 +726,9 @@
                 model_id: state.validatedModelId
             });
             if (version !== state.requestVersion) return;
+            if (!isSessionId(sessionData.session_id)) {
+                throw new Error("The server did not return a valid inspection session ID.");
+            }
             state.sessionId = sessionData.session_id;
             state.savedRecordId = null;
             state.frontVerdict = "PENDING";
@@ -488,17 +737,19 @@
                 var submitButton = byId("wf" + side + "SubmitBtn");
                 submitButton.dataset.completed = "false";
                 submitButton.disabled = true;
-                setResult(side, "PENDING", "Live camera ready for " + side.toLowerCase() + " inspection.");
-                setText("wf" + side + "Detections", "Segmentation results will appear after inspection.");
+                setResult(side, "PENDING", "PENDING");
             });
             persistLocal();
-            setSessionHeader();
             setText("wfPartInfo", sessionData.message || "Inspection session started.");
             var progress = sessionData.progress || await loadProgress();
             if (version === state.requestVersion) await enterFromProgress(progress, sessionData.next_side);
         } catch (error) {
             if (version !== state.requestVersion) return;
             if (error.data && error.data.state === "duplicate_session" && error.data.session_id) {
+                if (!isSessionId(error.data.session_id)) {
+                    showError("The server returned an invalid active inspection session ID.");
+                    return;
+                }
                 state.sessionId = error.data.session_id;
                 state.savedRecordId = null;
                 persistLocal();
@@ -563,6 +814,8 @@
         if (!progress || !progress.ok) progress = await loadProgress();
         state.frontVerdict = progress.front_verdict || state.frontVerdict;
         state.backVerdict = progress.back_verdict || state.backVerdict;
+        setResult("Front", progress.front_status, progress.front_verdict, progress.inspection_status);
+        setResult("Back", progress.back_status, progress.back_verdict, progress.inspection_status);
         if (progress.is_saved) {
             showFinal(progress, { inspection_id: state.savedRecordId || state.sessionId, overall: progress.overall });
             return;
@@ -573,23 +826,34 @@
             await finalize();
             return;
         }
-        var next = nextSide || (progress.front_status === "IN_PROGRESS" ? "front"
+        var next = nextSide || (progress.front_status === "SKIPPED" ? "back"
+            : progress.front_status === "IN_PROGRESS" ? "front"
             : progress.back_status === "IN_PROGRESS" || progress.front_status === "COMPLETED" ? "back" : "front");
         if (progress.front_status === "COMPLETED" && progress.back_status === "SKIPPED") {
             await finalize();
             return;
         }
-        await showInspection(next === "back" ? "back" : "front");
+        await showInspection(next === "back" ? "back" : "front", progress);
     }
 
-    async function showInspection(side) {
+    async function showInspection(side, progress) {
         showError("");
-        setSessionHeader();
         var isBack = side === "back";
         showStage(isBack ? "Back" : "Front");
         clearFeeds();
-        var result = isBack ? state.backVerdict : state.frontVerdict;
-        setResult(isBack ? "Back" : "Front", result);
+        try {
+            progress = progress || await loadProgress();
+            setResult(
+                isBack ? "Back" : "Front",
+                progress[side + "_status"],
+                progress[side + "_verdict"],
+                progress.inspection_status
+            );
+        } catch (error) {
+            setResult(isBack ? "Back" : "Front", "ERROR", "ERROR");
+            showError(error.message || "Could not load inspection status.");
+            return;
+        }
         try {
             await activateCamera(side);
             setCameraStatus(isBack ? "Back" : "Front", "CONNECTING", "Waiting for camera frames...");
@@ -615,13 +879,36 @@
         }
     }
 
-    function setResult(side, verdict, message) {
+    function resultDisplayState(inspectionStatus, status, verdict) {
+        var normalizedStatus = String(status || "PENDING").trim().toUpperCase();
+        var normalizedVerdict = String(verdict || "PENDING").trim().toUpperCase();
+        var normalizedOverall = String(inspectionStatus || "").trim().toUpperCase();
+        if (normalizedStatus === "ERROR" || normalizedVerdict === "ERROR" || normalizedOverall === "ERROR") {
+            return { text: "ERROR", className: "error" };
+        }
+        if (normalizedOverall === "INSPECTING" || normalizedStatus === "IN_PROGRESS") {
+            return { text: "INSPECTING", className: "inspecting" };
+        }
+        if (normalizedOverall === "OKAY PART") return { text: "OKAY PART", className: "ok" };
+        if (normalizedOverall === "NOT OKAY PART") return { text: "NOT OKAY PART", className: "not_ok" };
+        return { text: "REQUEST PENDING", className: "pending" };
+    }
+
+    function setResult(side, status, verdict, inspectionStatus) {
+        var displayState = resultDisplayState(inspectionStatus, status, verdict);
         var el = byId("wf" + side + "Result");
+        var scanStatus = byId("wfScanResult");
+        if (scanStatus) {
+            scanStatus.textContent = displayState.text;
+            scanStatus.className = "wf-scan-result wf-side-result is-" + displayState.className;
+        }
         if (!el) return;
-        el.textContent = "RESULT " + (verdict || "PENDING").replace("NOT_OK", "NOT OK");
-        el.className = "wf-side-result is-" + String(verdict || "pending").toLowerCase();
-        var note = byId("wf" + side + "Message");
-        if (note && message) note.textContent = message;
+        el.textContent = displayState.text;
+        el.className = "wf-side-result is-" + displayState.className;
+        var resultPanel = el.closest(".wf-camera-result");
+        if (resultPanel) {
+            resultPanel.className = "wf-stage-result wf-camera-result is-" + displayState.className;
+        }
     }
 
     function renderInspectionOutput(side, data) {
@@ -650,18 +937,32 @@
     }
 
     async function submitSide(side) {
-        if (state.busy || !state.sessionId) return;
+        if (state.busy) return;
+        if (!isSessionId(state.sessionId)) {
+            showError("The active inspection session ID is missing or invalid. Scan the part again.");
+            return;
+        }
         stopPredictionPreview();
         var isBack = side === "back";
         var button = byId(isBack ? "wfBackSubmitBtn" : "wfFrontSubmitBtn");
         setBusy(button, true);
         showError("");
-        setResult(isBack ? "Back" : "Front", "IN_PROGRESS", "Running configured inspection rules...");
+        setResult(isBack ? "Back" : "Front", "IN_PROGRESS", "PENDING");
+        console.info("Inspection submitted", {
+            session_id: state.sessionId,
+            side: side
+        });
+        startSessionProgressPolling(side);
         try {
             var data = await jsonRequest(isBack ? URL.wfInspectBack : URL.wfInspectFront, "POST", {
                 session_id: state.sessionId
-            });
+            }, INSPECTION_REQUEST_TIMEOUT_MS);
             var progress = data.progress || await loadProgress();
+            console.info("Inspection response received", {
+                session_id: state.sessionId,
+                side: side,
+                status: progress.inspection_status || progress[side + "_status"]
+            });
             renderInspectionOutput(isBack ? "Back" : "Front", data);
             if (button && progress[side + "_status"] === "COMPLETED") {
                 button.dataset.completed = "true";
@@ -669,26 +970,77 @@
             if (isBack) state.backVerdict = progress.back_verdict;
             else state.frontVerdict = progress.front_verdict;
             persistLocal();
-            setResult(isBack ? "Back" : "Front", isBack ? state.backVerdict : state.frontVerdict,
-                "Configured stitch acceptance rules evaluated by the backend.");
+            setResult(
+                isBack ? "Back" : "Front",
+                progress[side + "_status"],
+                isBack ? state.backVerdict : state.frontVerdict,
+                progress.inspection_status
+            );
+            if (progress.inspection_status === "OKAY PART" ||
+                    progress.inspection_status === "NOT OKAY PART") {
+                console.info("Inspection result received and rendered", {
+                    session_id: state.sessionId,
+                    side: side,
+                    status: progress.inspection_status
+                });
+            }
 
             if (!isBack && progress.back_status !== "SKIPPED") {
                 if (!["OK", "NOT_OK"].includes(state.frontVerdict)) {
                     if (button) button.dataset.completed = "true";
-                    setResult("Front", state.frontVerdict,
-                        "Inference completed, but no required front class rule produced a verdict.");
+                    setResult("Front", progress.front_status, state.frontVerdict);
                     showError("Front inspection is complete but indeterminate. Configure at least one required front stitch class, then start a new inspection.");
                     return;
                 }
-                await showInspection("back");
+                await showInspection("back", progress);
             } else {
                 await finalize();
             }
         } catch (error) {
-            setResult(isBack ? "Back" : "Front", "ERROR", "Inspection did not complete. Correct the issue and retry.");
+            if (error.code === "inspection_timeout") {
+                setResult(isBack ? "Back" : "Front", "ERROR", "ERROR");
+                try {
+                    await jsonRequest(URL.wfCancel, "POST", {
+                        session_id: state.sessionId
+                    });
+                    state.sessionId = null;
+                    state.savedRecordId = null;
+                    clearLocal();
+                    stopCameraPolling();
+                    stopPredictionPreview();
+                    clearFeeds();
+                    showStage("Scan");
+                    setText("wfPartInfo", "The timed-out session was cancelled safely. Start a new inspection to retry.");
+                } catch (cancelError) {
+                    if (cancelError.data && cancelError.data.state === "completed") {
+                        try {
+                            await enterFromProgress(await loadProgress());
+                            return;
+                        } catch (progressError) {
+                            showError(progressError.message || error.message);
+                        }
+                    } else {
+                        if (button) button.disabled = true;
+                        showError(error.message + " Cancellation could not be confirmed; this session will not be resubmitted.");
+                    }
+                }
+                return;
+            }
+            if (error.data && error.data.state === "side_in_progress") {
+                setResult(isBack ? "Back" : "Front", "IN_PROGRESS", "PENDING");
+                if (button) button.disabled = true;
+                showError(error.message || "Inspection is still in progress.");
+                return;
+            }
+            if (error.data && error.data.state === "side_not_required") {
+                setResult(isBack ? "Back" : "Front", "SKIPPED", "NOT_REQUIRED");
+            } else {
+                setResult(isBack ? "Back" : "Front", "ERROR", "ERROR");
+            }
             showError(error.message || "Inspection failed. Reset this session before retrying.");
             if (button) button.disabled = false;
         } finally {
+            stopSessionProgressPolling();
             state.busy = false;
             if (button) {
                 button.setAttribute("aria-busy", "false");
@@ -737,7 +1089,7 @@
         var verdict = saved.overall || progress.overall || "INCOMPLETE";
         var title = byId("wfFinalTitle");
         if (title) {
-            title.textContent = verdict === "OK" ? "OK" : "NOT OK";
+            title.textContent = verdict === "OK" ? "OKAY PART" : "NOT OKAY PART";
             title.className = "wf-verdict " + (verdict === "OK" ? "is-ok" : "is-not-ok");
         }
         setText("wfFinalPart", state.partNumber || progress.part_number);
@@ -831,7 +1183,10 @@
         var requestVersion = state.requestVersion;
         try {
             var saved = JSON.parse(raw);
-            if (!saved.sessionId) return;
+            if (!isSessionId(saved.sessionId)) {
+                clearLocal();
+                return;
+            }
             state.sessionId = saved.sessionId;
             state.partNumber = saved.partNumber || "";
             state.partId = Number.isInteger(Number(saved.partId)) && Number(saved.partId) > 0
@@ -861,12 +1216,6 @@
         byId("wfReturnToInspectionBtn").addEventListener("click", returnToInspection);
         byId("wfFrontSubmitBtn").addEventListener("click", function () { submitSide("front"); });
         byId("wfBackSubmitBtn").addEventListener("click", function () { submitSide("back"); });
-        byId("wfFrontNextPartBtn").addEventListener("click", function () {
-            changePart(byId("wfFrontNextPartBtn"));
-        });
-        byId("wfBackNextPartBtn").addEventListener("click", function () {
-            changePart(byId("wfBackNextPartBtn"));
-        });
         byId("wfFrontRetryCamera").addEventListener("click", function () { retryCamera("Front"); });
         byId("wfBackRetryCamera").addEventListener("click", function () { retryCamera("Back"); });
         byId("wfRetrySaveBtn").addEventListener("click", retrySave);
@@ -874,7 +1223,9 @@
         byId("wfChangePartBtn").addEventListener("click", function () {
             changePart(byId("wfChangePartBtn"));
         });
-        window.addEventListener("pagehide", stopCameraPolling);
+        startActivityMonitoring();
+        window.addEventListener("pagehide", stopActivityMonitoring);
+        window.addEventListener("pageshow", startActivityMonitoring);
         showStage("Scan");
         restoreSession();
     }
