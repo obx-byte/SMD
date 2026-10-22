@@ -1581,6 +1581,7 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
     font-size: 10px;
     color: #8296b5;
 }
+.vi-sidebar .vi-caret { transition: transform 0.22s ease; }
 .vi-sidebar-section-title.vi-expanded .vi-caret { transform: rotate(90deg); }
 .vi-sidebar-collapse {
     max-height: 520px;
@@ -1633,6 +1634,15 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
 }
 .vi-sidebar-collapse .vi-sidebar-link::before {
     content: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vi-sidebar-section-title,
+    .vi-sidebar-collapse,
+    .vi-sidebar-collapse.vi-collapsed,
+    .vi-sidebar .vi-caret {
+        transition-duration: 0.01ms;
+    }
 }
 .vi-sidebar .vi-sidebar-icon {
     width: 16px;
@@ -1879,6 +1889,27 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
     box-shadow: 0 8px 22px rgba(29, 25, 55, 0.05);
 }
 .vi-account-card-heading { margin-bottom: 18px; }
+.vi-account-filter-form {
+    display: grid;
+    grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(140px, 1fr)) auto;
+    align-items: end;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.vi-account-filter-actions {
+    display: flex;
+    gap: 8px;
+    padding-bottom: 1px;
+}
+.vi-account-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 14px;
+    color: #53627a;
+    font-size: 12px;
+}
 .vi-account-card-heading h3 {
     margin-bottom: 4px;
     color: #172544;
@@ -1890,7 +1921,6 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px 20px;
 }
-.vi-account-scope-field { max-width: 100%; }
 .vi-optional,
 .vi-field-help {
     color: #718099;
@@ -2056,10 +2086,12 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
     }
     .vi-top-header .vi-header-datetime {
         max-width: 132px;
-        white-space: normal;
-        overflow-wrap: anywhere;
+        min-width: 0;
+        overflow: hidden;
         padding: 4px 7px;
         font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
     .vi-top-header .vi-profile-btn { min-width: 0; gap: 6px; padding: 0 8px; }
     .vi-top-header #viProfileName {
@@ -2082,4 +2114,12 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
     .vi-security-heading { gap: 10px; }
     .vi-security-heading h2 { font-size: 19px; }
     .vi-account-page-header h2 { font-size: 20px; }
+}
+@media (max-width: 900px) {
+    .vi-account-filter-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+    .vi-account-filter-form { grid-template-columns: minmax(0, 1fr); }
+    .vi-account-filter-actions,
+    .vi-account-pagination { justify-content: flex-start; }
 }

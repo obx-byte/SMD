@@ -13,6 +13,7 @@ import math
 import re
 import threading
 import uuid
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -30,6 +31,7 @@ from VisionInspection.models import (
 )
 from VisionInspection.services.camera_service import (
     CAMERA_STATES,
+    MAX_FRAME_AGE_MS,
     CameraService,
     get_camera_capabilities,
 )
@@ -54,6 +56,8 @@ logger = logging.getLogger(__name__)
 
 _S = VisionInspectionSession  # alias
 _CONFIGURED_MODEL_CONFIDENCE = 0.30
+# Sessions have a fixed 12-hour lifetime; polling does not extend it.
+_SESSION_MAX_AGE = timedelta(hours=12)
 
 # Stitch rules are optional engineering configuration.  If absent, per-stitch
 # status is reported as unrulled and the session cannot be classified OK.
@@ -209,6 +213,13 @@ class InspectionWorkflow:
             has_model = self._active_model() is not None
         active_session = None
         if operator is not None and getattr(operator, "is_authenticated", False):
+            operator_sessions = VisionInspectionSession.objects.filter(
+                is_active=True,
+                is_saved=False,
+                operator_id=operator.pk,
+            ).exclude(stage__in=["saved", "cancelled", "expired"])
+            for candidate in operator_sessions.iterator():
+                self._expire_if_needed(candidate)
             active_session = (
                 VisionInspectionSession.objects.filter(
                     is_active=True,
@@ -241,6 +252,10 @@ class InspectionWorkflow:
                 "session_id": str(active_session.session_id),
                 "part_number": active_session.part_number,
                 "stage": active_session.stage,
+                "part_id": VisionInspectionPart.objects.filter(
+                    part_number__iexact=active_session.part_number
+                ).values_list("pk", flat=True).first(),
+                "model_id": active_session.model_id,
             } if active_session else None),
             "message": f"Part identified: {part.part_number}.",
         }
@@ -671,6 +686,12 @@ class InspectionWorkflow:
         except storage_service.StorageOperationError as exc:
             return {"ok": False, "state": "storage_unavailable", "message": str(exc)}
 
+        active_sessions = VisionInspectionSession.objects.filter(
+            is_active=True, is_saved=False
+        ).exclude(stage__in=["saved", "cancelled", "expired"])
+        for active_session in active_sessions.iterator():
+            self._expire_if_needed(active_session)
+
         existing = (
             VisionInspectionSession.objects.filter(
                 part_number=part_number, is_active=True, is_saved=False
@@ -687,6 +708,18 @@ class InspectionWorkflow:
             if operator is not None and existing.operator_id == operator.pk:
                 duplicate["session_id"] = str(existing.session_id)
             return duplicate
+
+        active_session = (
+            VisionInspectionSession.objects.filter(is_active=True, is_saved=False)
+            .exclude(stage__in=["saved", "cancelled"])
+            .first()
+        )
+        if active_session:
+            return {
+                "ok": False,
+                "state": "camera_in_use",
+                "message": "Another inspection is active on this camera. Complete or cancel it before starting another.",
+            }
 
         validation = self.validate_model(model_id, part_number)
         if not validation["ok"]:
@@ -837,55 +870,90 @@ class InspectionWorkflow:
                 "message": "The configured Raspberry Pi camera is unavailable on this station.",
             }
 
-        active_camera = CameraService()
-        if (
-            self._camera.get_status() != CAMERA_STATES["ON"]
-            or CameraService.get_source() != source
-            or active_camera._camera_index != camera_setting["index"]
-        ):
-            CameraService.stop_camera()
-            if not CameraService.start_camera(camera_index=camera_setting["index"], source=source):
-                return {"ok": False, "state": "camera_error", "message": "The configured camera could not be started."}
+        with self._resource_lock:
+            camera_owner = self._current_camera_owner()
+            if camera_owner:
+                return {
+                    "ok": False,
+                    "state": "camera_in_use",
+                    "message": "Another inspection is active on this camera. Complete or cancel it before starting another.",
+                }
+            active_session = (
+                VisionInspectionSession.objects.filter(is_active=True, is_saved=False)
+                .exclude(stage__in=["saved", "cancelled"])
+                .first()
+            )
+            if active_session:
+                return {
+                    "ok": False,
+                    "state": "camera_in_use",
+                    "message": "Another inspection is active on this camera. Complete or cancel it before starting another.",
+                }
 
-        try:
-            with transaction.atomic():
-                session = VisionInspectionSession.objects.create(
-                    part_number=part_number,
-                    employee_code=(operator.get_username() if operator and operator.is_authenticated else ""),
-                    station_id=station_id(),
-                    operator=(operator if operator and operator.is_authenticated else None),
-                    model=model,
-                    model_version=validation["model_version"],
-                    model_classes=model_classes,
-                    configuration=configuration,
-                    config_version=configuration.version if configuration else 0,
-                    config_snapshot=snapshot,
-                    roi_version=common_roi["version"] if common_roi else 0,
-                    stage=first_side,
-                    front_status=initial_front_status,
-                    back_status=initial_back_status,
-                    front_verdict=initial_front_verdict,
-                    back_verdict=initial_back_verdict,
-                    overall="PENDING",
-                    front_roi=None,
-                    back_roi=None,
-                    front_roi_norm=(front_norm or {}),
-                    back_roi_norm=(back_norm or {}),
-                    is_active=True,
-                )
-        except IntegrityError:
-            existing = VisionInspectionSession.objects.filter(
-                part_number=part_number, is_active=True, is_saved=False
-            ).first()
-            if existing is None:
-                raise
-            return {
-                "ok": False,
-                "state": "duplicate_session",
-                "session_id": str(existing.session_id),
-                "message": "An active inspection session already exists for this part.",
-            }
-        self._camera_session_id = str(session.session_id)
+            camera_matches = (
+                CameraService.get_source() == source
+                and CameraService.get_camera_index() == camera_setting["index"]
+            )
+            camera_status = self._camera.get_status()
+            if not camera_matches or camera_status not in (
+                CAMERA_STATES["ON"], CAMERA_STATES["CONNECTING"]
+            ):
+                if not CameraService.stop_camera():
+                    return {
+                        "ok": False,
+                        "state": "camera_stopping",
+                        "message": CameraService.get_error()
+                        or "The previous camera is still stopping.",
+                    }
+                if not CameraService.start_camera(camera_index=camera_setting["index"], source=source):
+                    status = CameraService.get_status()
+                    if status not in (CAMERA_STATES["ON"], CAMERA_STATES["CONNECTING"]):
+                        return {
+                            "ok": False,
+                            "state": "camera_error",
+                            "message": CameraService.get_error()
+                            or "The configured camera could not be started.",
+                        }
+
+            try:
+                with transaction.atomic():
+                    session = VisionInspectionSession.objects.create(
+                        part_number=part_number,
+                        employee_code=(operator.get_username() if operator and operator.is_authenticated else ""),
+                        station_id=station_id(),
+                        operator=(operator if operator and operator.is_authenticated else None),
+                        model=model,
+                        model_version=validation["model_version"],
+                        model_classes=model_classes,
+                        configuration=configuration,
+                        config_version=configuration.version if configuration else 0,
+                        config_snapshot=snapshot,
+                        roi_version=common_roi["version"] if common_roi else 0,
+                        stage=first_side,
+                        front_status=initial_front_status,
+                        back_status=initial_back_status,
+                        front_verdict=initial_front_verdict,
+                        back_verdict=initial_back_verdict,
+                        overall="PENDING",
+                        front_roi=None,
+                        back_roi=None,
+                        front_roi_norm=(front_norm or {}),
+                        back_roi_norm=(back_norm or {}),
+                        is_active=True,
+                    )
+            except IntegrityError:
+                existing = VisionInspectionSession.objects.filter(
+                    part_number=part_number, is_active=True, is_saved=False
+                ).first()
+                if existing is None:
+                    raise
+                return {
+                    "ok": False,
+                    "state": "duplicate_session",
+                    "session_id": str(existing.session_id),
+                    "message": "An active inspection session already exists for this part.",
+                }
+            self._camera_session_id = str(session.session_id)
         logger.info("Inspection session %s created for %s", session.session_id, part_number)
         return {
             "ok": True,
@@ -902,6 +970,85 @@ class InspectionWorkflow:
         except Exception:
             return None
 
+    def _expire_if_needed(self, session):
+        if session.stage == "expired":
+            return True
+        now = timezone.now()
+        if (
+            not session.is_active
+            or session.is_saved
+            or now - session.started_at <= _SESSION_MAX_AGE
+        ):
+            return False
+
+        with transaction.atomic():
+            current = (
+                VisionInspectionSession.objects.select_for_update()
+                .filter(pk=session.pk)
+                .first()
+            )
+            if current is None:
+                return False
+            if current.stage == "expired":
+                return True
+            if (
+                not current.is_active
+                or current.is_saved
+                or now - current.started_at <= _SESSION_MAX_AGE
+            ):
+                return False
+
+            current.is_active = False
+            current.stage = "expired"
+            current.error_message = "Inspection session expired after 12 hours."
+            current.save(update_fields=["is_active", "stage", "error_message"])
+            transaction.on_commit(
+                lambda: self._stop_camera_for_session(str(current.session_id))
+            )
+            return True
+
+    def session_is_active(self, session_id):
+        session = self._get_session(session_id)
+        if session is None or self._expire_if_needed(session):
+            return False
+        return bool(
+            session.is_active
+            and not session.is_saved
+            and session.stage != "cancelled"
+        )
+
+    def camera_session_is_owned(self, session_id):
+        if not self.session_is_active(session_id):
+            return False
+        with self._resource_lock:
+            return self._camera_session_id == str(session_id)
+
+    def camera_owner_session_id(self):
+        with self._resource_lock:
+            return self._camera_session_id
+
+    def active_camera_session_id(self):
+        with self._resource_lock:
+            owner = self._current_camera_owner()
+            return owner
+
+    def _current_camera_owner(self):
+        owner = self._camera_session_id
+        if owner is None:
+            return None
+        session = self._get_session(owner)
+        if session is not None and self._expire_if_needed(session):
+            session = self._get_session(owner)
+        if session is None or not session.is_active or session.is_saved or session.stage == "cancelled":
+            if CameraService.stop_camera():
+                self._camera_session_id = None
+                return None
+            logger.error(
+                "Inactive workflow still owns a camera that has not stopped: session=%s",
+                owner,
+            )
+        return owner
+
     def activate_side(self, session_id: str, side: str):
         with self._resource_lock:
             return self._activate_side_locked(session_id, side)
@@ -912,9 +1059,53 @@ class InspectionWorkflow:
             return {"ok": False, "state": "error", "message": "Inspection side is invalid."}
         session = self._get_session(session_id)
         if session is None:
-            return {"ok": False, "state": "error", "message": "Session not found."}
+            return {
+                "ok": False,
+                "state": "session_not_found",
+                "error_code": "session_not_found",
+                "message": "Inspection session not found.",
+            }
+        if self._expire_if_needed(session):
+            return {"ok": False, "state": "session_expired", "message": "This inspection session expired. Scan the part again."}
         if not session.is_active or session.is_saved or session.stage == "cancelled":
             return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
+        side_status = getattr(session, f"{side}_status")
+        if self._camera_session_id is None and side_status == _S.IN_PROGRESS:
+            interrupted_message = (
+                f"The previous server process stopped during {side} inference. "
+                "Retry this side after the camera is ready."
+            )
+            with transaction.atomic():
+                recovered = VisionInspectionSession.objects.filter(
+                    pk=session.pk,
+                    is_active=True,
+                    is_saved=False,
+                    **{f"{side}_status": _S.IN_PROGRESS},
+                ).update(
+                    **{
+                        f"{side}_status": _S.ERROR,
+                        f"{side}_verdict": "ERROR",
+                        "error_message": interrupted_message,
+                    }
+                )
+            if recovered:
+                session.refresh_from_db()
+        camera_owner = self._current_camera_owner()
+        if camera_owner and camera_owner != str(session.session_id):
+            return {
+                "ok": False,
+                "state": "camera_in_use",
+                "message": "Another inspection is active on this camera.",
+            }
+        other_active = VisionInspectionSession.objects.filter(
+            is_active=True, is_saved=False
+        ).exclude(pk=session.pk).exclude(stage__in=["saved", "cancelled"]).exists()
+        if other_active:
+            return {
+                "ok": False,
+                "state": "camera_in_use",
+                "message": "Another inspection is active on this camera.",
+            }
 
         if side == "back" and session.front_status not in (_S.COMPLETED, _S.SKIPPED):
             return {"ok": False, "state": "incomplete", "message": "Complete the front inspection before activating the back camera."}
@@ -931,18 +1122,25 @@ class InspectionWorkflow:
             capabilities = get_camera_capabilities()
             if source == "picamera" and not capabilities["sources"][1]["available"]:
                 return {"ok": False, "state": "camera_unavailable", "message": "The configured Raspberry Pi camera is unavailable on this station."}
-            active_camera = CameraService()
             camera_matches = (
                 CameraService.get_source() == source
-                and active_camera._camera_index == index
+                and CameraService.get_camera_index() == index
             )
             camera_status = self._camera.get_status()
             if not camera_matches or camera_status not in (
                 CAMERA_STATES["ON"], CAMERA_STATES["CONNECTING"]
             ):
-                CameraService.stop_camera()
+                if not CameraService.stop_camera():
+                    return {
+                        "ok": False,
+                        "state": "camera_stopping",
+                        "message": CameraService.get_error()
+                        or "The previous camera is still stopping.",
+                    }
                 if not CameraService.start_camera(camera_index=index, source=source):
-                    return {"ok": False, "state": "camera_error", "message": f"The configured {side} camera could not be started."}
+                    status = CameraService.get_status()
+                    if status not in (CAMERA_STATES["ON"], CAMERA_STATES["CONNECTING"]):
+                        return {"ok": False, "state": "camera_error", "message": CameraService.get_error() or f"The configured {side} camera could not be started."}
 
         camera_status = self._camera.get_status()
         camera_ready = camera_status in (
@@ -1226,6 +1424,8 @@ class InspectionWorkflow:
             session.part_number,
             getattr(session, f"{side}_status"),
         )
+        if self._expire_if_needed(session):
+            return {"ok": False, "state": "session_expired", "message": "This inspection session expired. Scan the part again."}
         if not session.is_active or session.is_saved or session.stage == "cancelled":
             return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
         side_status = getattr(session, f"{side}_status")
@@ -1266,20 +1466,122 @@ class InspectionWorkflow:
             ):
                 return {"ok": False, "state": "side_not_required", "message": f"{side.title()} inspection is not required for this part."}
 
-        with transaction.atomic():
-            claimed = VisionInspectionSession.objects.filter(
-                pk=session.pk,
-                is_active=True,
-                is_saved=False,
-                **{f"{side}_status__in": (_S.PENDING, _S.ERROR)},
-            ).update(
-                **{
-                    f"{side}_status": _S.IN_PROGRESS,
-                    "stage": side,
-                    "overall": "PENDING",
-                    "error_message": "",
+        frame_meta = None
+        with self._resource_lock:
+            camera_owner = self._current_camera_owner()
+            if camera_owner and camera_owner != str(session.session_id):
+                return {
+                    "ok": False,
+                    "state": "camera_in_use",
+                    "message": "Another inspection is active on this camera.",
                 }
-            )
+            if frame is None:
+                if session.configuration_id:
+                    camera = session.config_snapshot.get("camera", {}).get(side, {})
+                    source = "picamera" if camera.get("source") == VisionPartConfiguration.SOURCE_RPI else "opencv"
+                    index = int(camera.get("index", 0))
+                    camera_matches = (
+                        CameraService.get_source() == source
+                        and CameraService.get_camera_index() == index
+                    )
+                    camera_status = self._camera.get_status()
+                    if not camera_matches or camera_status not in (
+                        CAMERA_STATES["ON"], CAMERA_STATES["CONNECTING"]
+                    ):
+                        if not CameraService.stop_camera():
+                            return {
+                                "ok": False,
+                                "state": "camera_stopping",
+                                "message": CameraService.get_error()
+                                or "The previous camera is still stopping.",
+                            }
+                        if not CameraService.start_camera(
+                            camera_index=index, source=source
+                        ):
+                            camera_status = CameraService.get_status()
+                            if camera_status not in (
+                                CAMERA_STATES["ON"],
+                                CAMERA_STATES["CONNECTING"],
+                            ):
+                                return {
+                                    "ok": False,
+                                    "state": "camera_error",
+                                    "message": CameraService.get_error()
+                                    or "The configured camera could not be started.",
+                                }
+                    camera_status = self._camera.get_status()
+                    if camera_status == CAMERA_STATES["CONNECTING"]:
+                        return {
+                            "ok": False,
+                            "state": "camera_connecting",
+                            "message": "The configured camera is starting. Wait for the first valid frame and retry.",
+                        }
+                    if camera_status != CAMERA_STATES["ON"]:
+                        return {
+                            "ok": False,
+                            "state": "camera_error",
+                            "message": CameraService.get_error()
+                            or "The configured camera is not running.",
+                        }
+                else:
+                    camera_status = self._camera.get_status()
+                    if camera_status == CAMERA_STATES["CONNECTING"]:
+                        return {
+                            "ok": False,
+                            "state": "camera_connecting",
+                            "message": "The camera is starting. Wait for the first valid frame and retry.",
+                        }
+                    if camera_status != CAMERA_STATES["ON"]:
+                        return {
+                            "ok": False,
+                            "state": "camera_error",
+                            "message": CameraService.get_error()
+                            or "The camera is not running.",
+                        }
+
+                frame_ok, frame, frame_meta = CameraService.get_frame_with_meta()
+                if not frame_ok or frame is None:
+                    return {
+                        "ok": False,
+                        "state": "frame_unavailable",
+                        "message": "The camera has not produced a frame yet. Wait for a fresh frame and retry.",
+                    }
+                frame_age_ms = frame_meta.get("age_ms")
+                if (
+                    not isinstance(frame_age_ms, (int, float))
+                    or frame_age_ms < 0
+                    or frame_age_ms > MAX_FRAME_AGE_MS
+                ):
+                    return {
+                        "ok": False,
+                        "state": "frame_unavailable",
+                        "message": "The latest camera frame is stale. Wait for a fresh frame and retry.",
+                    }
+            if VisionInspectionSession.objects.filter(
+                is_active=True, is_saved=False
+            ).exclude(pk=session.pk).exclude(stage__in=["saved", "cancelled"]).exists():
+                return {
+                    "ok": False,
+                    "state": "camera_in_use",
+                    "message": "Another inspection is active on this camera.",
+                }
+            with transaction.atomic():
+                claimed = VisionInspectionSession.objects.filter(
+                    pk=session.pk,
+                    is_active=True,
+                    is_saved=False,
+                    **{f"{side}_status__in": (_S.PENDING, _S.ERROR)},
+                ).update(
+                    **{
+                        f"{side}_status": _S.IN_PROGRESS,
+                        "stage": side,
+                        "overall": "PENDING",
+                        "error_message": "",
+                    }
+                )
+            if claimed:
+                session.refresh_from_db()
+                self._camera_session_id = str(session.session_id)
         if not claimed:
             session.refresh_from_db()
             if not session.is_active or session.is_saved or session.stage == "cancelled":
@@ -1307,20 +1609,6 @@ class InspectionWorkflow:
                 "message": f"{side.title()} inspection cannot be started from its current state.",
             }
         session.refresh_from_db()
-
-        if session.configuration_id:
-            camera = session.config_snapshot.get("camera", {}).get(side, {})
-            source = "picamera" if camera.get("source") == VisionPartConfiguration.SOURCE_RPI else "opencv"
-            index = int(camera.get("index", 0))
-            active_camera = CameraService()
-            if (
-                self._camera.get_status() != CAMERA_STATES["ON"]
-                or CameraService.get_source() != source
-                or active_camera._camera_index != index
-            ):
-                CameraService.stop_camera()
-                if not CameraService.start_camera(camera_index=index, source=source):
-                    return self._fail_side(session, side, "The configured camera could not be started.")
 
         # ROI frozen at Submit (config-first), with per-part FK fallback.
         roi = (session.front_roi_norm if side == "front" else session.back_roi_norm) or None
@@ -1356,7 +1644,7 @@ class InspectionWorkflow:
             )
             return self._fail_side(session, side, "No ROI configured for this side.")
 
-        frame_seq = None
+        frame_seq = frame_meta.get("seq") if frame_meta else None
         if frame is None:
             if self._camera.get_status() != CAMERA_STATES["ON"]:
                 return self._fail_side(session, side, "Camera is not running.")
@@ -1364,12 +1652,23 @@ class InspectionWorkflow:
             if not ok or frame is None:
                 return self._fail_side(session, side, "No camera frame available.")
             frame_seq = frame_meta.get("seq")
+            frame_age_ms = frame_meta.get("age_ms")
+            if (
+                not isinstance(frame_age_ms, (int, float))
+                or frame_age_ms < 0
+                or frame_age_ms > MAX_FRAME_AGE_MS
+            ):
+                return self._fail_side(
+                    session,
+                    side,
+                    "The latest camera frame is stale. Wait for a fresh frame and retry.",
+                )
             logger.info(
                 "Inspection camera frame acquired: session=%s side=%s frame_seq=%s age_ms=%s",
                 session.session_id,
                 side,
                 frame_seq,
-                frame_meta.get("age_ms"),
+                frame_age_ms,
             )
         if (
             getattr(frame, "ndim", 0) != 3
@@ -1381,6 +1680,7 @@ class InspectionWorkflow:
         if not session.configuration_id and not self._yolo.is_loaded():
             return self._fail_side(session, side, "Inspection model is not loaded.")
 
+        captured_at = timezone.now()
         h, w = frame.shape[:2]
         px, py = int(normalized_roi["x"] * w), int(normalized_roi["y"] * h)
         pw, ph = int(normalized_roi["w"] * w), int(normalized_roi["h"] * h)
@@ -1458,41 +1758,65 @@ class InspectionWorkflow:
             verdict,
         )
 
-        with transaction.atomic():
-            session = VisionInspectionSession.objects.select_for_update().get(pk=session.pk)
-            if not session.is_active or session.is_saved or session.stage == "cancelled":
-                return {"ok": False, "state": "session_inactive", "message": "This inspection session was reset before inference completed."}
-            if getattr(session, f"{side}_status") in (_S.COMPLETED, _S.SKIPPED):
-                return {"ok": False, "state": "side_already_completed", "message": f"{side.title()} inspection has already completed."}
-            try:
-                self._save_image(session, side, "image", _encode_jpeg(frame))
-                self._save_image(session, side, "roi_image", _encode_jpeg(crop))
-                self._save_image(session, side, "annotated", annotated_jpeg)
-            except storage_service.StorageOperationError as exc:
-                return self._fail_side(session, side, f"Inspection evidence could not be persisted: {exc}")
+        saved_images = []
+        try:
+            with transaction.atomic():
+                session = VisionInspectionSession.objects.select_for_update().get(pk=session.pk)
+                if not session.is_active or session.is_saved or session.stage == "cancelled":
+                    return {"ok": False, "state": "session_inactive", "message": "This inspection session was reset before inference completed."}
+                if getattr(session, f"{side}_status") in (_S.COMPLETED, _S.SKIPPED):
+                    return {"ok": False, "state": "side_already_completed", "message": f"{side.title()} inspection has already completed."}
 
-            setattr(session, f"{side}_detections", frame_detections)
-            setattr(session, f"{side}_results", results)
-            setattr(session, f"{side}_verdict", verdict)
-            if session.configuration_id:
-                session.class_results = [
-                    row for row in session.class_results if row.get("side") != side.upper()
-                ] + results
-            setattr(session, f"{side}_status", _S.COMPLETED)
-            if side == "front":
-                session.front_completed_at = timezone.now()
-                session.stage = "back" if session.back_status != _S.SKIPPED else "result"
-            else:
-                session.back_completed_at = timezone.now()
-                session.stage = "result"
-            session.save()
-            logger.info(
-                "Inspection side persisted: session=%s side=%s status=%s verdict=%s",
-                session.session_id,
-                side,
-                _S.COMPLETED,
-                verdict,
-            )
+                saved_images.append(
+                    self._save_image(session, side, "image", _encode_jpeg(frame), captured_at)
+                )
+                saved_images.append(
+                    self._save_image(session, side, "roi_image", _encode_jpeg(crop), captured_at)
+                )
+                saved_images.append(
+                    self._save_image(session, side, "annotated", annotated_jpeg, captured_at)
+                )
+
+                setattr(session, f"{side}_detections", frame_detections)
+                setattr(session, f"{side}_results", results)
+                setattr(session, f"{side}_verdict", verdict)
+                if session.configuration_id:
+                    session.class_results = [
+                        row for row in session.class_results if row.get("side") != side.upper()
+                    ] + results
+                setattr(session, f"{side}_status", _S.COMPLETED)
+                if side == "front":
+                    session.front_completed_at = timezone.now()
+                    session.stage = "back" if session.back_status != _S.SKIPPED else "result"
+                else:
+                    session.back_completed_at = timezone.now()
+                    session.stage = "result"
+                session.save()
+                logger.info(
+                    "Inspection side persisted: session=%s side=%s status=%s verdict=%s",
+                    session.session_id,
+                    side,
+                    _S.COMPLETED,
+                    verdict,
+                )
+        except Exception as exc:
+            for metadata in saved_images:
+                try:
+                    storage_service.delete_uncommitted_inspection_image(metadata)
+                except storage_service.StorageOperationError:
+                    logger.exception(
+                        "Could not clean up uncommitted image %s for session %s",
+                        metadata.relative_path,
+                        session.session_id,
+                    )
+            if isinstance(exc, storage_service.StorageOperationError):
+                session.refresh_from_db()
+                return self._fail_side(
+                    session,
+                    side,
+                    f"Inspection evidence could not be persisted: {exc}",
+                )
+            raise
 
         return {
             "ok": True,
@@ -1564,13 +1888,14 @@ class InspectionWorkflow:
             return "INDETERMINATE"
         return "NOT_OK" if any(row.get("status") != "OK" for row in required) else "OK"
 
-    def _save_image(self, session, side, kind, jpeg_bytes):
+    def _save_image(self, session, side, kind, jpeg_bytes, captured_at):
         if not jpeg_bytes:
             raise storage_service.StorageOperationError("The inspection image could not be encoded.")
         suffix = {"annotated": "annotated", "roi_image": "roi_image"}.get(kind, "image")
         field_name = f"{side}_{suffix}"
-        name = f"{session.session_id}_{side}_{kind}.jpg"
-        storage_service.register_image(session, field_name, jpeg_bytes, name)
+        return storage_service.register_inspection_image(
+            session, field_name, jpeg_bytes, captured_at
+        )
 
     # ------------------------------------------------------------------ #
     #  Step 6/8 — Overall result (never OK unless both sides truly OK)
@@ -1580,9 +1905,13 @@ class InspectionWorkflow:
         session = self._get_session(session_id)
         if session is None:
             return {"ok": False, "state": "error", "message": "Session not found."}
+        if self._expire_if_needed(session):
+            return {"ok": False, "state": "session_expired", "message": "This inspection session expired. Scan the part again."}
         if not session.is_active or session.is_saved or session.stage == "cancelled":
             return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
         session = VisionInspectionSession.objects.select_for_update().get(pk=session.pk)
+        if self._expire_if_needed(session):
+            return {"ok": False, "state": "session_expired", "message": "This inspection session expired. Scan the part again."}
         if not session.is_active or session.is_saved or session.stage == "cancelled":
             return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
         fv, bv = session.front_verdict, session.back_verdict
@@ -1641,6 +1970,8 @@ class InspectionWorkflow:
             ).first()
             return {"ok": True, "state": "already_saved", "session_id": str(session.session_id),
                     "inspection_id": log.pk if log else None}
+        if self._expire_if_needed(session):
+            return {"ok": False, "state": "session_expired", "message": "This inspection session expired. Scan the part again."}
         if not session.is_active or session.stage == "cancelled":
             return {"ok": False, "state": "session_inactive", "message": "This inspection session is no longer active."}
         required_statuses = [session.front_status, session.back_status]
@@ -1711,7 +2042,26 @@ class InspectionWorkflow:
     def get_progress(self, session_id: str):
         session = self._get_session(session_id)
         if session is None:
-            return {"ok": False, "message": "Session not found."}
+            return {
+                "ok": False,
+                "state": "session_not_found",
+                "error_code": "session_not_found",
+                "message": "Inspection session not found.",
+            }
+        if self._expire_if_needed(session) or session.stage == "expired":
+            return {
+                "ok": False,
+                "state": "session_expired",
+                "error_code": "session_expired",
+                "message": "This inspection session expired. Scan the part again.",
+            }
+        if not session.is_active and not session.is_saved:
+            return {
+                "ok": False,
+                "state": "session_inactive",
+                "error_code": "session_inactive",
+                "message": "This inspection session is no longer active.",
+            }
         required_sides = [
             ("front", session.front_status, session.front_verdict),
             ("back", session.back_status, session.back_verdict),
@@ -1798,21 +2148,7 @@ class InspectionWorkflow:
                 lambda: self._stop_camera_for_session(str(session.session_id))
             )
             return {"ok": True, "state": "already_saved", "session_state": session.stage}
-        if all(status in (_S.COMPLETED, _S.SKIPPED) for status in (
-            session.front_status, session.back_status
-        )):
-            transaction.on_commit(
-                lambda: self._stop_camera_for_session(str(session.session_id))
-            )
-            if session.stage == "cancelled":
-                return {"ok": True, "state": "already_cancelled", "session_state": session.stage}
-            return {
-                "ok": False,
-                "state": "completed",
-                "session_state": session.stage,
-                "message": "This inspection is complete and its results must be saved, not cancelled.",
-            }
-        if session.stage == "cancelled":
+        if not session.is_active or session.stage == "cancelled":
             transaction.on_commit(
                 lambda: self._stop_camera_for_session(str(session.session_id))
             )
@@ -1829,5 +2165,11 @@ class InspectionWorkflow:
     def _stop_camera_for_session(self, session_id):
         with self._resource_lock:
             if self._camera_session_id == session_id:
-                CameraService.stop_camera()
-                self._camera_session_id = None
+                if CameraService.stop_camera():
+                    self._camera_session_id = None
+                else:
+                    logger.error(
+                        "Camera remains owned after workflow cancellation: session=%s error=%s",
+                        session_id,
+                        CameraService.get_error(),
+                    )

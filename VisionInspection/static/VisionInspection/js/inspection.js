@@ -8,7 +8,7 @@
 (function () {
     "use strict";
 
-    const STATE_POLL_INTERVAL = 500;
+    const STATE_POLL_INTERVAL = 1500;
     const CAMERA_POLL_INTERVAL = 2000;
 
     let statePollTimer = null;

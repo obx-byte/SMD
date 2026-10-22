@@ -409,6 +409,8 @@ def meta_lines(filters, summary, total_records):
         )
     if filters.get("part_number"):
         parts.append("Part: %s" % filters["part_number"])
+    elif filters.get("part"):
+        parts.append("Part: %s" % filters["part"])
     if filters.get("part_name"):
         parts.append("Part name contains: %s" % filters["part_name"])
     if filters.get("employee"):
@@ -417,7 +419,11 @@ def meta_lines(filters, summary, total_records):
         parts.append("Unique number contains: %s" % filters["unique_number"])
     if filters.get("result"):
         parts.append("Result: %s" % records.result_text(filters["result"]))
+    if filters.get("front_result"):
+        parts.append("Front result: %s" % records.result_text(filters["front_result"]))
+    if filters.get("back_result"):
+        parts.append("Back result: %s" % records.result_text(filters["back_result"]))
     return parts
 
 
-COLUMN_WEIGHTS = [1, 4, 3, 5, 5, 3.5, 3, 3, 3]
+COLUMN_WEIGHTS = [1, 2.5, 4, 3, 5, 5, 3.5, 3, 3, 3]

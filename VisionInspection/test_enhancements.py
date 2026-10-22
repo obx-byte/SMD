@@ -5,6 +5,7 @@ from django.urls import reverse
 from unittest.mock import patch
 
 from VisionInspection.models import (
+    AccessGroupProfile,
     VisionInspectionLog,
     VisionInspectionPermissionOverride,
     VisionInspectionPart,
@@ -223,8 +224,11 @@ class AccountAndRoleAcceptanceTests(TestCase):
             reverse("VisionInspection:user-management-permissions")
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Default role access")
-        self.assertContains(response, "Account access overrides")
+        self.assertContains(response, "Role Permissions")
+        self.assertContains(response, 'id="roleSelector"')
+        self.assertContains(response, "Save Changes")
+        self.assertNotContains(response, "Default role access")
+        self.assertNotContains(response, "Account access overrides")
 
         supervisor = self.make_user("S-PERM", ROLE_SUPERVISOR)
         self.client.force_login(supervisor)
@@ -281,6 +285,337 @@ class AccountAndRoleAcceptanceTests(TestCase):
         self.assertFalse(
             VisionInspectionPermissionOverride.objects.filter(user=supervisor).exists()
         )
+
+
+class AccessGroupAcceptanceTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username="ACCESS-ADMIN",
+            email="access-admin@example.invalid",
+            password="AdminPasswordValid47",
+        )
+        self.client.force_login(self.admin)
+
+    def create_group(self, name="Quality Review"):
+        response = self.client.post(
+            reverse("VisionInspection:access-group-create"),
+            {"name": name, "description": "Review access", "is_active": "on"},
+        )
+        self.assertEqual(response.status_code, 302)
+        return AccessGroupProfile.objects.get(group__name=name)
+
+    def test_group_creation_and_duplicate_names_are_checked_case_insensitively(self):
+        profile = self.create_group()
+        self.assertEqual(profile.description, "Review access")
+
+        list_response = self.client.get(reverse("VisionInspection:access-groups"))
+        self.assertEqual(list_response.status_code, 200)
+        self.assertContains(list_response, "Quality Review")
+        self.assertContains(list_response, "S.No")
+        self.assertContains(list_response, "Group Name")
+        self.assertContains(list_response, "View")
+        self.assertContains(list_response, "Edit")
+        self.assertNotContains(list_response, "Assigned users")
+        self.assertNotContains(list_response, "Description")
+        matrix_response = self.client.get(
+            reverse("VisionInspection:access-group-permissions", args=[profile.pk])
+        )
+        self.assertEqual(matrix_response.status_code, 200)
+        self.assertContains(matrix_response, "Sub Screen")
+        self.assertContains(matrix_response, "Select all")
+        self.assertContains(matrix_response, "Quality Review")
+
+        response = self.client.post(
+            reverse("VisionInspection:access-group-create"),
+            {"name": "quality review", "description": "", "is_active": "on"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AccessGroupProfile.objects.count(), 1)
+
+    def test_group_form_persists_permissions_on_create_and_edit(self):
+        response = self.client.post(
+            reverse("VisionInspection:access-group-create"),
+            {
+                "name": "Report Review",
+                "description": "",
+                "is_active": "on",
+                "permission": ["view_inspection_reports"],
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        profile = AccessGroupProfile.objects.get(group__name="Report Review")
+        self.assertTrue(
+            profile.group.permissions.filter(
+                content_type__app_label="vision_inspection",
+                codename="view_inspection_reports",
+            ).exists()
+        )
+
+        edit_response = self.client.post(
+            reverse("VisionInspection:access-group-edit", args=[profile.pk]),
+            {
+                "name": "Report Review Updated",
+                "description": "Updated",
+                "is_active": "on",
+                "permission": ["view_master_data"],
+            },
+        )
+        self.assertEqual(edit_response.status_code, 302)
+        profile.refresh_from_db()
+        self.assertEqual(profile.group.name, "Report Review Updated")
+        self.assertTrue(
+            profile.group.permissions.filter(
+                content_type__app_label="vision_inspection",
+                codename="view_master_data",
+            ).exists()
+        )
+        self.assertFalse(
+            profile.group.permissions.filter(
+                content_type__app_label="vision_inspection",
+                codename="view_inspection_reports",
+            ).exists()
+        )
+        edit_page = self.client.get(
+            reverse("VisionInspection:access-group-edit", args=[profile.pk])
+        )
+        self.assertEqual(edit_page.status_code, 200)
+        self.assertTrue(
+            any(
+                item["codename"] == "view_master_data" and item["checked"]
+                for module in edit_page.context["permission_groups"]
+                for item in module["items"]
+            )
+        )
+
+    def test_access_group_search_reset_and_user_assignment(self):
+        profile = self.create_group("Quality Review")
+        self.create_group("Production Operators")
+        search_response = self.client.get(
+            reverse("VisionInspection:access-groups"), {"q": "Quality"}
+        )
+        self.assertContains(search_response, "Quality Review")
+        self.assertNotContains(search_response, "Production Operators")
+        self.assertContains(
+            search_response,
+            reverse("VisionInspection:access-groups"),
+        )
+
+        create_response = self.client.post(
+            reverse("VisionInspection:user-management"),
+            {
+                "action": "create",
+                "employee_id": "GROUP-ASSIGNED",
+                "password": "A-Long-Unique-Password-853!",
+                "role": ROLE_OPERATOR,
+                "access_group": str(profile.pk),
+                "display_name": "Group Assigned",
+            },
+        )
+        self.assertEqual(create_response.status_code, 302)
+        assigned_user = User.objects.get(username="GROUP-ASSIGNED")
+        self.assertTrue(assigned_user.groups.filter(pk=profile.group_id).exists())
+
+    def test_user_search_access_group_filter_and_user_detail(self):
+        profile = self.create_group()
+        operator = User.objects.create_user(
+            username="SEARCH-OP",
+            password="OperatorPasswordValid47",
+            first_name="Sam Operator",
+        )
+        operator.groups.add(Group.objects.get(name=ROLE_OPERATOR), profile.group)
+        VisionInspectionUserProfile.objects.create(user=operator)
+
+        response = self.client.get(
+            reverse("VisionInspection:user-management"),
+            {"q": "Sam", "access_group": str(profile.pk)},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "SEARCH-OP")
+        self.assertContains(response, "Quality Review")
+        detail = self.client.get(
+            reverse("VisionInspection:user-management-detail", args=[operator.pk])
+        )
+        self.assertEqual(detail.status_code, 200)
+        self.assertContains(detail, "Employee ID / Username")
+
+    def test_group_screen_permissions_persist_and_inactive_group_stops_granting(self):
+        profile = self.create_group()
+        operator = User.objects.create_user(
+            username="ACCESS-OPERATOR", password="OperatorPasswordValid47"
+        )
+        operator.groups.add(Group.objects.get(name=ROLE_OPERATOR), profile.group)
+        report_permission = Permission.objects.get(
+            content_type__app_label="vision_inspection",
+            codename="view_inspection_reports",
+        )
+
+        response = self.client.post(
+            reverse("VisionInspection:access-group-edit", args=[profile.pk]),
+            {
+                "name": profile.group.name,
+                "description": profile.description,
+                "is_active": "on",
+                "permission": ["view_inspection_reports"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(profile.group.permissions.filter(pk=report_permission.pk).exists())
+        operator = User.objects.get(pk=operator.pk)
+        self.assertTrue(has_permission(operator, "view_inspection_reports"))
+
+        self.client.post(
+            reverse("VisionInspection:access-group-edit", args=[profile.pk]),
+            {
+                "name": profile.group.name,
+                "description": "Paused",
+                "is_active": "",
+                "permission": ["view_inspection_reports"],
+            },
+        )
+        operator = User.objects.get(pk=operator.pk)
+        self.assertFalse(has_permission(operator, "view_inspection_reports"))
+
+    def test_assigned_groups_cannot_be_deleted_but_unassigned_groups_can(self):
+        profile = self.create_group()
+        operator = User.objects.create_user(
+            username="GROUP-MEMBER", password="OperatorPasswordValid47"
+        )
+        operator.groups.add(profile.group)
+
+        response = self.client.post(
+            reverse("VisionInspection:access-group-delete", args=[profile.pk])
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(AccessGroupProfile.objects.filter(pk=profile.pk).exists())
+        operator.groups.remove(profile.group)
+        self.client.post(
+            reverse("VisionInspection:access-group-delete", args=[profile.pk])
+        )
+        self.assertFalse(AccessGroupProfile.objects.filter(pk=profile.pk).exists())
+
+    def test_system_role_groups_cannot_be_deleted_or_given_by_screen_matrix(self):
+        role_group = Group.objects.get(name=ROLE_ADMIN)
+        profile = AccessGroupProfile.objects.create(group=role_group)
+        permission_ids_before = set(
+            role_group.permissions.values_list("pk", flat=True)
+        )
+
+        delete_response = self.client.post(
+            reverse("VisionInspection:access-group-delete", args=[profile.pk])
+        )
+        permission_response = self.client.post(
+            reverse("VisionInspection:access-group-permissions", args=[profile.pk]),
+            {"permission": ["manage_inspection_users"]},
+        )
+        edit_response = self.client.post(
+            reverse("VisionInspection:access-group-edit", args=[profile.pk]),
+            {
+                "name": ROLE_ADMIN,
+                "is_active": "on",
+                "permission": ["view_inspection_reports"],
+            },
+        )
+
+        self.assertEqual(delete_response.status_code, 302)
+        self.assertEqual(permission_response.status_code, 405)
+        self.assertEqual(edit_response.status_code, 302)
+        self.assertTrue(Group.objects.filter(pk=role_group.pk).exists())
+        self.assertEqual(
+            set(role_group.permissions.values_list("pk", flat=True)),
+            permission_ids_before,
+        )
+
+    def test_non_administrator_cannot_open_group_management(self):
+        supervisor = User.objects.create_user(
+            username="GROUP-SUPERVISOR", password="SupervisorPasswordValid47"
+        )
+        supervisor.groups.add(Group.objects.get(name=ROLE_SUPERVISOR))
+        self.client.force_login(supervisor)
+
+        response = self.client.get(reverse("VisionInspection:access-groups"))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_sidebar_group_links_are_admin_only(self):
+        admin_response = self.client.get(reverse("VisionInspection:dashboard"))
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertContains(admin_response, "Access Groups")
+        self.assertContains(admin_response, "Role Permissions")
+
+        supervisor = User.objects.create_user(
+            username="SIDEBAR-SUPERVISOR", password="SupervisorPasswordValid47"
+        )
+        supervisor.groups.add(Group.objects.get(name=ROLE_SUPERVISOR))
+        self.client.force_login(supervisor)
+        supervisor_response = self.client.get(reverse("VisionInspection:dashboard"))
+        self.assertEqual(supervisor_response.status_code, 200)
+        self.assertNotContains(supervisor_response, "Access Groups")
+        self.assertNotContains(supervisor_response, "Role Permissions")
+
+    def test_role_change_preserves_custom_group_and_last_admin_cannot_be_deactivated(self):
+        profile = self.create_group()
+        operator = User.objects.create_user(
+            username="ROLE-CHANGE", password="OperatorPasswordValid47"
+        )
+        operator.groups.add(Group.objects.get(name=ROLE_OPERATOR), profile.group)
+        self.client.post(
+            reverse("VisionInspection:user-management"),
+            {
+                "action": "change_role",
+                "user_id": operator.pk,
+                "role": ROLE_SUPERVISOR,
+            },
+        )
+        operator.refresh_from_db()
+        self.assertTrue(operator.groups.filter(name=ROLE_SUPERVISOR).exists())
+        self.assertTrue(operator.groups.filter(pk=profile.group_id).exists())
+
+        response = self.client.post(
+            reverse("VisionInspection:user-management"),
+            {"action": "deactivate", "user_id": self.admin.pk},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_user_management_hides_station_scope_and_deactivate_controls(self):
+        operator = User.objects.create_user(
+            username="NO-SCOPE-CONTROLS",
+            password="local-test-password",
+            first_name="No Scope",
+        )
+        operator.groups.add(Group.objects.get(name=ROLE_OPERATOR))
+        profile = VisionInspectionUserProfile.objects.create(
+            user=operator, station_scope="LINE-A"
+        )
+
+        response = self.client.get(reverse("VisionInspection:user-management"))
+        detail = self.client.get(
+            reverse("VisionInspection:user-management-detail", args=[operator.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Station Scope")
+        self.assertNotContains(response, "Deactivate")
+        self.assertContains(response, "No Access Group")
+        self.assertEqual(detail.status_code, 200)
+        self.assertNotContains(detail, "Station scope")
+
+        self.client.post(
+            reverse("VisionInspection:user-management"),
+            {
+                "action": "change_role",
+                "user_id": operator.pk,
+                "role": ROLE_SUPERVISOR,
+                "scope": "LINE-B",
+            },
+        )
+        profile.refresh_from_db()
+        self.assertEqual(profile.station_scope, "LINE-A")
 
 
 class DashboardRoleAcceptanceTests(TestCase):

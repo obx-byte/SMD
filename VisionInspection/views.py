@@ -66,6 +66,7 @@ from VisionInspection.models import (
 from VisionInspection.services.camera_service import (
     CAMERA_SOURCES,
     CAMERA_STATES,
+    MAX_FRAME_AGE_MS,
     CameraService,
     get_camera_capabilities,
 )
@@ -111,11 +112,99 @@ def _body_json(request):
         try:
             data = json.loads(request.body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
-            return {}
-        return data if isinstance(data, dict) else {}
+            data = None
+        if isinstance(data, dict):
+            return data
     if request.POST:
         return {key: request.POST.get(key) for key in request.POST.keys()}
     return {}
+
+
+def _active_workflow_session(request, session_id, require_camera=False):
+    if not session_id:
+        return None, _json_response(
+            {
+                "ok": False,
+                "state": "session_required",
+                "error_code": "session_required",
+                "message": "A session_id is required.",
+            },
+            status=400,
+        )
+    try:
+        session_id = uuid.UUID(str(session_id))
+    except (TypeError, ValueError, AttributeError):
+        return None, _json_response(
+            {
+                "ok": False,
+                "state": "session_not_found",
+                "error_code": "invalid_session_id",
+                "message": "Inspection session not found.",
+            },
+            status=404,
+        )
+    session = VisionInspectionSession.objects.filter(session_id=session_id).first()
+    if session is None:
+        return None, _json_response(
+            {
+                "ok": False,
+                "state": "session_not_found",
+                "error_code": "session_not_found",
+                "message": "Inspection session not found.",
+            },
+            status=404,
+        )
+    user = getattr(request, "user", None)
+    if (
+        user is None
+        or not user.is_authenticated
+        or not user.is_active
+        or session.operator_id != user.pk
+    ):
+        return None, _json_response(
+            {
+                "ok": False,
+                "state": "forbidden",
+                "error_code": "session_forbidden",
+                "message": "This inspection session is not available to this account.",
+            },
+            status=403,
+        )
+    workflow = _workflow()
+    if not workflow.session_is_active(str(session.session_id)):
+        session.refresh_from_db(
+            fields=["stage", "is_active", "is_saved", "error_message"]
+        )
+        if session.stage == "expired":
+            return None, _json_response(
+                {
+                    "ok": False,
+                    "state": "session_expired",
+                    "error_code": "session_expired",
+                    "message": "This inspection session expired after 12 hours. Scan the part again.",
+                },
+                status=409,
+            )
+        return None, _json_response(
+            {
+                "ok": False,
+                "state": "session_inactive",
+                "error_code": "session_inactive",
+                "message": "This inspection session is no longer active. Scan the part again.",
+            },
+            status=409,
+        )
+    if require_camera and not workflow.camera_session_is_owned(str(session.session_id)):
+        return None, _json_response(
+            {
+                "ok": False,
+                "state": "camera_not_owned",
+                "error_code": "camera_not_owned",
+                "message": "The camera is no longer assigned to this inspection session.",
+            },
+            status=409,
+        )
+    return session, None
 
 
 def _clean(value):
@@ -1266,9 +1355,34 @@ def reorder_rois(request):
 #  Camera control
 # --------------------------------------------------------------------------- #
 
+def _camera_request_guard(request, session_id=None):
+    workflow = _workflow()
+    if session_id:
+        _session, error = _active_workflow_session(
+            request, session_id, require_camera=True
+        )
+        return error
+    active_sessions = VisionInspectionSession.objects.filter(
+        is_active=True, is_saved=False
+    ).exclude(stage__in=["saved", "cancelled", "expired"])
+    if active_sessions.exists() or workflow.camera_owner_session_id():
+        return _json_response(
+            {
+                "ok": False,
+                "state": "camera_in_use",
+                "error_code": "camera_in_use",
+                "message": "The camera is reserved by an active inspection session.",
+            },
+            status=409,
+        )
+    return None
+
 
 def camera_start(request):
     """Start the camera capture thread (OpenCV or Picamera2)."""
+    guard = _camera_request_guard(request)
+    if guard:
+        return guard
     source = _clean(request.GET.get("source")) or CAMERA_SOURCES["OPENCV"]
     index = _as_int(request.GET.get("camera_index"), 0)
     reuse_existing = request.GET.get("reuse_if_active") == "1"
@@ -1312,24 +1426,52 @@ def camera_start(request):
 
 
 def camera_stop(request):
-    CameraService.stop_camera()
-    return _json_response(
-        {
-            "status": CameraService.get_status(),
-            "state": CameraService.get_state(),
-        }
-    )
-
-
-def camera_status(request):
-    resolution = _resolution_payload()
+    guard = _camera_request_guard(request)
+    if guard:
+        return guard
+    stopped = CameraService.stop_camera()
     return _json_response(
         {
             "status": CameraService.get_status(),
             "state": CameraService.get_state(),
             "error": CameraService.get_error(),
+        },
+        status=200 if stopped else 409,
+    )
+
+
+def camera_status(request):
+    guard = _camera_request_guard(request, request.GET.get("session_id"))
+    if guard:
+        return guard
+    resolution = _resolution_payload()
+    status = CameraService.get_status()
+    state = CameraService.get_state()
+    frame_ok, frame, frame_meta = CameraService.get_frame_with_meta()
+    frame_age_ms = frame_meta.get("age_ms")
+    frame_ready = (
+        status == CAMERA_STATES["ON"]
+        and state == "RUNNING"
+        and frame_ok
+        and frame is not None
+        and getattr(frame, "ndim", 0) == 3
+        and frame.shape[0] > 0
+        and frame.shape[1] > 0
+        and frame.shape[2] in (3, 4)
+        and isinstance(frame_age_ms, (int, float))
+        and 0 <= frame_age_ms <= MAX_FRAME_AGE_MS
+    )
+    return _json_response(
+        {
+            "status": status,
+            "state": state,
+            "error": CameraService.get_error(),
             "source": CameraService.get_source(),
             "camera_index": CameraService.get_camera_index(),
+            "backend": CameraService.get_backend_name(),
+            "ready": frame_ready,
+            "frame_seq": frame_meta.get("seq", 0),
+            "frame_age_ms": frame_age_ms,
             "width": resolution["width"],
             "height": resolution["height"],
             "model_configured": _active_model() is not None,
@@ -1339,11 +1481,23 @@ def camera_status(request):
 
 def camera_stream(request):
     """MJPEG live stream built from the service's latest-frame buffer."""
+    session_id = request.GET.get("session_id")
+    guard = _camera_request_guard(request, session_id)
+    if guard:
+        return guard
 
     def _frames():
         import cv2
 
+        last_session_check = 0
         while True:
+            if time.monotonic() - last_session_check >= 1:
+                last_session_check = time.monotonic()
+                if session_id:
+                    if not _workflow().camera_session_is_owned(session_id):
+                        break
+                elif _workflow().active_camera_session_id():
+                    break
             ok, frame = CameraService.get_frame()
             if not ok or frame is None:
                 time.sleep(0.05)
@@ -1371,6 +1525,10 @@ def camera_stream(request):
 @require_POST
 def camera_capture(request):
     """Capture a single frame and return it inline for the operator UI."""
+    data = _body_json(request)
+    guard = _camera_request_guard(request, data.get("session_id"))
+    if guard:
+        return guard
     frame = _camera_frame_or_none()
     if frame is None:
         return _error(
@@ -1870,13 +2028,19 @@ def workflow_submit(request):
     """Step 3 — submit a part and open its inspection session."""
     data = _body_json(request)
     result = _workflow().submit(data.get("part_number"), data.get("model_id"), operator=request.user)
+    if result.get("state") == "camera_in_use":
+        return _json_response(result, status=409)
+    if result.get("state") == "camera_stopping":
+        return _json_response(result, status=503)
     return _json_response(result, status=200 if result.get("ok") else 400)
 
 
 def workflow_progress(request, session_id):
     """Poll the live progress of an inspection session."""
     result = _workflow().get_progress(str(session_id))
-    status = 200 if result.get("ok") else 404
+    status = 200 if result.get("ok") else (
+        409 if result.get("state") in ("session_inactive", "session_expired") else 404
+    )
     if result.get("ok") and result.get("inspection_status") in (
         "OKAY PART",
         "NOT OKAY PART",
@@ -1899,7 +2063,12 @@ def workflow_activate_side(request):
     if not session_id:
         return _error("A session_id is required.")
     result = _workflow().activate_side(str(session_id), str(side or ""))
-    return _json_response(result, status=200 if result.get("ok") else 400)
+    status = 200 if result.get("ok") else (
+        404 if result.get("state") == "session_not_found" else 409 if result.get("state") in (
+            "session_inactive", "session_expired", "camera_in_use",
+        ) else 503 if result.get("state") == "camera_stopping" else 400
+    )
+    return _json_response(result, status=status)
 
 
 @require_POST
@@ -1945,13 +2114,15 @@ def workflow_inspect_side(request, side):
         status = 404
     elif state in (
         "session_inactive",
+        "session_expired",
+        "camera_in_use",
         "side_in_progress",
         "side_already_completed",
         "side_not_required",
         "incomplete",
     ):
         status = 409
-    elif state in ("camera_error", "frame_unavailable"):
+    elif state in ("camera_error", "camera_connecting", "camera_stopping", "frame_unavailable"):
         status = 503
     elif state in ("model_invalid", "model_task_mismatch", "configuration_invalid"):
         status = 422
@@ -1983,7 +2154,10 @@ def workflow_compute_result(request):
     if not session_id:
         return _error("A session_id is required.")
     result = _workflow().compute_result(str(session_id))
-    return _json_response(result, status=200 if result.get("ok") else 400)
+    status = 200 if result.get("ok") else (
+        409 if result.get("state") in ("session_inactive", "session_expired") else 400
+    )
+    return _json_response(result, status=status)
 
 
 @require_POST
@@ -1994,7 +2168,10 @@ def workflow_save(request):
     if not session_id:
         return _error("A session_id is required.")
     result = _workflow().save(str(session_id))
-    return _json_response(result, status=200 if result.get("ok") else 400)
+    status = 200 if result.get("ok") else (
+        409 if result.get("state") in ("session_inactive", "session_expired") else 400
+    )
+    return _json_response(result, status=status)
 
 
 @require_POST
@@ -2005,7 +2182,8 @@ def workflow_cancel(request):
     if not session_id:
         return _error("A session_id is required.")
     result = _workflow().cancel(str(session_id))
-    return _json_response(result, status=200 if result.get("ok") else 400)
+    status = 200 if result.get("ok") else 409 if result.get("state") == "completed" else 400
+    return _json_response(result, status=status)
 
 
 def _discover_configurable_classes(model):
@@ -2092,7 +2270,15 @@ def api_part_vision_preview(request, part_id):
     part = get_object_or_404(VisionInspectionPart, pk=part_id)
     side = _clean(request.GET.get("side", "FRONT")).upper()
 
-    def conflict(message, configuration_id=None):
+    def preview_error(message, error_code, status):
+        return _json_response(
+            {"ok": False, "error": message, "error_code": error_code},
+            status=status,
+        )
+
+    def conflict(
+        message, configuration_id=None, error_code="preview_conflict", status=409
+    ):
         logger.warning(
             "Prediction preview conflict: part_id=%s configuration_id=%s side=%s reason=%s",
             part.pk,
@@ -2100,10 +2286,34 @@ def api_part_vision_preview(request, part_id):
             side.lower(),
             message,
         )
-        return _error(message, status=409)
+        return preview_error(message, error_code, status=status)
 
     if side not in (VisionPartConfiguration.SIDE_FRONT, VisionPartConfiguration.SIDE_BACK):
         return _error("side must be FRONT or BACK.")
+
+    workflow_session_id = request.GET.get("session_id")
+    if workflow_session_id:
+        workflow_session, session_error = _active_workflow_session(
+            request, workflow_session_id, require_camera=True
+        )
+        if session_error:
+            return session_error
+        if normalize_token(workflow_session.part_number) != normalize_token(part.part_number):
+            return preview_error(
+                "The preview part does not match the active inspection session.",
+                "session_part_mismatch",
+                status=409,
+            )
+        if (
+            workflow_session.stage != side.lower()
+            or getattr(workflow_session, f"{side.lower()}_status")
+            in (VisionInspectionSession.COMPLETED, VisionInspectionSession.SKIPPED)
+        ):
+            return preview_error(
+                "The requested side is not active in this inspection session.",
+                "session_side_inactive",
+                status=409,
+            )
     try:
         confidence_threshold = float(request.GET.get("confidence", "0.50"))
     except (TypeError, ValueError):
@@ -2123,7 +2333,10 @@ def api_part_vision_preview(request, part_id):
         .first()
     )
     if configuration is None:
-        return conflict("No Part Vision configuration is saved.")
+        return conflict(
+            "No Part Vision configuration is saved.",
+            error_code="model_configuration_missing",
+        )
     if (
         side == VisionPartConfiguration.SIDE_FRONT
         and not configuration.requires_front
@@ -2131,7 +2344,11 @@ def api_part_vision_preview(request, part_id):
         side == VisionPartConfiguration.SIDE_BACK
         and not configuration.requires_back
     ):
-        return conflict(f"The {side.title()} side is not enabled.", configuration.pk)
+        return conflict(
+            f"The {side.title()} side is not enabled.",
+            configuration.pk,
+            "side_not_enabled",
+        )
 
     model_id = _as_int(request.GET.get("model_id"), 0)
     part_models = configuration.part_models.filter(
@@ -2142,7 +2359,11 @@ def api_part_vision_preview(request, part_id):
         part_models = part_models.filter(model_id=model_id)
     association = part_models.order_by("id").first()
     if association is None:
-        return conflict("No enabled segmentation model matches the requested model.", configuration.pk)
+        return conflict(
+            "No enabled segmentation model matches the requested model.",
+            configuration.pk,
+            "model_missing",
+        )
 
     expected_source = (
         configuration.front_camera_source
@@ -2163,6 +2384,8 @@ def api_part_vision_preview(request, part_id):
         return conflict(
             f"The configured camera is {camera_state.lower()}; waiting for it to produce a frame.",
             configuration.pk,
+            "camera_not_ready",
+            status=503,
         )
     current_source = CameraService.get_source()
     current_index = CameraService.get_camera_index()
@@ -2173,11 +2396,36 @@ def api_part_vision_preview(request, part_id):
         return conflict(
             f"The running camera does not match the configured {side.title()} camera source and index.",
             configuration.pk,
+            "camera_mismatch",
         )
 
     frame_ok, frame, frame_meta = CameraService.get_frame_with_meta()
-    if not frame_ok or frame is None:
-        return conflict("The running camera has not produced a frame yet.", configuration.pk)
+    if (
+        not frame_ok
+        or frame is None
+        or getattr(frame, "ndim", 0) != 3
+        or frame.shape[0] <= 0
+        or frame.shape[1] <= 0
+        or frame.shape[2] not in (3, 4)
+    ):
+        return conflict(
+            "The running camera has not produced a frame yet.",
+            configuration.pk,
+            "camera_frame_missing",
+            status=503,
+        )
+    frame_age_ms = frame_meta.get("age_ms")
+    if (
+        not isinstance(frame_age_ms, (int, float))
+        or frame_age_ms < 0
+        or frame_age_ms > MAX_FRAME_AGE_MS
+    ):
+        return conflict(
+            "The latest camera frame is stale; waiting for a fresh frame.",
+            configuration.pk,
+            "camera_frame_stale",
+            status=503,
+        )
     frame_height, frame_width = frame.shape[:2]
     roi = active_roi(configuration)
     roi_rect = roi.pixel_rect(frame_width, frame_height) if roi else None
@@ -2190,7 +2438,11 @@ def api_part_vision_preview(request, part_id):
             side.lower(),
             frame_meta.get("seq"),
         )
-        return conflict(f"No compatible ROI is configured for the {side.title()} side.", configuration.pk)
+        return conflict(
+            f"No compatible ROI is configured for the {side.title()} side.",
+            configuration.pk,
+            "roi_missing",
+        )
     roi_values = (roi.x, roi.y, roi.width, roi.height)
     roi_is_valid = (
         all(math.isfinite(float(value)) for value in roi_values)
@@ -2218,6 +2470,7 @@ def api_part_vision_preview(request, part_id):
         return conflict(
             f"The configured ROI for the {side.title()} side is invalid for this camera frame.",
             configuration.pk,
+            "roi_invalid",
         )
     offset_x = roi_rect["x"]
     offset_y = roi_rect["y"]
@@ -2245,6 +2498,12 @@ def api_part_vision_preview(request, part_id):
             show_boxes=show_boxes,
         )
     except ModelLoadError as exc:
+        if workflow_session_id and not _workflow().camera_session_is_owned(workflow_session_id):
+            return preview_error(
+                "This inspection session is no longer active.",
+                "session_inactive",
+                status=409,
+            )
         logger.exception(
             "Prediction preview inference failed: part_id=%s configuration_id=%s "
             "side=%s frame_seq=%s roi_id=%s model_path=%s",
@@ -2255,7 +2514,13 @@ def api_part_vision_preview(request, part_id):
             roi.pk,
             association.model.model_path,
         )
-        return _error(str(exc), status=503)
+        return preview_error(str(exc), "model_inference_failed", status=503)
+    if workflow_session_id and not _workflow().camera_session_is_owned(workflow_session_id):
+        return preview_error(
+            "This inspection session is no longer active.",
+            "session_inactive",
+            status=409,
+        )
     logger.debug(
         "Prediction preview inference completed: part_id=%s configuration_id=%s "
         "side=%s frame_seq=%s roi_id=%s detections=%s inference_ms=%.1f",
@@ -2271,8 +2536,9 @@ def api_part_vision_preview(request, part_id):
     try:
         output_frame = frame.copy()
         if rendered_roi.shape[:2] != inference_frame.shape[:2]:
-            return _error(
+            return preview_error(
                 "The segmentation renderer returned a frame with unexpected dimensions.",
+                "preview_render_failed",
                 status=503,
             )
         if roi_rect:
@@ -2285,9 +2551,17 @@ def api_part_vision_preview(request, part_id):
         image = _jpeg_data_url(output_frame, quality=82)
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         logger.exception("Could not render segmentation preview for part %s", part.pk)
-        return _error(f"Could not render preview: {exc}", status=503)
+        return preview_error(
+            f"Could not render preview: {exc}",
+            "preview_render_failed",
+            status=503,
+        )
     if image is None:
-        return _error("Could not encode the preview frame.", status=503)
+        return preview_error(
+            "Could not encode the preview frame.",
+            "preview_encode_failed",
+            status=503,
+        )
 
     counts = {}
     for detection in detections:
@@ -2300,7 +2574,9 @@ def api_part_vision_preview(request, part_id):
             "configuration_version": configuration.version,
             "model_id": association.model_id,
             "side": side,
+            "inference_status": "complete",
             "frame_seq": frame_meta.get("seq"),
+            "frame_age_ms": frame_age_ms,
             "roi_applied": bool(roi_rect),
             "image": image,
             "detection_count": len(detections),

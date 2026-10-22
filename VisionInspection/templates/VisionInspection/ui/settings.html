@@ -2,68 +2,110 @@
 {% load static %}
 
 {% block title %}Settings — Vision Inspection{% endblock %}
-
 {% block header_title %}Settings{% endblock %}
 {% block header_actions %}
     <a href="{% url 'VisionInspection:dashboard' %}" class="vi-header-action" title="Dashboard" aria-label="Dashboard">&#9632;</a>
 {% endblock %}
+{% block extra_head %}
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/storage_manager.css' %}?v=20261023-1">
+{% endblock %}
 
 {% block content %}
-<div class="vi-page-header">
-    <h2>System Settings</h2>
-</div>
+<section class="storage-manager" id="storageManager"
+      data-browse-url="{% url 'VisionInspection:storage-manager-browse' %}"
+      data-create-url="{% url 'VisionInspection:storage-manager-create-folder' %}"
+      data-merge-url="{% url 'VisionInspection:storage-manager-merge' %}"
+      data-roots-url="{% url 'VisionInspection:storage-manager-add-root' %}"
+      data-deactivate-template="{% url 'VisionInspection:storage-manager-deactivate-root' 0 %}"
+      data-can-browse="{{ can_browse_storage|yesno:'true,false' }}"
+      data-can-operate="{{ can_manage_storage|yesno:'true,false' }}">
+    <header class="storage-manager__heading">
+        <div>
+            <p class="storage-manager__eyebrow">Settings</p>
+            <h1>Local Storage Manager</h1>
+            <p>Manage authorized folders on the computer running the Django server.</p>
+        </div>
+        <button type="button" class="storage-button storage-button--secondary" id="storageRefresh" disabled>Refresh</button>
+    </header>
+    <div id="storageCsrf" hidden>{% csrf_token %}</div>
 
-<div class="vi-card" style="max-width:760px">
-    <div class="vi-card-title">Runtime Configuration</div>
-    <p class="vi-card-sub" style="margin-bottom:14px">
-        Values below are read from the active configuration. Unset options show
-        the application default.
-    </p>
-    <div class="vi-table-wrap">
-        <table class="vi-table">
-            <thead>
-                <tr>
-                    <th>Setting</th>
-                    <th>Value</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>Dashboard refresh interval</td>
-                    <td>{{ poll_interval|floatformat:0 }} ms</td>
-                </tr>
-                <tr>
-                    <td>Django version</td>
-                    <td>{{ django_version }}</td>
-                </tr>
-                <tr>
-                    <td>Database engine</td>
-                    <td>{{ settings.DATABASE_ENGINE }}</td>
-                </tr>
-                <tr>
-                    <td>Debug mode</td>
-                    <td>
-                        {% if settings.DEBUG %}
-                            <span class="vi-badge vi-badge-pending">Enabled</span>
-                        {% else %}
-                            <span class="vi-badge vi-badge-ok">Disabled</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% for key, value in settings.items %}
-                <tr>
-                    <td>{{ key }}</td>
-                    <td>
-                        {% if value == "" or value is None %}
-                            <span style="opacity:.6">not set</span>
-                        {% else %}
-                            {{ value }}
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
+    {% if not can_browse_storage %}
+        <section class="storage-card storage-message storage-message--warning">
+            Your account does not have permission to browse storage. Ask an Administrator to grant Storage Settings access.
+        </section>
+    {% else %}
+        <section class="storage-card storage-roots">
+            <div class="storage-card__heading">
+                <div><h2>Authorized locations</h2><p>Only folders explicitly authorized by an Administrator are accessible.</p></div>
+            </div>
+            <div class="storage-roots__row">
+                <label for="storageRoot">Storage root</label>
+                <select id="storageRoot">
+                    <option value="">Select an authorized location</option>
+                    {% for root in storage_roots %}
+                        <option value="{{ root.id }}" {% if not root.available %}disabled{% endif %}>{{ root.name }}{% if not root.available %} (unavailable on this server){% endif %}</option>
+                    {% endfor %}
+                </select>
+                <button type="button" class="storage-button storage-button--secondary" id="storageBrowse" disabled>Browse Folder</button>
+            </div>
+            <div class="storage-location" aria-live="polite">
+                <span class="storage-location__label">Current location</span>
+                <code id="storageLocation">Choose an authorized location to browse.</code>
+            </div>
+            <div class="storage-toolbar">
+                <button type="button" class="storage-button storage-button--secondary" id="storageParent" disabled>Parent folder</button>
+                {% if can_manage_storage %}
+                    <button type="button" class="storage-button storage-button--accent" id="storageNewFolder" disabled>New Folder</button>
+                    <button type="button" class="storage-button storage-button--secondary" id="storageSetSource" disabled>Use current as source</button>
+                    <button type="button" class="storage-button storage-button--secondary" id="storageSetDestination" disabled>Use current as destination</button>
+                {% endif %}
+            </div>
+            <div class="storage-selection" id="storageMergeSelection" {% if not can_manage_storage %}hidden{% endif %}>
+                <div><span>Source</span><strong id="storageSourceLabel">Not selected</strong></div>
+                <div><span>Destination</span><strong id="storageDestinationLabel">Not selected</strong></div>
+                <button type="button" class="storage-button storage-button--merge" id="storageMerge" disabled>Merge Folders</button>
+            </div>
+            <p class="storage-status" id="storageStatus" role="status" aria-live="polite"></p>
+            <div class="storage-loading" id="storageLoading" hidden>Loading folder contents…</div>
+            <div class="storage-list-wrap">
+                <table class="storage-list">
+                    <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Size</th></tr></thead>
+                    <tbody id="storageEntries"><tr><td colspan="3" class="storage-empty">Select a location to view its contents.</td></tr></tbody>
+                </table>
+            </div>
+            <p class="storage-empty-note" id="storageEmpty" hidden>This folder is empty.</p>
+        </section>
+
+        {% if can_manage_storage_roots %}
+            <section class="storage-card storage-admin-roots">
+                <div class="storage-card__heading">
+                    <div><h2>Administrator root access</h2><p>Add an absolute folder path available to the Django server, or deactivate a root. This does not open a folder picker on the browser's computer.</p></div>
+                </div>
+                <form id="storageAddRoot" class="storage-root-form">
+                    {% csrf_token %}
+                    <label>Location name<input name="name" maxlength="100" required placeholder="Inspection images"></label>
+                    <label>Server folder path<input name="path" required placeholder="/mnt/shared/inspection-images"></label>
+                    <button class="storage-button storage-button--accent" type="submit">Authorize location</button>
+                </form>
+                {% if storage_roots %}
+                    <ul class="storage-root-list">
+                        {% for root in storage_roots %}
+                            <li><span><strong>{{ root.name }}</strong><code>{{ root.path }}</code></span>
+                                <form method="post" data-deactivate-root="{{ root.id }}">
+                                    {% csrf_token %}
+                                    <button class="storage-button storage-button--danger" type="submit">Deactivate</button>
+                                </form>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+            </section>
+        {% endif %}
+        <p class="storage-footnote">Folder merges transfer supported inspection image files and preserve the source folder. Existing destination files are never overwritten; filename collisions are given a unique suffix.</p>
+    {% endif %}
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+    <script src="{% static 'VisionInspection/js/storage_manager.js' %}?v=20261023-1" defer></script>
 {% endblock %}

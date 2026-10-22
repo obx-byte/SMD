@@ -239,9 +239,27 @@
     white-space: nowrap;
 }
 
+.vi-report-actions {
+    white-space: normal !important;
+}
+
+.vi-report-action-buttons {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 195px;
+}
+
 .vi-report-table th:last-child,
 .vi-report-table td:last-child {
     text-align: right;
+}
+
+@media (max-width: 1024px) {
+    .vi-report-action-buttons {
+        justify-content: flex-start;
+    }
 }
 
 .vi-report-footer {
@@ -436,23 +454,25 @@
     }
 
     .vi-report-print-table th:nth-child(1),
-    .vi-report-print-table td:nth-child(1) { width: 4%; }
+    .vi-report-print-table td:nth-child(1) { width: 3%; }
     .vi-report-print-table th:nth-child(2),
-    .vi-report-print-table td:nth-child(2) { width: 13%; }
+    .vi-report-print-table td:nth-child(2) { width: 8%; }
     .vi-report-print-table th:nth-child(3),
-    .vi-report-print-table td:nth-child(3) { width: 9%; }
+    .vi-report-print-table td:nth-child(3) { width: 13%; }
     .vi-report-print-table th:nth-child(4),
-    .vi-report-print-table td:nth-child(4) { width: 15%; }
+    .vi-report-print-table td:nth-child(4) { width: 8%; }
     .vi-report-print-table th:nth-child(5),
-    .vi-report-print-table td:nth-child(5) { width: 13%; }
+    .vi-report-print-table td:nth-child(5) { width: 14%; }
     .vi-report-print-table th:nth-child(6),
-    .vi-report-print-table td:nth-child(6) { width: 11%; }
+    .vi-report-print-table td:nth-child(6) { width: 13%; }
     .vi-report-print-table th:nth-child(7),
     .vi-report-print-table td:nth-child(7) { width: 10%; }
     .vi-report-print-table th:nth-child(8),
-    .vi-report-print-table td:nth-child(8),
+    .vi-report-print-table td:nth-child(8) { width: 9%; }
     .vi-report-print-table th:nth-child(9),
-    .vi-report-print-table td:nth-child(9) { width: 12.5%; }
+    .vi-report-print-table td:nth-child(9),
+    .vi-report-print-table th:nth-child(10),
+    .vi-report-print-table td:nth-child(10) { width: 11%; }
 
     .vi-report-print-result {
         display: inline-block;

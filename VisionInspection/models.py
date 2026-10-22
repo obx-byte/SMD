@@ -6,6 +6,7 @@ these models store inspection presets, ROIs, trigger zones, YOLO model metadata,
 and historical inspection logs.
 """
 
+from pathlib import Path
 import re
 import uuid
 
@@ -552,6 +553,7 @@ class VisionInspectionSession(models.Model):
         ("result", "Final Result"),
         ("saved", "Saved"),
         ("cancelled", "Cancelled"),
+        ("expired", "Expired"),
     )
     PENDING = "PENDING"
     IN_PROGRESS = "IN_PROGRESS"
@@ -767,6 +769,41 @@ class VisionInspectionPermissionOverride(models.Model):
     def __str__(self):
         decision = "grant" if self.granted else "deny"
         return f"{self.user.get_username()}: {decision} {self.permission.codename}"
+
+
+class AccessGroupProfile(models.Model):
+    """Application metadata and activation state for a Django auth Group."""
+
+    group = models.OneToOneField(
+        "auth.Group",
+        on_delete=models.CASCADE,
+        related_name="access_group_profile",
+    )
+    description = models.CharField(max_length=500, blank=True, default="")
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        "auth.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_access_group_profiles",
+    )
+    updated_by = models.ForeignKey(
+        "auth.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="updated_access_group_profiles",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vision_inspection_access_group_profile"
+        ordering = ("group__name",)
+
+    def __str__(self):
+        return self.group.name
 
 
 # =========================================================================== #
@@ -1248,6 +1285,30 @@ class StorageConfiguration(models.Model):
         return config
 
 
+class StorageManagerRoot(models.Model):
+    """Administrator-authorized server-side filesystem root for storage tools."""
+
+    name = models.CharField(max_length=100)
+    path = models.CharField(max_length=1000, unique=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        "auth.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="vision_storage_manager_roots",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vision_storage_manager_root"
+        ordering = ["name", "pk"]
+
+    def __str__(self):
+        return self.name
+
+
 class StorageImageMetadata(models.Model):
     """Tracks storage location and migration status for each inspection image.
 
@@ -1301,6 +1362,8 @@ class StorageImageMetadata(models.Model):
         max_length=50,
         help_text="Which ImageField this metadata tracks (e.g., 'inspection_image', 'front_image').",
     )
+    captured_at = models.DateTimeField(blank=True, null=True)
+    is_permanent_local = models.BooleanField(default=False)
 
     # Storage location
     storage_backend = models.CharField(max_length=10, choices=STORAGE_CHOICES, default=STORAGE_LOCAL)
@@ -1355,7 +1418,7 @@ class StorageImageMetadata(models.Model):
     def get_local_path(self):
         """Return the local filesystem path for this image."""
         from django.conf import settings
-        return settings.MEDIA_ROOT / self.relative_path
+        return Path(settings.MEDIA_ROOT) / self.relative_path
 
     def get_network_path(self):
         """Return the network filesystem path for this image."""
@@ -1487,7 +1550,3 @@ class StorageMigrationJob(models.Model):
 # =========================================================================== #
 #  End of Storage Models
 # =========================================================================== #
-
-
-
-

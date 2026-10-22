@@ -1,13 +1,13 @@
 {% extends "VisionInspection/ui/base.html" %}
 
-{% block title %}Employee Accounts{% endblock %}
-{% block header_title %}Employee Accounts{% endblock %}
+{% block title %}User Management{% endblock %}
+{% block header_title %}User Management{% endblock %}
 
 {% block content %}
 <div class="vi-page-header vi-account-page-header">
     <div>
-        <h2>Employee Accounts</h2>
-        <p>Create and manage employee access and roles</p>
+        <h2>User Management</h2>
+        <p>Create employee accounts and manage roles, Access Groups, and account status.</p>
     </div>
     {% if can_manage_permissions %}
     <a class="vi-btn vi-btn-secondary" href="{% url 'VisionInspection:user-management-permissions' %}">
@@ -50,10 +50,14 @@
                 </select>
                 <span class="vi-field-error" id="accountRoleError" hidden></span>
             </div>
-            <div class="vi-field vi-account-scope-field">
-                <label for="newAccountScope">Station Scope</label>
-                <input id="newAccountScope" name="scope" aria-describedby="scopeHelp">
-                <span class="vi-field-help" id="scopeHelp">For scoped access, enter station IDs separated by commas.</span>
+            <div class="vi-field">
+                <label for="newAccountGroup">Access Group <span class="vi-optional">(optional)</span></label>
+                <select id="newAccountGroup" name="access_group">
+                    <option value="">No Access Group</option>
+                    {% for access_group in access_groups %}
+                    <option value="{{ access_group.pk }}">{{ access_group.group.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
         </div>
         <div class="vi-account-form-actions">
@@ -66,16 +70,52 @@
     <div class="vi-account-card-heading">
         <div>
             <h3 id="accountListTitle">Current Accounts</h3>
-            <p>Manage employee status, role, station scope, and password access.</p>
+            <p>Manage employee roles, Access Groups, and password access.</p>
         </div>
     </div>
+    <form method="get" class="vi-account-filter-form">
+        <div class="vi-field">
+            <label for="accountSearch">Employee ID or name</label>
+            <input id="accountSearch" type="search" name="q" value="{{ query }}" placeholder="Search employee ID or name">
+        </div>
+        <div class="vi-field">
+            <label for="accountRoleFilter">Role</label>
+            <select id="accountRoleFilter" name="role">
+                <option value="">All roles</option>
+                {% for role in roles %}<option value="{{ role }}" {% if role_filter == role %}selected{% endif %}>{{ role }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="vi-field">
+            <label for="accountGroupFilter">Access Group</label>
+            <select id="accountGroupFilter" name="access_group">
+                <option value="">All groups</option>
+                {% for access_group in all_access_groups %}
+                <option value="{{ access_group.pk }}" {% if group_filter == access_group.pk|stringformat:"s" %}selected{% endif %}>{{ access_group.group.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="vi-field">
+            <label for="accountStatusFilter">Status</label>
+            <select id="accountStatusFilter" name="status">
+                <option value="">All statuses</option>
+                <option value="active" {% if status_filter == "active" %}selected{% endif %}>Active</option>
+                <option value="inactive" {% if status_filter == "inactive" %}selected{% endif %}>Inactive</option>
+            </select>
+        </div>
+        <div class="vi-account-filter-actions">
+            <button class="vi-btn vi-btn-secondary" type="submit">Search</button>
+            <a class="vi-btn vi-btn-secondary" href="{% url 'VisionInspection:user-management' %}">Reset</a>
+        </div>
+    </form>
     <div class="vi-table-wrap vi-account-table-wrap" tabindex="0" role="region" aria-label="Current employee accounts">
         <table class="vi-table vi-account-table">
             <thead>
                 <tr>
+                    <th scope="col">#</th>
                     <th scope="col">Employee ID</th>
                     <th scope="col">Display Name</th>
                     <th scope="col">Role</th>
+                    <th scope="col">Access Group</th>
                     <th scope="col">Status</th>
                     <th scope="col">Last Login</th>
                     <th scope="col">Actions</th>
@@ -84,12 +124,19 @@
             <tbody>
                 {% for account in users %}
                 <tr>
+                    <td>{{ forloop.counter0|add:page_obj.start_index }}</td>
                     <td class="vi-account-id">{{ account.username }}</td>
                     <td>{{ account.get_full_name|default:"—" }}</td>
                     <td>
                         <div class="vi-account-roles">
-                            {% for group in account.groups.all %}<span class="vi-role-badge">{{ group.name }}</span>{% empty %}<span class="vi-account-muted">Unassigned</span>{% endfor %}
+                            {% for role_name in account.role_names %}<span class="vi-role-badge">{{ role_name }}</span>{% empty %}<span class="vi-account-muted">Unassigned</span>{% endfor %}
                         </div>
+                    </td>
+                    <td>
+                        {% for group_name in account.access_group_names %}
+                            <span class="vi-role-badge">{{ group_name }}</span>
+                        {% empty %}<span class="vi-account-muted">—</span>
+                        {% endfor %}
                     </td>
                     <td>
                         <span class="vi-status-badge {% if account.is_active %}is-active{% else %}is-inactive{% endif %}">
@@ -99,14 +146,15 @@
                     <td>{{ account.last_login|date:"Y-m-d H:i"|default:"Never" }}</td>
                     <td class="vi-account-actions-cell">
                         <div class="vi-account-actions">
+                            <a class="vi-btn vi-btn-sm vi-btn-secondary" href="{% url 'VisionInspection:user-management-detail' account.pk %}">View</a>
+                            {% if not account.is_active %}
                             <form method="post" class="vi-account-action-form">
                                 {% csrf_token %}
                                 <input type="hidden" name="user_id" value="{{ account.pk }}">
-                                <input type="hidden" name="action" value="{% if account.is_active %}deactivate{% else %}activate{% endif %}">
-                                <button class="vi-btn vi-btn-sm {% if account.is_active %}vi-btn-danger{% else %}vi-account-activate{% endif %}" type="submit">
-                                    {% if account.is_active %}Deactivate{% else %}Activate{% endif %}
-                                </button>
+                                <input type="hidden" name="action" value="activate">
+                                <button class="vi-btn vi-btn-sm vi-account-activate" type="submit">Activate</button>
                             </form>
+                            {% endif %}
                             <form method="post" class="vi-account-action-form vi-account-role-form">
                                 {% csrf_token %}
                                 <input type="hidden" name="user_id" value="{{ account.pk }}">
@@ -115,9 +163,16 @@
                                 <select id="accountRole{{ account.pk }}" name="role">
                                     {% for role in roles %}<option value="{{ role }}" {% for group in account.groups.all %}{% if group.name == role %}selected{% endif %}{% endfor %}>{{ role }}</option>{% endfor %}
                                 </select>
-                                <label class="vi-sr-only" for="accountScope{{ account.pk }}">Station scope for {{ account.username }}</label>
-                                <input id="accountScope{{ account.pk }}" name="scope" placeholder="Station scope" value="{{ account.vision_inspection_profile.station_scope }}">
-                                <button class="vi-btn vi-btn-sm vi-btn-secondary" type="submit">Save Role</button>
+                                <label class="vi-sr-only" for="accountDisplayName{{ account.pk }}">Display name for {{ account.username }}</label>
+                                <input id="accountDisplayName{{ account.pk }}" name="display_name" placeholder="Display name" value="{{ account.get_full_name }}">
+                                <label class="vi-sr-only" for="accountGroup{{ account.pk }}">Access Group for {{ account.username }}</label>
+                                <select id="accountGroup{{ account.pk }}" name="access_group">
+                                    <option value="">No Access Group</option>
+                                    {% for access_group in access_groups %}
+                                    <option value="{{ access_group.pk }}" {% if account.access_group_id == access_group.pk %}selected{% endif %}>{{ access_group.group.name }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button class="vi-btn vi-btn-sm vi-btn-secondary" type="submit">Save Changes</button>
                             </form>
                             <form method="post" class="vi-account-action-form vi-account-reset-form">
                                 {% csrf_token %}
@@ -131,11 +186,22 @@
                     </td>
                 </tr>
                 {% empty %}
-                <tr><td class="vi-account-empty" colspan="6">No employee accounts yet.</td></tr>
+                <tr><td class="vi-account-empty" colspan="8">No employee accounts found.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
+    {% if page_obj.paginator.num_pages > 1 %}
+    <nav class="vi-account-pagination" aria-label="User list pages">
+        {% if page_obj.has_previous %}
+        <a class="vi-btn vi-btn-secondary" href="?q={{ query|urlencode }}&amp;role={{ role_filter|urlencode }}&amp;access_group={{ group_filter|urlencode }}&amp;status={{ status_filter|urlencode }}&amp;page={{ page_obj.previous_page_number }}">Previous</a>
+        {% endif %}
+        <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_next %}
+        <a class="vi-btn vi-btn-secondary" href="?q={{ query|urlencode }}&amp;role={{ role_filter|urlencode }}&amp;access_group={{ group_filter|urlencode }}&amp;status={{ status_filter|urlencode }}&amp;page={{ page_obj.next_page_number }}">Next</a>
+        {% endif %}
+    </nav>
+    {% endif %}
 </section>
 <script>
     document.addEventListener('DOMContentLoaded', function() {

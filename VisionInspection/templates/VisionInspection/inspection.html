@@ -4,7 +4,7 @@
 {% block title %}Airbag Stitch Inspection{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_workspace.css' %}?v=20261022-3">
+<link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_workspace.css' %}?v=20261022-7">
 {% endblock %}
 
 {% block header_title %}Airbag Stitch Inspection{% endblock %}
@@ -27,7 +27,6 @@
             </form>
             <div class="wf-scan-actions">
                 <button id="wfStartInspectionBtn" class="wf-button wf-primary" type="button" disabled>START INSPECTION</button>
-                <button id="wfReturnToInspectionBtn" class="wf-button" type="button" hidden>RETURN TO CURRENT INSPECTION</button>
                 <a id="wfPartConfigLink" class="wf-button wf-config-link" href="#" hidden>EDIT PART VISION SETTINGS</a>
             </div>
             <div class="wf-validation" aria-live="polite">
@@ -64,6 +63,7 @@
                 <strong class="wf-side-result is-pending" id="wfFrontResult" role="status" aria-live="polite">REQUEST PENDING</strong>
             </div>
             <div class="wf-camera-actions">
+                <button id="wfFrontRetryModel" class="wf-button wf-retry" type="button" hidden>RETRY INFERENCE</button>
                 <button id="wfFrontRetryCamera" class="wf-button wf-retry" type="button" hidden>RETRY CAMERA</button>
                 <button id="wfFrontSubmitBtn" class="wf-button wf-primary wf-submit" type="button" disabled>SUBMIT FRONT</button>
             </div>
@@ -90,6 +90,7 @@
                 <strong class="wf-side-result is-pending" id="wfBackResult" role="status" aria-live="polite">REQUEST PENDING</strong>
             </div>
             <div class="wf-camera-actions">
+                <button id="wfBackRetryModel" class="wf-button wf-retry" type="button" hidden>RETRY INFERENCE</button>
                 <button id="wfBackRetryCamera" class="wf-button wf-retry" type="button" hidden>RETRY CAMERA</button>
                 <button id="wfBackSubmitBtn" class="wf-button wf-primary wf-submit" type="button" disabled>SUBMIT BACK</button>
             </div>
@@ -129,6 +130,14 @@
 
     <div class="wf-error" id="wsError" role="alert" aria-live="assertive"></div>
 </div>
+<dialog class="wf-leave-dialog" id="wfLeaveDialog" aria-labelledby="wfLeaveTitle" aria-describedby="wfLeaveDescription">
+    <h2 id="wfLeaveTitle">Cancel this inspection?</h2>
+    <p id="wfLeaveDescription">Leaving now will cancel the active inspection. You will need to scan and validate the part again.</p>
+    <div class="wf-leave-actions">
+        <button id="wfStayInspectionBtn" class="wf-button" type="button">Stay on Inspection</button>
+        <button id="wfCancelLeaveBtn" class="wf-button wf-primary" type="button">Cancel Inspection and Leave</button>
+    </div>
+</dialog>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -156,5 +165,5 @@
         csrf: (document.cookie.split("; ").find(function (c) { return c.indexOf("csrftoken=") === 0; }) || "").split("=")[1] || ""
     };
 </script>
-<script src="{% static 'VisionInspection/js/inspection_workflow_ui.js' %}?v=20261017-2" defer></script>
+<script src="{% static 'VisionInspection/js/inspection_workflow_ui.js' %}?v=20261022-8" defer></script>
 {% endblock %}

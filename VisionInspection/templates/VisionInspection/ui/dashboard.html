@@ -4,7 +4,7 @@
 {% block title %}Dashboard — Airbag Stitch Inspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261022-1">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261022-2">
 {% endblock %}
 
 {% block header_title %}Dashboard{% endblock %}
@@ -94,7 +94,8 @@
                 <div class="vi-dash-donut"
                      style="--ok-sweep: {{ donut_ok_degrees }}deg; --classified-sweep: {{ donut_classified_degrees }}deg"
                      role="img"
-                     aria-label="Inspection outcomes: {{ summary.ok }} OK, {{ summary.not_ok }} NOT OK, {{ summary.incomplete_error }} other or incomplete, {{ summary.total }} total">
+                     title="{{ summary.ok }} OK ({{ summary.ok_pct|floatformat:'1' }}%), {{ summary.not_ok }} NOT OK ({{ summary.not_ok_pct|floatformat:'1' }}%), {{ summary.incomplete_error }} incomplete or error ({{ summary.incomplete_error_pct|floatformat:'1' }}%)"
+                     aria-label="Inspection outcomes: {{ summary.ok }} OK, {{ summary.not_ok }} NOT OK, {{ summary.incomplete_error }} incomplete or error, {{ summary.total }} total">
                     <div class="vi-dash-donut-hole">
                         <strong>{{ summary.total }}</strong>
                         <span>Inspections</span>
@@ -135,6 +136,7 @@
                 <div>
                     <p class="vi-dash-card-eyebrow">PRODUCTION BREAKDOWN</p>
                     <h3>Part Wise Inspection</h3>
+                    <p class="vi-dash-trend-period">Top 8 parts by inspection volume</p>
                 </div>
                 <div class="vi-dash-chart-key" aria-label="Chart legend">
                     <span><i class="is-ok"></i> OK</span>
@@ -179,6 +181,74 @@
                 </div>
             {% endif %}
         </article>
+
+        <article class="vi-card vi-dash-chart-card vi-dash-trend-card">
+            <header class="vi-dash-card-heading">
+                <div>
+                    <p class="vi-dash-card-eyebrow">RECENT QUALITY TREND</p>
+                    <h3>Daily Inspection Results</h3>
+                    {% if trend_period_start %}
+                    <p class="vi-dash-trend-period">
+                        {{ trend_period_start|date:"d M Y" }} – {{ trend_period_end|date:"d M Y" }}
+                        {% if selected_part %} · Part {{ selected_part }}{% endif %}
+                    </p>
+                    {% endif %}
+                </div>
+                <div class="vi-dash-chart-key" aria-label="Trend chart legend">
+                    <span><i class="is-ok"></i> OK</span>
+                    <span><i class="is-not-ok"></i> NOT OK</span>
+                </div>
+            </header>
+            {% if trend_has_results %}
+            <figure class="vi-dash-trend-figure">
+                <svg class="vi-dash-trend-svg"
+                     viewBox="0 0 600 175"
+                     preserveAspectRatio="none"
+                     role="img"
+                     aria-label="Daily inspection results from {{ trend_period_start|date:'d M Y' }} to {{ trend_period_end|date:'d M Y' }}. {{ trend_ok_total }} OK and {{ trend_not_ok_total }} NOT OK in this period.">
+                    {% for gridline in trend_grid %}
+                    <line x1="38" x2="588" y1="{{ gridline.y }}" y2="{{ gridline.y }}" class="vi-dash-trend-gridline"></line>
+                    <text x="30" y="{{ gridline.y|add:4 }}" class="vi-dash-trend-axis-label" text-anchor="end">{{ gridline.value }}</text>
+                    {% endfor %}
+                    <polyline points="{{ trend_ok_points }}" class="vi-dash-trend-line is-ok"></polyline>
+                    <polyline points="{{ trend_not_ok_points }}" class="vi-dash-trend-line is-not-ok"></polyline>
+                    {% for point in trend_rows %}
+                    <circle cx="{{ point.x }}" cy="{{ point.ok_y }}" r="3.5" class="vi-dash-trend-point is-ok">
+                        <title>{{ point.label }}: {{ point.ok }} OK</title>
+                    </circle>
+                    <circle cx="{{ point.x }}" cy="{{ point.not_ok_y }}" r="3.5" class="vi-dash-trend-point is-not-ok">
+                        <title>{{ point.label }}: {{ point.not_ok }} NOT OK</title>
+                    </circle>
+                    {% if point.show_label %}
+                    <text x="{{ point.x }}" y="162" class="vi-dash-trend-date-label" text-anchor="middle">{{ point.label }}</text>
+                    {% endif %}
+                    {% endfor %}
+                </svg>
+                <figcaption class="vi-sr-only">
+                    Daily OK and NOT OK counts for the recent timestamped records matching the selected dashboard filters.
+                    <table>
+                        <caption>Daily inspection results</caption>
+                        <thead><tr><th scope="col">Date</th><th scope="col">OK</th><th scope="col">NOT OK</th></tr></thead>
+                        <tbody>
+                            {% for point in trend_rows %}
+                            <tr><th scope="row">{{ point.date|date:"d M Y" }}</th><td>{{ point.ok }}</td><td>{{ point.not_ok }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </figcaption>
+            </figure>
+            {% elif trend_rows %}
+            <div class="vi-dash-empty vi-dash-trend-empty" role="status">
+                <strong>No OK or NOT OK results in this period</strong>
+                <p>Records in this range are incomplete or errors.</p>
+            </div>
+            {% else %}
+            <div class="vi-dash-empty vi-dash-trend-empty" role="status">
+                <strong>No trend data available</strong>
+                <p>Daily results will appear when timestamped inspections match these filters.</p>
+            </div>
+            {% endif %}
+        </article>
     </section>
 
     {% if show_recent_inspections %}
@@ -213,10 +283,10 @@
                         <td class="vi-dash-recent-time">{{ row.log.timestamp|date:"Y-m-d H:i" }}</td>
                         <td class="vi-dash-recent-part">{{ row.log.part_number|default:"—" }}</td>
                         <td class="vi-dash-recent-name" title="{{ row.part_name|default:'—' }}">{{ row.part_name|default:"—" }}</td>
-                        <td class="vi-dash-recent-employee">{{ row.employee_or_station|default:"—" }}</td>
-                        <td><span class="vi-badge {{ row.result_badge }}">{{ row.result_label }}</span></td>
-                        <td><span class="vi-badge {{ row.front_badge }}">{{ row.front_label|default:"—" }}</span></td>
-                        <td><span class="vi-badge {{ row.back_badge }}">{{ row.back_label|default:"—" }}</span></td>
+                        <td class="vi-dash-recent-employee" title="{{ row.employee_or_station|default:'—' }}">{{ row.employee_or_station|default:"—" }}</td>
+                        <td><span class="vi-badge {{ row.result_badge }}" title="{{ row.result_label }}">{{ row.result_label }}</span></td>
+                        <td><span class="vi-badge {{ row.front_badge }}" title="{{ row.front_label|default:'—' }}">{{ row.front_label|default:"—" }}</span></td>
+                        <td><span class="vi-badge {{ row.back_badge }}" title="{{ row.back_label|default:'—' }}">{{ row.back_label|default:"—" }}</span></td>
                     </tr>
                     {% endfor %}
                 </tbody>

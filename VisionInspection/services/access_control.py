@@ -1,4 +1,5 @@
 from functools import wraps
+import uuid
 
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
@@ -21,6 +22,8 @@ PERMISSION_CATALOG = (
     ("view_inspection_dashboard", "Dashboard", "View"),
     ("perform_inspection", "Start Inspection", "Perform"),
     ("view_inspection_reports", "Inspection Report", "View"),
+    ("view_inspection_history", "Inspection History", "View"),
+    ("view_inspection_logs", "Inspection Logs", "View"),
     ("export_inspection_reports", "Inspection Report", "Export"),
     ("view_master_data", "Master Data", "View"),
     ("create_master_data", "Master Data", "Create"),
@@ -67,6 +70,52 @@ DEFAULT_ROLE_PERMISSIONS = {
     },
 }
 
+ROLE_PERMISSION_ROWS = (
+    ("Home", "Dashboard", "View", "view_inspection_dashboard"),
+    ("Master Data", "Add Part / Add Employee", "Create", "create_master_data"),
+    ("Master Data", "View Parts / View Employees", "View", "view_master_data"),
+    ("Master Data", "Parts / Employees", "Edit", "change_master_data"),
+    ("Master Data", "Parts / Employees", "Delete", "delete_master_data"),
+    ("Vision Inspection", "Start Inspection", "Perform", "perform_inspection"),
+    ("Vision Inspection", "Part Vision Setup", "View", "view_part_vision_configuration"),
+    ("Vision Inspection", "Part Vision Setup", "Configure", "change_part_vision_configuration"),
+    ("AI / Models", "YOLO Models", "View", "view_yolo_models"),
+    ("AI / Models", "YOLO Models", "Manage", "manage_yolo_models"),
+    ("AI / Models", "Training Jobs", "View", "view_training_jobs"),
+    ("AI / Models", "Training Jobs", "Manage", "manage_training_jobs"),
+    ("Configuration", "Storage Settings / Settings", "View", "view_storage_settings"),
+    ("Configuration", "Storage Settings / Settings", "Configure", "change_storage_settings"),
+    ("Configuration", "Camera Setup", "View", "view_camera_setup"),
+    ("Configuration", "Camera Setup", "Configure", "change_camera_roi_settings"),
+    ("Configuration", "Model Configuration", "View", "view_model_configuration"),
+    ("Configuration", "Model Configuration", "Configure", "change_model_configuration"),
+    ("Configuration", "Approved Models", "View", "view_approved_models"),
+    ("Configuration", "Approved Models", "Manage", "manage_approved_models"),
+    ("Configuration", "User Management / Access Groups", "Manage users", "manage_inspection_users"),
+    ("Configuration", "Role Permissions", "Manage permissions", "manage_inspection_permissions"),
+    ("Reports", "Inspection Report", "View", "view_inspection_reports"),
+    ("Reports", "Inspection Report", "Export", "export_inspection_reports"),
+)
+
+ADMIN_ONLY_PERMISSION_CODENAMES = frozenset(
+    ("manage_inspection_users", "manage_inspection_permissions")
+)
+
+SCREEN_PERMISSION_GROUPS = tuple(
+    (
+        module,
+        tuple(
+            dict.fromkeys(
+                codename
+                for row_module, _, _, codename in ROLE_PERMISSION_ROWS
+                if row_module == module
+                and codename not in ADMIN_ONLY_PERMISSION_CODENAMES
+            )
+        ),
+    )
+    for module in dict.fromkeys(row[0] for row in ROLE_PERMISSION_ROWS)
+)
+
 
 def roles(user):
     if not user.is_authenticated or not user.is_active:
@@ -110,7 +159,19 @@ def has_permission(user, codename):
     if override is not None:
         cache[codename] = override
     else:
-        cache[codename] = user.has_perm(f"vision_inspection.{codename}")
+        permission_filter = {
+            "content_type__app_label": "vision_inspection",
+            "codename": codename,
+        }
+        direct_grant = user.user_permissions.filter(**permission_filter).exists()
+        active_group_grant = user.groups.filter(
+            permissions__content_type__app_label="vision_inspection",
+            permissions__codename=codename,
+        ).filter(
+            Q(access_group_profile__isnull=True)
+            | Q(access_group_profile__is_active=True)
+        ).exists()
+        cache[codename] = direct_grant or active_group_grant
     return cache[codename]
 
 
@@ -153,9 +214,7 @@ def can_view_log(user, log):
         return can_view_session(user, log.session)
     if ROLE_OPERATOR in roles(user):
         return log.operator_id == user.pk
-    return has_permission(user, "view_inspection_reports") or has_permission(
-        user, "view_inspection_history"
-    )
+    return False
 
 
 def _forbidden(request):
@@ -206,6 +265,12 @@ require_dashboard_access = require_permission("view_inspection_dashboard")
 require_report_access = require_permission("view_inspection_reports")
 require_report_export = require_permission("export_inspection_reports")
 require_history_access = require_permission("view_inspection_history")
+require_inspection_evidence_access = require_permission(
+    predicate=lambda user: (
+        has_permission(user, "view_inspection_reports")
+        or has_permission(user, "view_inspection_history")
+    )
+)
 require_master_data_view = require_permission("view_master_data")
 require_master_data_create = require_permission("create_master_data")
 require_master_data_change = require_permission("change_master_data")
@@ -248,12 +313,17 @@ require_system_settings_change = require_permission("change_system_settings")
 def require_master_data_page(view):
     @wraps(view)
     def wrapped(request, *args, **kwargs):
-        codename = (
-            "create_master_data"
-            if request.GET.get("action") == "add"
-            else "view_master_data"
-        )
-        return require_permission(codename)(view)(request, *args, **kwargs)
+        if request.GET.get("action") == "add":
+            return require_permission("create_master_data")(view)(
+                request, *args, **kwargs
+            )
+        return require_permission(
+            predicate=lambda user: (
+                is_admin(user)
+                or has_permission(user, "view_master_data")
+                or has_permission(user, "view_part_vision_configuration")
+            )
+        )(view)(request, *args, **kwargs)
 
     return wrapped
 
@@ -292,8 +362,12 @@ def _session_allowed(request, mutation=False):
 
             raw = json.loads(request.body.decode("utf-8")).get("session_id")
         except (UnicodeDecodeError, ValueError, AttributeError):
-            raw = None
+            raw = request.POST.get("session_id")
     if not raw:
+        return False
+    try:
+        raw = uuid.UUID(str(raw))
+    except (TypeError, ValueError, AttributeError):
         return False
     session = VisionInspectionSession.objects.filter(session_id=raw).first()
     if session is None:

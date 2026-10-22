@@ -12,141 +12,107 @@
     <header class="vi-permissions-heading">
         <div>
             <h1>Role Permissions</h1>
-            <p>Configure default role access and account-specific exceptions.</p>
+            <p>Choose which existing application screens each role can access.</p>
         </div>
-        <a class="vi-permissions-button vi-permissions-button--secondary"
-           href="{% url 'VisionInspection:user-management' %}">Employee accounts</a>
     </header>
 
-    <section class="vi-permissions-panel" aria-labelledby="role-defaults-heading">
+    <section class="vi-permissions-panel" aria-labelledby="role-permissions-heading">
         <div class="vi-permissions-panel__heading">
             <div>
-                <h2 id="role-defaults-heading">Default role access</h2>
-                <p>Admin always has full access. Operator and Supervisor defaults can be changed here.</p>
+                <h2 id="role-permissions-heading">Screen access</h2>
+                {% if role_is_admin %}
+                <p>Administrator access is always full and cannot be reduced here.</p>
+                {% else %}
+                <p>These defaults apply to role members unless an existing individual override changes access.</p>
+                {% endif %}
             </div>
         </div>
 
-        {% for role in roles %}
-            <form class="vi-permissions-role" method="post">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="save_role_permissions">
-                <input type="hidden" name="role" value="{{ role.name }}">
-                <div class="vi-permissions-role__heading">
-                    <div>
-                        <h3>{{ role.name }}</h3>
-                        {% if role.editable %}
-                            <p>Changes apply to all users in this role unless an account override is set.</p>
-                        {% else %}
-                            <p>Administrative permissions are fixed and cannot be edited from this matrix.</p>
-                        {% endif %}
-                    </div>
-                    {% if role.editable %}
-                        <button class="vi-permissions-button vi-permissions-button--primary" type="submit">
-                            Save {{ role.name }} defaults
-                        </button>
-                    {% else %}
-                        <span class="vi-permissions-fixed-label">Full access</span>
-                    {% endif %}
-                </div>
-
-                <div class="vi-permissions-table-wrap">
-                    <table class="vi-permissions-table">
-                        <thead>
-                            <tr>
-                                <th scope="col">Module</th>
-                                <th scope="col">Access</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in permission_rows %}
-                                <tr>
-                                    <th scope="row">
-                                        <span class="vi-permissions-module">{{ item.module }}</span>
-                                        <span class="vi-permissions-action">{{ item.action }}</span>
-                                    </th>
-                                    <td>
-                                        <label class="vi-permissions-checkbox">
-                                            <input type="checkbox"
-                                                   name="permission_{{ role.key }}"
-                                                   value="{{ item.codename }}"
-                                                   {% if item.codename in role.permissions %}checked{% endif %}
-                                                   {% if not role.editable %}disabled{% endif %}>
-                                            <span>{% if role.editable %}Allow{% else %}Allowed{% endif %}</span>
-                                        </label>
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </form>
-        {% endfor %}
-    </section>
-
-    <section class="vi-permissions-panel" aria-labelledby="user-overrides-heading">
-        <div class="vi-permissions-panel__heading">
-            <div>
-                <h2 id="user-overrides-heading">Account access overrides</h2>
-                <p>Grant or deny an individual Operator or Supervisor access beyond the role defaults. Inherit keeps the default.</p>
-            </div>
-        </div>
-
-        <form class="vi-permissions-user-picker" method="get">
-            <label for="permission-user">Operator or Supervisor account</label>
-            <select id="permission-user" name="user_id">
-                <option value="">Choose an account</option>
-                {% for target_user in manageable_users %}
-                    <option value="{{ target_user.pk }}" {% if selected_user and selected_user.pk == target_user.pk %}selected{% endif %}>
-                        {{ target_user.get_username }}{% if target_user.get_full_name %} — {{ target_user.get_full_name }}{% endif %} ({{ target_user.groups.all|join:", " }})
-                    </option>
+        <form method="get" id="roleSelectorForm" class="vi-permissions-user-picker">
+            <label for="roleSelector">Role</label>
+            <select id="roleSelector" name="role">
+                {% for role in roles %}
+                <option value="{{ role }}" {% if role == selected_role %}selected{% endif %}>{{ role }}</option>
                 {% endfor %}
             </select>
-            <button class="vi-permissions-button vi-permissions-button--secondary" type="submit">Load account</button>
         </form>
 
-        {% if selected_user %}
-            <form method="post">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="save_user_overrides">
-                <input type="hidden" name="user_id" value="{{ selected_user.pk }}">
-                <div class="vi-permissions-table-wrap">
-                    <table class="vi-permissions-table vi-permissions-table--overrides">
-                        <thead>
-                            <tr>
-                                <th scope="col">Module</th>
-                                <th scope="col">Override</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in permission_rows %}
-                                <tr>
-                                    <th scope="row">
-                                        <span class="vi-permissions-module">{{ item.module }}</span>
-                                        <span class="vi-permissions-action">{{ item.action }}</span>
-                                    </th>
-                                    <td>
-                                        <select name="override_{{ item.codename }}" aria-label="{{ item.module }}: {{ item.action }} override">
-                                            <option value="inherit" {% if item.decision == "inherit" %}selected{% endif %}>Inherit role default</option>
-                                            <option value="grant" {% if item.decision == "grant" %}selected{% endif %}>Grant access</option>
-                                            <option value="deny" {% if item.decision == "deny" %}selected{% endif %}>Deny access</option>
-                                        </select>
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                <div class="vi-permissions-submit-row">
-                    <button class="vi-permissions-button vi-permissions-button--primary" type="submit">
-                        Save account overrides
-                    </button>
-                </div>
-            </form>
-        {% elif not manageable_users %}
-            <p class="vi-permissions-empty">There are no Operator or Supervisor accounts to configure.</p>
-        {% else %}
-            <p class="vi-permissions-empty">Choose an account to manage individual access.</p>
-        {% endif %}
+        <p id="permission-change-state" class="vi-permissions-change-state" role="status" aria-live="polite">No unsaved changes.</p>
+        <form method="post" id="rolePermissionForm">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="save_role_permissions">
+            <input type="hidden" name="role" value="{{ selected_role }}">
+            <div class="vi-permissions-table-wrap">
+                <table class="vi-permissions-table vi-screen-permissions-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Screen</th>
+                            <th scope="col">Sub Screen</th>
+                            <th scope="col">Select</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in permission_rows %}
+                        <tr>
+                            <td>{{ item.module }}</td>
+                            <th scope="row">{{ item.screen }} — {{ item.action }}</th>
+                            <td>
+                                <label class="vi-permissions-checkbox">
+                                    <input type="checkbox" name="permission" value="{{ item.codename }}"
+                                           {% if item.checked %}checked{% endif %}
+                                           {% if item.locked %}disabled{% endif %}
+                                           aria-label="{{ item.module }}: {{ item.screen }} — {{ item.action }}">
+                                    <span>{% if item.checked %}Allowed{% else %}Allow{% endif %}</span>
+                                </label>
+                                {% if item.locked and not role_is_admin %}
+                                <span class="vi-permissions-action">Administrator-only</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="vi-permissions-submit-row">
+                <button class="vi-permissions-button vi-permissions-button--primary" type="submit" {% if role_is_admin %}disabled{% endif %}>
+                    Save Changes
+                </button>
+            </div>
+        </form>
     </section>
 </div>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        var roleForm = document.getElementById('roleSelectorForm');
+        var selector = document.getElementById('roleSelector');
+        var form = document.getElementById('rolePermissionForm');
+        var state = document.getElementById('permission-change-state');
+        if (!roleForm || !selector || !form || !state) return;
+
+        var checkboxes = Array.from(form.querySelectorAll('input[name="permission"]'));
+        var initial = checkboxes.map(function (input) { return input.checked; });
+        function isDirty() {
+            return checkboxes.some(function (input, index) {
+                return input.checked !== initial[index];
+            });
+        }
+        function updateState() {
+            state.textContent = isDirty() ? 'Unsaved changes.' : 'No unsaved changes.';
+        }
+
+        checkboxes.forEach(function (input) {
+            input.addEventListener('change', updateState);
+        });
+        selector.addEventListener('change', function () {
+            if (isDirty() && !window.confirm('Discard unsaved permission changes and switch roles?')) {
+                selector.value = '{{ selected_role|escapejs }}';
+                return;
+            }
+            roleForm.submit();
+        });
+        form.addEventListener('submit', function () {
+            state.textContent = 'Saving changes.';
+        });
+    });
+</script>
 {% endblock %}

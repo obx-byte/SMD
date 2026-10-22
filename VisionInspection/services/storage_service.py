@@ -4,6 +4,7 @@ import hashlib
 import logging
 import ntpath
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -22,13 +23,18 @@ from VisionInspection.models import (
     StorageConfiguration,
     StorageDestination,
     StorageImageMetadata,
+    StorageManagerRoot,
     StorageMigrationJob,
     StorageTransferHistory,
+    VisionInspectionAuditLog,
+    VisionInspectionLog,
+    VisionInspectionSession,
 )
 
 logger = logging.getLogger(__name__)
 CHUNK_SIZE = 256 * 1024
 CREDENTIAL_PREFIX = "fernet:v1:"
+STORAGE_MANAGER_MAX_FILES = 1000
 
 
 class StorageOperationError(Exception):
@@ -88,6 +94,467 @@ def safe_relative_path(value):
     if "\x00" in value:
         raise StorageOperationError("Destination directory contains an invalid character.")
     return "/".join(path.parts)
+
+
+def _storage_manager_root(root_id):
+    try:
+        record = StorageManagerRoot.objects.get(pk=int(root_id), is_active=True)
+    except (StorageManagerRoot.DoesNotExist, TypeError, ValueError) as exc:
+        raise StorageOperationError("Choose an authorized storage root.") from exc
+    path = Path(record.path).expanduser()
+    if not path.is_absolute():
+        raise StorageOperationError("The authorized storage root is invalid.")
+    try:
+        root = path.resolve(strict=True)
+    except OSError as exc:
+        raise StorageOperationError(
+            "An authorized storage root is unavailable on this Django host."
+        ) from exc
+    if not root.is_dir():
+        raise StorageOperationError("The configured storage root is not a directory.")
+    if root != Path(os.path.abspath(path)):
+        raise StorageOperationError("The authorized storage root cannot be reached through a symbolic link.")
+    return record, root
+
+
+def storage_manager_roots():
+    roots = []
+    for record in StorageManagerRoot.objects.filter(is_active=True):
+        try:
+            _, root = _storage_manager_root(record.pk)
+        except StorageOperationError:
+            roots.append({
+                "id": record.pk, "name": record.name, "path": record.path,
+                "available": False,
+            })
+            continue
+        roots.append({
+            "id": record.pk, "name": record.name, "path": str(root),
+            "available": True,
+        })
+    return roots
+
+
+def storage_manager_add_root(name, path, actor):
+    label = str(name or "").strip()
+    candidate = Path(str(path or "").strip()).expanduser()
+    if not label or len(label) > 100 or any(ord(char) < 32 for char in label):
+        raise StorageOperationError("Enter a valid root name.")
+    if not candidate.is_absolute():
+        raise StorageOperationError("Choose an absolute folder on the Django host.")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise StorageOperationError(
+            "The selected folder is unavailable on this Django host."
+        ) from exc
+    if not resolved.is_dir():
+        raise StorageOperationError("The selected root must be a folder.")
+    if resolved == Path(resolved.anchor):
+        raise StorageOperationError("A filesystem or drive root cannot be authorized directly.")
+    with transaction.atomic():
+        root, created = StorageManagerRoot.objects.get_or_create(
+            path=str(resolved),
+            defaults={"name": label, "created_by": actor, "is_active": True},
+        )
+        if not created:
+            root.name = label
+            root.is_active = True
+            root.created_by = actor
+            root.save(update_fields=["name", "is_active", "created_by", "updated_at"])
+        try:
+            _audit_storage_manager(
+                actor, "storage_root_added",
+                {"root_id": root.pk, "root_name": label, "root": str(resolved)},
+            )
+        except Exception:
+            if created:
+                root.delete()
+            raise
+    return root
+
+
+def storage_manager_deactivate_root(root_id, actor):
+    try:
+        record = StorageManagerRoot.objects.get(pk=int(root_id), is_active=True)
+    except (StorageManagerRoot.DoesNotExist, TypeError, ValueError) as exc:
+        raise StorageOperationError("Choose an active authorized root.") from exc
+    with transaction.atomic():
+        record.is_active = False
+        record.save(update_fields=["is_active", "updated_at"])
+        _audit_storage_manager(
+            actor, "storage_root_deactivated",
+            {"root_id": record.pk, "root_name": record.name},
+        )
+    return record
+
+
+def _manager_path(root, relative_path="", require_exists=False):
+    relative = safe_relative_path(relative_path)
+    candidate = root.joinpath(*relative.split("/")) if relative else root
+    current = root
+    for part in relative.split("/") if relative else ():
+        current = current / part
+        if current.is_symlink():
+            raise StorageOperationError("Symbolic links are not allowed in managed folders.")
+    try:
+        resolved = candidate.resolve(strict=require_exists)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise StorageOperationError("The requested path is unavailable or outside its authorized root.") from exc
+    return resolved
+
+
+def storage_manager_browse(root_id, relative_path=""):
+    record, root = _storage_manager_root(root_id)
+    directory = _manager_path(root, relative_path, require_exists=True)
+    if not directory.is_dir():
+        raise StorageOperationError("Choose a folder to browse.")
+    entries = []
+    try:
+        children = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold()))
+        for child in children[:500]:
+            if child.is_symlink():
+                continue
+            stat = child.stat()
+            entries.append({
+                "name": child.name,
+                "path": child.relative_to(root).as_posix(),
+                "type": "directory" if child.is_dir() else "file",
+                "size": stat.st_size if child.is_file() else None,
+            })
+    except OSError as exc:
+        raise StorageOperationError("The selected folder could not be read.") from exc
+    return {
+        "root": {"id": record.pk, "name": record.name, "path": str(root)},
+        "path": directory.relative_to(root).as_posix(),
+        "entries": entries,
+        "truncated": len(children) > 500,
+    }
+
+
+def _audit_storage_manager(actor, action, details):
+    VisionInspectionAuditLog.objects.create(
+        actor=actor if getattr(actor, "is_authenticated", False) else None,
+        action=action,
+        target_type="StorageManager",
+        target_id=str(details.get("root_id", ""))[:100],
+        details=details,
+    )
+
+
+def storage_manager_create_folder(root_id, parent_path, folder_name, actor):
+    record, root = _storage_manager_root(root_id)
+    name = str(folder_name or "").strip()
+    reserved = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.I)
+    if (
+        not name or name in (".", "..") or ".." in name or len(name) > 120
+        or any(char in name for char in ("/", "\\", "\x00", "<", ">", ":", '"', "|", "?", "*"))
+        or name.endswith((".", " ")) or reserved.match(name)
+        or any(ord(char) < 32 for char in name)
+    ):
+        raise StorageOperationError("Enter a valid folder name without path or reserved characters.")
+    parent = _manager_path(root, parent_path, require_exists=True)
+    if not parent.is_dir():
+        raise StorageOperationError("Choose a parent folder.")
+    target = _manager_path(root, "/".join(filter(None, (parent_path, name))))
+    try:
+        with transaction.atomic():
+            target.mkdir()
+            _audit_storage_manager(actor, "storage_folder_created", {
+                "root_id": record.pk,
+                "root": str(root),
+                "path": target.relative_to(root).as_posix(),
+            })
+    except FileExistsError as exc:
+        raise StorageOperationError("A file or folder with that name already exists.") from exc
+    except OSError as exc:
+        raise StorageOperationError("The folder could not be created.") from exc
+    except Exception:
+        try:
+            target.rmdir()
+        except OSError:
+            logger.exception("Could not roll back folder creation at %s", target)
+        raise
+    return {"path": target.relative_to(root).as_posix()}
+
+
+def _sha256_path(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while True:
+            block = source.read(CHUNK_SIZE)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _metadata_local_path(metadata):
+    if metadata.storage_backend != StorageImageMetadata.STORAGE_LOCAL:
+        return None
+    if metadata.destination:
+        if metadata.destination.destination_type != StorageDestination.DEST_TYPE_LOCAL:
+            return None
+        base = _local_root(metadata.destination)
+    else:
+        base = Path(settings.MEDIA_ROOT)
+    return (base / safe_relative_path(metadata.relative_path)).resolve()
+
+
+def storage_manager_merge(root_id, source_path, destination_path, actor):
+    record, root = _storage_manager_root(root_id)
+    source = _manager_path(root, source_path, require_exists=True)
+    destination = _manager_path(root, destination_path, require_exists=True)
+    if not source.is_dir() or not destination.is_dir():
+        raise StorageOperationError("Source and destination must both be folders.")
+    if source == destination or source in destination.parents or destination in source.parents:
+        raise StorageOperationError("Choose separate folders that are not nested within one another.")
+
+    files = []
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+    try:
+        def raise_walk_error(error):
+            raise error
+
+        for current, dir_names, file_names in os.walk(
+            source, followlinks=False, onerror=raise_walk_error
+        ):
+            current_path = Path(current)
+            for name in list(dir_names):
+                entry = current_path / name
+                if entry.is_symlink():
+                    raise StorageOperationError("Symbolic links are not allowed in managed folders.")
+            for name in file_names:
+                entry = current_path / name
+                if (
+                    entry.is_symlink()
+                    or not entry.is_file()
+                    or entry.suffix.casefold() not in allowed_extensions
+                ):
+                    raise StorageOperationError(
+                        "Merge stopped at unsupported file "
+                        + entry.relative_to(root).as_posix()
+                        + ". Only regular inspection image files can be merged."
+                    )
+                files.append(entry)
+                if len(files) > STORAGE_MANAGER_MAX_FILES:
+                    raise StorageOperationError(
+                        f"A merge is limited to {STORAGE_MANAGER_MAX_FILES} files at a time."
+                    )
+    except OSError as exc:
+        raise StorageOperationError("The source folder could not be read.") from exc
+
+    plan = []
+    for source_file in files:
+        suffix = source_file.relative_to(source)
+        target = destination / suffix
+        try:
+            target.resolve(strict=False).relative_to(root)
+        except ValueError as exc:
+            raise StorageOperationError("A merge target escapes the authorized root.") from exc
+        if target.exists():
+            if target.is_file() and _sha256_path(source_file) == _sha256_path(target):
+                duplicate = True
+            else:
+                target = target.with_name(
+                    f"{target.stem}_merged_{uuid.uuid4().hex[:10]}{target.suffix}"
+                )
+                while target.exists():
+                    target = target.with_name(
+                        f"{target.stem}_merged_{uuid.uuid4().hex[:10]}{target.suffix}"
+                    )
+                duplicate = False
+        else:
+            duplicate = False
+        plan.append((source_file, target, duplicate))
+
+    metadata_by_source = {}
+    for metadata in StorageImageMetadata.objects.select_related(
+        "destination", "inspection_log", "inspection_session"
+    ).iterator(chunk_size=500):
+        try:
+            stored_path = _metadata_local_path(metadata)
+        except (OSError, StorageOperationError):
+            continue
+        if stored_path is not None:
+            metadata_by_source.setdefault(stored_path, []).append(metadata)
+
+    media_root = Path(settings.MEDIA_ROOT).resolve()
+    image_field_references = {}
+    for record_id, field_value in VisionInspectionLog.objects.exclude(
+        inspection_image=""
+    ).values_list("pk", "inspection_image").iterator(chunk_size=1000):
+        if field_value:
+            image_field_references.setdefault(
+                (media_root / field_value).resolve(), []
+            ).append((VisionInspectionLog, record_id, "inspection_image"))
+    session_image_fields = (
+        "front_image", "back_image", "front_annotated", "back_annotated",
+        "front_roi_image", "back_roi_image",
+    )
+    session_values = ("pk",) + session_image_fields
+    for row in VisionInspectionSession.objects.values_list(*session_values).iterator(
+        chunk_size=1000
+    ):
+        record_id = row[0]
+        for field_name, field_value in zip(session_image_fields, row[1:]):
+            if field_value:
+                image_field_references.setdefault(
+                    (media_root / field_value).resolve(), []
+                ).append((VisionInspectionSession, record_id, field_name))
+
+    copied = []
+    created_directories = set()
+    processing_file = None
+    try:
+        for position, (source_file, target, duplicate) in enumerate(plan):
+            processing_file = source_file
+            parent = target.parent
+            missing = []
+            while not parent.exists() and parent != root:
+                missing.append(parent)
+                parent = parent.parent
+            for directory in reversed(missing):
+                directory.mkdir()
+                created_directories.add(directory)
+            if duplicate and (
+                not target.is_file()
+                or _sha256_path(source_file) != _sha256_path(target)
+            ):
+                target = target.with_name(
+                    f"{target.stem}_merged_{uuid.uuid4().hex[:10]}{target.suffix}"
+                )
+                while target.exists():
+                    target = target.with_name(
+                        f"{target.stem}_merged_{uuid.uuid4().hex[:10]}{target.suffix}"
+                    )
+                duplicate = False
+                plan[position] = (source_file, target, duplicate)
+            if not duplicate:
+                if source_file.is_symlink() or not source_file.is_file():
+                    raise StorageOperationError(
+                        f"Source image {source_file.relative_to(root).as_posix()} changed during the merge."
+                    )
+                while True:
+                    try:
+                        with source_file.open("rb") as source_stream, target.open("xb") as target_stream:
+                            shutil.copyfileobj(source_stream, target_stream, CHUNK_SIZE)
+                        copied.append((source_file, target))
+                        shutil.copystat(source_file, target)
+                        break
+                    except FileExistsError:
+                        target = target.with_name(
+                            f"{target.stem}_merged_{uuid.uuid4().hex[:10]}{target.suffix}"
+                        )
+                        plan[position] = (source_file, target, False)
+                    except Exception:
+                        try:
+                            target.unlink()
+                        except OSError:
+                            logger.exception("Could not remove partial merge file %s", target)
+                        raise
+                if _sha256_path(source_file) != _sha256_path(target):
+                    raise StorageOperationError(
+                        f"Copied image {source_file.relative_to(root).as_posix()} failed verification."
+                    )
+
+        with transaction.atomic():
+            metadata_updates = []
+            field_updates = []
+            for source_file, target, _duplicate in plan:
+                processing_file = source_file
+                old_metadata = metadata_by_source.get(source_file.resolve(), ())
+                for old in old_metadata:
+                    locked = StorageImageMetadata.objects.select_for_update().get(pk=old.pk)
+                    if locked.relative_path != old.relative_path:
+                        raise StorageOperationError(
+                            "An image reference changed during merge; the operation was rolled back."
+                        )
+                    base = (
+                        _local_root(locked.destination)
+                        if locked.destination_id
+                        else Path(settings.MEDIA_ROOT).resolve()
+                    )
+                    try:
+                        new_relative = target.resolve().relative_to(base.resolve()).as_posix()
+                    except ValueError as exc:
+                        raise StorageOperationError(
+                            "A referenced image cannot be represented relative to its storage root."
+                        ) from exc
+                    locked.relative_path = new_relative
+                    locked.save(update_fields=["relative_path", "updated_at"])
+                    metadata_updates.append(locked.pk)
+                field_references = image_field_references.get(source_file.resolve(), ())
+                if field_references:
+                    try:
+                        relative_target = target.resolve().relative_to(media_root).as_posix()
+                    except ValueError as exc:
+                        raise StorageOperationError(
+                            "An inspection image cannot be moved outside the media storage root."
+                        ) from exc
+                    for model, record_id, field_name in field_references:
+                        model.objects.filter(pk=record_id).update(**{field_name: relative_target})
+                        field_updates.append((model._meta.label, record_id, field_name))
+            _audit_storage_manager(actor, "storage_folders_merged", {
+                "root_id": record.pk,
+                "root": str(root),
+                "source": source.relative_to(root).as_posix(),
+                "destination": destination.relative_to(root).as_posix(),
+                "file_count": len(plan),
+                "metadata_updated": len(metadata_updates),
+                "image_fields_updated": len(field_updates),
+            })
+    except Exception as exc:
+        rollback_failures = []
+        for _source_path, new_path in reversed(copied):
+            try:
+                if new_path.exists():
+                    new_path.unlink()
+            except OSError:
+                logger.exception("Could not roll back storage merge file %s", new_path)
+                rollback_failures.append(new_path.relative_to(root).as_posix())
+        for directory in sorted(created_directories, key=lambda path: len(path.parts), reverse=True):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        if rollback_failures:
+            raise StorageOperationError(
+                "Merge failed and these destination files could not be rolled back: "
+                + ", ".join(rollback_failures)
+            ) from exc
+        if isinstance(exc, StorageOperationError):
+            raise
+        if processing_file is not None:
+            raise StorageOperationError(
+                "Merge failed while processing "
+                + processing_file.relative_to(root).as_posix()
+                + ". Source files were retained."
+            ) from exc
+        raise
+
+    source_files_retained = 0
+    source_files_retained_paths = []
+    for source_file, _target, duplicate in plan:
+        if duplicate:
+            source_files_retained += 1
+            source_files_retained_paths.append(source_file.relative_to(root).as_posix())
+            continue
+        try:
+            source_file.unlink()
+        except OSError:
+            source_files_retained += 1
+            source_files_retained_paths.append(source_file.relative_to(root).as_posix())
+            logger.warning("Verified source image remains after merge: %s", source_file)
+    return {
+        "file_count": len(plan),
+        "metadata_updated": len(metadata_updates),
+        "source_removed": False,
+        "source_files_retained": source_files_retained,
+        "source_files_retained_paths": source_files_retained_paths,
+        "destination": str(destination),
+    }
 
 
 def validate_destination_payload(payload):
@@ -443,6 +910,7 @@ def storage_state():
     pending = StorageImageMetadata.objects.filter(
         storage_backend=StorageImageMetadata.STORAGE_LOCAL,
         destination__isnull=True,
+        is_permanent_local=False,
     ).filter(Q(migration_status__in=(StorageImageMetadata.MIGRATION_PENDING, StorageImageMetadata.MIGRATION_FAILED)))
     if active:
         pending = pending.filter(Q(migration_destination__isnull=True) | Q(migration_destination=active))
@@ -567,6 +1035,74 @@ def register_image(instance, field_name, payload, filename):
     return metadata
 
 
+def register_inspection_image(instance, field_name, payload, captured_at):
+    """Persist inspection evidence permanently under MEDIA_ROOT."""
+    if instance._meta.model_name != "visioninspectionsession":
+        raise StorageOperationError("Inspection evidence must be linked to a session.")
+    payload = bytes(payload or b"")
+    if not payload:
+        raise StorageOperationError("Image evidence is empty and cannot be saved.")
+    if timezone.is_naive(captured_at):
+        captured_at = timezone.make_aware(captured_at, timezone.get_current_timezone())
+
+    sequence = StorageImageMetadata.objects.filter(
+        inspection_session=instance,
+        image_field_name=field_name,
+    ).count() + 1
+    timestamp = timezone.localtime(captured_at).strftime("%Y%m%d_%H%M%S")
+    while True:
+        filename = f"{field_name}_{sequence}_{timestamp}.jpg"
+        relative_path = f"vision_inspection/inspections/{filename}"
+        if not default_storage.exists(relative_path):
+            break
+        sequence += 1
+
+    saved_path = default_storage.save(relative_path, ContentFile(payload))
+    try:
+        metadata = StorageImageMetadata.objects.create(
+            storage_key=uuid.uuid4().hex,
+            inspection_session=instance,
+            image_field_name=field_name,
+            storage_backend=StorageImageMetadata.STORAGE_LOCAL,
+            relative_path=saved_path,
+            migration_status=StorageImageMetadata.MIGRATION_PENDING,
+            file_size=len(payload),
+            sha256_checksum=hashlib.sha256(payload).hexdigest(),
+            captured_at=captured_at,
+            is_permanent_local=True,
+        )
+    except Exception as exc:
+        try:
+            default_storage.delete(saved_path)
+        except Exception:
+            logger.exception("Could not remove unregistered inspection image %s", saved_path)
+        logger.exception("Could not register inspection image %s", saved_path)
+        raise StorageOperationError(
+            "Image was retained locally but its storage reference could not be saved."
+        ) from exc
+
+    getattr(instance, field_name).name = saved_path
+    return metadata
+
+
+def delete_uncommitted_inspection_image(metadata):
+    """Remove an image file when its surrounding inspection transaction rolls back."""
+    if (
+        metadata.storage_backend != StorageImageMetadata.STORAGE_LOCAL
+        or not metadata.is_permanent_local
+        or not metadata.relative_path.startswith("vision_inspection/inspections/")
+    ):
+        raise StorageOperationError("Refusing to delete an image outside inspection evidence storage.")
+    try:
+        default_storage.delete(metadata.relative_path)
+    except Exception as exc:
+        logger.exception(
+            "Could not remove inspection evidence after a database rollback: %s",
+            metadata.relative_path,
+        )
+        raise StorageOperationError("Uncommitted inspection evidence could not be removed.") from exc
+
+
 def metadata_for_field(instance, field_name, backfill=True):
     lookup = {"image_field_name": field_name}
     if instance._meta.model_name == "visioninspectionlog":
@@ -629,6 +1165,8 @@ def link_image_reference(source_instance, source_field_name, target_instance, ta
         "file_size": source_metadata.file_size,
         "sha256_checksum": source_metadata.sha256_checksum,
         "checksum_verified_at": source_metadata.checksum_verified_at,
+        "captured_at": source_metadata.captured_at,
+        "is_permanent_local": source_metadata.is_permanent_local,
     }
     if target_instance._meta.model_name == "visioninspectionlog":
         values["inspection_log"] = target_instance
@@ -762,6 +1300,8 @@ def _delete_original(metadata, old_backend, old_destination, old_path):
 
 
 def migrate_image(metadata, destination, delete_originals=False):
+    if metadata.is_permanent_local:
+        raise StorageOperationError("Permanent local inspection evidence cannot be migrated.")
     old_backend = metadata.storage_backend
     old_destination = metadata.destination
     old_path = metadata.relative_path
@@ -827,7 +1367,11 @@ def start_migration(source_destination_id, destination, delete_originals=False, 
         raise StorageOperationError("Confirm deletion by entering DELETE.")
     if str(source_destination_id or "") == "LOCAL":
         source = None
-        source_filter = {"storage_backend": StorageImageMetadata.STORAGE_LOCAL, "destination__isnull": True}
+        source_filter = {
+            "storage_backend": StorageImageMetadata.STORAGE_LOCAL,
+            "destination__isnull": True,
+            "is_permanent_local": False,
+        }
     else:
         try:
             source = StorageDestination.objects.get(pk=int(source_destination_id))
@@ -873,6 +1417,7 @@ def process_migration_batch(job_id, batch_size=10):
         query = StorageImageMetadata.objects.filter(
             storage_backend=StorageImageMetadata.STORAGE_LOCAL,
             destination__isnull=True,
+            is_permanent_local=False,
         )
     else:
         query = StorageImageMetadata.objects.filter(destination=job.source_destination)
@@ -952,6 +1497,7 @@ def automatic_transfer_batch(batch_size=None):
     candidates = StorageImageMetadata.objects.filter(
         storage_backend=StorageImageMetadata.STORAGE_LOCAL,
         destination__isnull=True,
+        is_permanent_local=False,
     ).filter(
         Q(migration_destination__isnull=True) | Q(migration_destination=destination)
     ).filter(

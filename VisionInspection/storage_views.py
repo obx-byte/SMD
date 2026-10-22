@@ -7,6 +7,7 @@ import mimetypes
 from django.http import FileResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
+from django.utils.http import content_disposition_header
 
 from VisionInspection.models import StorageDestination, StorageImageMetadata, StorageMigrationJob
 from VisionInspection.services import storage_service
@@ -25,6 +26,79 @@ def _payload(request):
 
 def _json(data, status=200):
     return JsonResponse(data, status=status)
+
+
+@require_GET
+def manager_browse(request):
+    try:
+        result = storage_service.storage_manager_browse(
+            request.GET.get("root_id"), request.GET.get("path", "")
+        )
+        return _json({"ok": True, **result})
+    except storage_service.StorageOperationError as exc:
+        return _json({"ok": False, "message": str(exc)}, 400)
+
+
+@require_POST
+def manager_create_folder(request):
+    data = _payload(request)
+    try:
+        created = storage_service.storage_manager_create_folder(
+            data.get("root_id"), data.get("parent_path", ""),
+            data.get("name", ""), request.user,
+        )
+        return _json({"ok": True, "path": created["path"]}, 201)
+    except storage_service.StorageOperationError as exc:
+        return _json({"ok": False, "message": str(exc)}, 400)
+
+
+@require_POST
+def manager_merge(request):
+    data = _payload(request)
+    try:
+        result = storage_service.storage_manager_merge(
+            data.get("root_id"), data.get("source_path", ""),
+            data.get("destination_path", ""), request.user,
+        )
+        return _json({"ok": True, **result}, 200)
+    except storage_service.StorageOperationError as exc:
+        return _json({"ok": False, "message": str(exc)}, 400)
+    except Exception:
+        logger.exception("Storage folder merge failed")
+        return _json(
+            {"ok": False, "message": "The merge failed. Existing source files were retained."},
+            500,
+        )
+
+
+@require_POST
+def manager_add_root(request):
+    if not is_admin(request.user):
+        return _json({"ok": False, "message": "Only Administrators can authorize storage roots."}, 403)
+    data = _payload(request)
+    try:
+        root = storage_service.storage_manager_add_root(
+            data.get("name"), data.get("path"), request.user
+        )
+        return _json({
+            "ok": True, "root": {
+                "id": root.pk, "name": root.name, "path": root.path,
+                "available": True,
+            },
+        }, 201)
+    except storage_service.StorageOperationError as exc:
+        return _json({"ok": False, "message": str(exc)}, 400)
+
+
+@require_POST
+def manager_deactivate_root(request, root_id):
+    if not is_admin(request.user):
+        return _json({"ok": False, "message": "Only Administrators can change authorized roots."}, 403)
+    try:
+        root = storage_service.storage_manager_deactivate_root(root_id, request.user)
+        return _json({"ok": True, "root_id": root.pk})
+    except storage_service.StorageOperationError as exc:
+        return _json({"ok": False, "message": str(exc)}, 400)
 
 
 @require_GET
@@ -162,5 +236,8 @@ def image(request, metadata_id):
     response["Cache-Control"] = "private, max-age=60"
     response["X-Content-Type-Options"] = "nosniff"
     if request.GET.get("download") == "1":
-        response["Content-Disposition"] = f'attachment; filename="inspection-image-{metadata.pk}{mimetypes.guess_extension(content_type) or ".bin"}"'
+        filename = metadata.relative_path.replace("\\", "/").rsplit("/", 1)[-1]
+        response["Content-Disposition"] = content_disposition_header(
+            True, filename or f"inspection-image-{metadata.pk}.bin"
+        )
     return response

@@ -8,12 +8,20 @@ This module is imported lazily so that OpenCV is only required when the camera
 is actually used.
 """
 
+import logging
+import sys
 import threading
 import time
 from collections import deque
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+MAX_FRAME_AGE_MS = 2000
+MAX_CAMERA_RECONNECT_ATTEMPTS = 3
+CAMERA_FIRST_FRAME_TIMEOUT_SECONDS = 15.0
 
 # --------------------------------------------------------------------------- #
 #  Constants
@@ -23,6 +31,7 @@ CAMERA_STATES = {
     "CONNECTING": "CONNECTING",
     "ON": "ON",
     "OFF": "OFF",
+    "STOPPING": "STOPPING",
     "ERROR": "ERROR",
 }
 
@@ -122,13 +131,34 @@ def _safe_release(cap):
     """Release a capture device that was never published to the shared slot.
 
     Only used for objects created locally by ``_connect_*`` and never handed to
-    any other thread — the shared slot is emptied by ``_take_capture_slot``.
+    any other thread — device reads and release share the capture lock.
     """
     try:
         if cap is not None:
             cap.release()
     except Exception:
         pass
+
+
+def _opencv_backend_options():
+    if sys.platform.startswith("win"):
+        backends = [("DirectShow", cv2.CAP_DSHOW)]
+        media_foundation = getattr(cv2, "CAP_MSMF", None)
+        if media_foundation is not None:
+            backends.append(("Media Foundation", media_foundation))
+        backends.append(("automatic", cv2.CAP_ANY))
+        return tuple(dict.fromkeys(backends))
+    return (("automatic", cv2.CAP_ANY),)
+
+
+def _valid_frame(frame):
+    return (
+        isinstance(frame, np.ndarray)
+        and frame.ndim == 3
+        and frame.shape[0] > 0
+        and frame.shape[1] > 0
+        and frame.shape[2] in (3, 4)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -165,6 +195,7 @@ class CameraService:
         self._state = CAMERA_LIFECYCLE["STOPPED"]
         self._error_message = None
         self._source = CAMERA_SOURCES["OPENCV"]  # default backend
+        self._backend_name = ""
         self._camera_index = 0
         self._thread = None
         self._stop_event = threading.Event()
@@ -209,9 +240,8 @@ class CameraService:
         source : str | None
             ``"opencv"`` (default) or ``"picamera"``.
         reuse_existing : bool
-            Do not restart a live capture. Returns ``False`` when a live camera
-            is reused or has incompatible settings; callers can inspect the
-            current source and index to distinguish those cases.
+            Do not switch an active camera with incompatible settings. A
+            matching active capture is always reused, including while starting.
 
         Returns ``True`` when a capture thread was started, ``False`` when a
         previous thread could not be retired in time (as a restart could race it
@@ -221,24 +251,42 @@ class CameraService:
         with cls._lock:
             requested_index = int(camera_index or 0)
             requested_source = source or CAMERA_SOURCES["OPENCV"]
-            if reuse_existing and service._status in (
+            camera_is_active = service._status in (
                 CAMERA_STATES["ON"],
                 CAMERA_STATES["CONNECTING"],
+                CAMERA_STATES["STOPPING"],
+            )
+            same_configuration = (
+                service._source == requested_source
+                and (
+                    requested_source == CAMERA_SOURCES["PICAMERA"]
+                    or service._camera_index == requested_index
+                )
+            )
+            if (
+                camera_is_active
+                and same_configuration
+                and service._thread is not None
+                and service._thread.is_alive()
             ):
                 return False
+            if reuse_existing and camera_is_active:
+                return False
             if not service._retire_capture_thread():
-                service._error_message = (
-                    "The previous camera thread did not stop; "
-                    "camera was not restarted."
-                )
-                service._status = CAMERA_STATES["ERROR"]
-                service._state = CAMERA_LIFECYCLE["ERROR"]
+                if service._thread is not None and service._thread.is_alive():
+                    service._error_message = (
+                        "The previous camera thread did not stop; "
+                        "camera was not restarted."
+                    )
+                    service._status = CAMERA_STATES["STOPPING"]
+                    service._state = CAMERA_LIFECYCLE["STOPPING"]
                 return False
 
             service._camera_index = requested_index
             service._target_fps = max(1, target_fps)
             service._frame_time = 1.0 / service._target_fps
             service._source = requested_source
+            service._backend_name = ""
             service._error_message = None
             service._stop_event = threading.Event()
             service._status = CAMERA_STATES["CONNECTING"]
@@ -253,22 +301,29 @@ class CameraService:
             # Bump the epoch *before* the new thread starts so the thread owns a
             # capture device no older thread will release.
             service._epoch += 1
-            service._thread = threading.Thread(
-                target=service._capture_loop,
-                args=(service._stop_event, service._epoch),
-                daemon=True,
-                name="VisionInspection-CameraThread",
-            )
-            service._thread.start()
+            try:
+                service._thread = threading.Thread(
+                    target=service._capture_loop,
+                    args=(service._stop_event, service._epoch),
+                    daemon=True,
+                    name="VisionInspection-CameraThread",
+                )
+                service._thread.start()
+            except Exception as exc:
+                service._thread = None
+                service._error_message = f"Could not start the camera thread: {exc}"
+                service._status = CAMERA_STATES["ERROR"]
+                service._state = CAMERA_LIFECYCLE["ERROR"]
+                logger.exception("Could not start the camera capture thread")
+                return False
 
         return True
 
     def _retire_capture_thread(self, timeout=10.0):
         """Stop and join the running capture thread; True when it is gone.
 
-        Must be called with ``self._lock`` held.  Never releases the capture
-        device itself: the owning capture thread does that in its own clean-up
-        path, exactly once, under its own epoch.
+        Must be called with ``self._lock`` held. The owning thread gets the
+        first opportunity to release; this retries cleanup if it exited early.
         """
         thread = self._thread
         if thread is not None and thread.is_alive():
@@ -281,10 +336,11 @@ class CameraService:
                 # start a second thread that would share its capture device.
                 return False
 
-        self._thread = None
         # The thread has finished, so it has already released its device unless
         # it died before its clean-up ran.  Release anything left behind.
-        self._release_owned_capture(self._epoch)
+        if not self._release_owned_capture(self._epoch):
+            return False
+        self._thread = None
         return True
 
     @classmethod
@@ -298,6 +354,11 @@ class CameraService:
         return cls()._source
 
     @classmethod
+    def get_backend_name(cls):
+        """Return the active OpenCV backend, if one has been selected."""
+        return cls()._backend_name
+
+    @classmethod
     def get_camera_index(cls):
         """Return the index of the active camera source."""
         service = cls()
@@ -309,8 +370,7 @@ class CameraService:
         """Stop the camera capture thread and release the device."""
         service = cls()
         with cls._lock:
-            service._stop_camera_internal()
-        return True
+            return service._stop_camera_internal()
 
     @classmethod
     def get_frame(cls):
@@ -407,7 +467,17 @@ class CameraService:
     def _stop_camera_internal(self):
         """Internal: stop the capture thread (device release stays with the owner)."""
         self._state = CAMERA_LIFECYCLE["STOPPING"]
-        self._retire_capture_thread()
+        self._status = CAMERA_STATES["STOPPING"]
+        if not self._retire_capture_thread():
+            if self._thread is not None and self._thread.is_alive():
+                self._error_message = (
+                    "The camera capture thread did not stop before the shutdown timeout."
+                )
+            elif self._state != CAMERA_LIFECYCLE["ERROR"]:
+                self._error_message = "The camera capture could not be released."
+                self._status = CAMERA_STATES["ERROR"]
+                self._state = CAMERA_LIFECYCLE["ERROR"]
+            return False
 
         with self._frame_lock:
             self._latest_frame = None
@@ -416,38 +486,36 @@ class CameraService:
         self._status = CAMERA_STATES["OFF"]
         self._state = CAMERA_LIFECYCLE["STOPPED"]
         self._error_message = None
-
-    def _take_capture_slot(self):
-        """Empty the capture slot and return the device handle (idempotent)."""
-        with self._cap_lock:
-            cap = self._cap
-            self._cap = None
-        return cap
+        return True
 
     def _release_owned_capture(self, epoch):
         """Release the capture device only if *epoch* still owns it.
 
-        Emptying the slot *before* releasing is what makes this safe to call
-        from more than one path: the second caller sees ``None`` and does
-        nothing, so the native device is never released twice.
+        Reads and release share the capture lock. The slot is retained after a
+        failed release so a later stop or retry can attempt cleanup again.
         """
         if epoch is not None and epoch != self._epoch:
             return False  # a newer owner has taken over; never touch its device
 
-        was_holding = self._cap is not None
-        cap = self._take_capture_slot()
-        if cap is None:
-            return False
+        with self._cap_lock:
+            cap = self._cap
+            if cap is None:
+                return True
+            try:
+                if self._source == CAMERA_SOURCES["PICAMERA"]:
+                    cap.stop()
+                    cap.close()
+                else:
+                    cap.release()
+            except Exception as exc:
+                self._error_message = f"Could not release the camera capture: {exc}"
+                self._status = CAMERA_STATES["ERROR"]
+                self._state = CAMERA_LIFECYCLE["ERROR"]
+                logger.exception("Could not release the active camera capture")
+                return False
+            self._cap = None
 
-        try:
-            if self._source == CAMERA_SOURCES["PICAMERA"]:
-                cap.stop()
-                cap.close()
-            else:
-                cap.release()
-        except Exception:
-            pass
-        if was_holding and self._source != CAMERA_SOURCES["PICAMERA"]:
+        if self._source != CAMERA_SOURCES["PICAMERA"]:
             _release_device(self._camera_index)
         return True
 
@@ -455,6 +523,7 @@ class CameraService:
         """Attempt to (re)connect using the selected backend (one opener)."""
         with self._connect_lock:
             self._status = CAMERA_STATES["CONNECTING"]
+            self._state = CAMERA_LIFECYCLE["STARTING"]
             if self._source == CAMERA_SOURCES["PICAMERA"]:
                 return self._connect_picamera()
             return self._connect_opencv()
@@ -476,49 +545,47 @@ class CameraService:
             self._state = CAMERA_LIFECYCLE["ERROR"]
             return False
 
-        cap = None
-        try:
-            cap = cv2.VideoCapture(self._camera_index, cv2.CAP_DSHOW)
-            if cap is None or not cap.isOpened():
-                self._error_message = f"Could not open OpenCV camera index {self._camera_index}."
-                self._status = CAMERA_STATES["ERROR"]
-                self._state = CAMERA_LIFECYCLE["ERROR"]
-                _release_device(self._camera_index)
-                return False
+        failures = []
+        for backend_name, backend in _opencv_backend_options():
+            cap = None
+            try:
+                cap = cv2.VideoCapture(self._camera_index, backend)
+                if cap is None or not cap.isOpened():
+                    raise RuntimeError("backend could not open the camera index")
 
-            # Set a reasonable default resolution
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            cap.set(cv2.CAP_PROP_FPS, self._target_fps)
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                cap.set(cv2.CAP_PROP_FPS, self._target_fps)
 
-            # Verify a frame can actually be read.
-            ok, _probe = cap.read()
-            if not ok:
-                self._error_message = "Camera opened but no frames could be read."
-                self._status = CAMERA_STATES["ERROR"]
-                self._state = CAMERA_LIFECYCLE["ERROR"]
+                self._store_capture(cap)
+                self._backend_name = backend_name
+                self._error_message = None
+                self._status = CAMERA_STATES["CONNECTING"]
+                self._state = CAMERA_LIFECYCLE["STARTING"]
+                logger.info(
+                    "Camera opened: source=opencv index=%s backend=%s",
+                    self._camera_index,
+                    backend_name,
+                )
+                return True
+            except Exception as exc:
+                failures.append(f"{backend_name}: {exc}")
+                logger.warning(
+                    "OpenCV camera backend failed: index=%s backend=%s error=%s",
+                    self._camera_index,
+                    backend_name,
+                    exc,
+                )
                 _safe_release(cap)
-                _release_device(self._camera_index)
-                return False
 
-            # Keep the first successful probe frame so the very first
-            # inspection request sees a valid image immediately instead of
-            # waiting for the background thread to capture the next frame.
-            self.push_frame(_probe)
-
-            # Publish only a fully working device to the shared slot.
-            self._store_capture(cap)
-            self._status = CAMERA_STATES["ON"]
-            self._state = CAMERA_LIFECYCLE["RUNNING"]
-            return True
-        except Exception as exc:
-            self._error_message = f"OpenCV camera error: {exc}"
-            self._status = CAMERA_STATES["ERROR"]
-            self._state = CAMERA_LIFECYCLE["ERROR"]
-            if cap is not None:
-                _safe_release(cap)
-            _release_device(self._camera_index)
-            return False
+        self._error_message = (
+            f"Could not initialize OpenCV camera index {self._camera_index}. "
+            f"Backends tried: {'; '.join(failures)}"
+        )
+        self._status = CAMERA_STATES["ERROR"]
+        self._state = CAMERA_LIFECYCLE["ERROR"]
+        _release_device(self._camera_index)
+        return False
 
     def _connect_picamera(self):
         """Open the Raspberry Pi camera via Picamera2 (imported lazily).
@@ -534,23 +601,33 @@ class CameraService:
             self._status = CAMERA_STATES["ERROR"]
             self._state = CAMERA_LIFECYCLE["ERROR"]
             return False
+        cap = None
         try:
             from picamera2 import Picamera2  # noqa: WPS433 (local import by design)
 
-            self._cap = Picamera2()
-            config = self._cap.create_video_configuration(
+            cap = Picamera2()
+            config = cap.create_video_configuration(
                 main={"size": (1280, 720), "format": "RGB888"}
             )
-            self._cap.configure(config)
-            self._cap.start()
-            self._status = CAMERA_STATES["ON"]
-            self._state = CAMERA_LIFECYCLE["RUNNING"]
+            cap.configure(config)
+            cap.start()
+            self._store_capture(cap)
+            self._backend_name = "Picamera2"
+            self._status = CAMERA_STATES["CONNECTING"]
+            self._state = CAMERA_LIFECYCLE["STARTING"]
             return True
         except Exception as exc:
             self._error_message = f"Raspberry Pi camera error: {exc}"
             self._status = CAMERA_STATES["ERROR"]
             self._state = CAMERA_LIFECYCLE["ERROR"]
-            self._release_owned_capture(self._epoch)
+            if cap is not None:
+                for cleanup in ("stop", "close"):
+                    try:
+                        getattr(cap, cleanup)()
+                    except Exception:
+                        logger.exception(
+                            "Could not %s Picamera2 after failed startup", cleanup
+                        )
             return False
 
     def _read_frame(self):
@@ -586,31 +663,68 @@ class CameraService:
         if stop_event.is_set() or epoch != self._epoch:
             return
 
-        if not self._connect():
+        try:
+            connected = self._connect()
+        except Exception as exc:
+            self._error_message = f"Camera startup failed: {exc}"
+            self._status = CAMERA_STATES["ERROR"]
+            self._state = CAMERA_LIFECYCLE["ERROR"]
+            logger.exception("Camera startup failed before capture began")
+            self._release_owned_capture(epoch)
+            return
+        if not connected:
             return
 
+        first_frame_deadline = time.monotonic() + CAMERA_FIRST_FRAME_TIMEOUT_SECONDS
+        reconnect_attempts = 0
         while not stop_event.is_set() and epoch == self._epoch:
             try:
                 ret, frame = self._read_frame()
-                if not ret or frame is None:
+                if not ret or not _valid_frame(frame):
+                    if (
+                        self._state == CAMERA_LIFECYCLE["STARTING"]
+                        and time.monotonic() < first_frame_deadline
+                    ):
+                        self._status = CAMERA_STATES["CONNECTING"]
+                        self._error_message = None
+                        time.sleep(min(self._frame_time, 0.05))
+                        continue
                     # Camera likely disconnected
                     if self._status != CAMERA_STATES["ERROR"]:
                         self._status = CAMERA_STATES["ERROR"]
                     self._state = CAMERA_LIFECYCLE["ERROR"]
                     if not self._error_message:
                         self._error_message = "Camera stopped returning frames."
-                    time.sleep(self._reconnect_delay)
-                    # Try to reconnect (guarded, one opener)
+                    if reconnect_attempts >= MAX_CAMERA_RECONNECT_ATTEMPTS:
+                        self._error_message = (
+                            "Camera stopped returning frames after "
+                            f"{MAX_CAMERA_RECONNECT_ATTEMPTS} reconnect attempts."
+                        )
+                        logger.error(
+                            "Camera reconnect limit reached: source=%s index=%s attempts=%s",
+                            self._source,
+                            self._camera_index,
+                            reconnect_attempts,
+                        )
+                        break
+                    reconnect_attempts += 1
+                    if not self._release_owned_capture(epoch):
+                        break
+                    time.sleep(min(self._reconnect_delay * (2 ** (reconnect_attempts - 1)), 8.0))
                     if stop_event.is_set() or epoch != self._epoch:
                         break
-                    self._connect()
+                    if self._connect():
+                        first_frame_deadline = (
+                            time.monotonic() + CAMERA_FIRST_FRAME_TIMEOUT_SECONDS
+                        )
                     continue
-
-                self._status = CAMERA_STATES["ON"]
-                self._state = CAMERA_LIFECYCLE["RUNNING"]
 
                 # Latest-frame store (single slot, bounded; drops stale frames)
                 self.push_frame(frame)
+                self._status = CAMERA_STATES["ON"]
+                self._state = CAMERA_LIFECYCLE["RUNNING"]
+                self._error_message = None
+                reconnect_attempts = 0
 
                 # Maintain target FPS
                 time.sleep(self._frame_time)
@@ -619,15 +733,30 @@ class CameraService:
                 self._error_message = f"Camera capture error: {exc}"
                 self._status = CAMERA_STATES["ERROR"]
                 self._state = CAMERA_LIFECYCLE["ERROR"]
+                if reconnect_attempts >= MAX_CAMERA_RECONNECT_ATTEMPTS:
+                    logger.exception(
+                        "Camera capture failed after %s reconnect attempts",
+                        reconnect_attempts,
+                    )
+                    break
+                reconnect_attempts += 1
+                if not self._release_owned_capture(epoch):
+                    break
                 if stop_event.is_set() or epoch != self._epoch:
                     break
-                time.sleep(self._reconnect_delay)
+                time.sleep(min(self._reconnect_delay * (2 ** (reconnect_attempts - 1)), 8.0))
+                if stop_event.is_set() or epoch != self._epoch:
+                    break
+                if self._connect():
+                    first_frame_deadline = (
+                        time.monotonic() + CAMERA_FIRST_FRAME_TIMEOUT_SECONDS
+                    )
 
-        # Release only what this thread still owns — after the snapshot is
-        # cleared — so the device is never released twice or under another
-        # epoch's feet (a double release aborts the process natively).
-        self._release_owned_capture(epoch)
-        if epoch == self._epoch:
+        # Release only what this thread still owns, serialized with frame reads.
+        released = self._release_owned_capture(epoch)
+        if epoch == self._epoch and released and (
+            stop_event.is_set() or self._state != CAMERA_LIFECYCLE["ERROR"]
+        ):
             self._status = CAMERA_STATES["OFF"]
             self._state = CAMERA_LIFECYCLE["STOPPED"]
 

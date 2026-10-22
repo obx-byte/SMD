@@ -19,7 +19,7 @@
         })();
     </script>
     <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}?v=20261015-1">
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261021-4">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261022-6">
     {% block extra_head %}{% endblock %}
     <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-3">
 </head>
@@ -79,9 +79,9 @@
             </div>
             {% endif %}
 
-            {% if vi_access.storage_view or vi_access.camera_setup_view or vi_access.model_configuration_view or vi_access.approved_models_view or vi_access.user_management %}
+            {% if vi_access.storage_view or vi_access.camera_setup_view or vi_access.model_configuration_view or vi_access.approved_models_view or vi_access.user_management or vi_access.permission_management %}
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-configuration" aria-controls="section-configuration" aria-expanded="{% if sidebar_active == 'storage' or sidebar_active == 'inspection_master' or sidebar_active == 'configuration' or sidebar_active == 'presets' or sidebar_active == 'yolo_models' or request.resolver_match.url_name == 'user-management' %}true{% else %}false{% endif %}">Configuration <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
+                <button class="vi-sidebar-section-title" type="button" data-target="section-configuration" aria-controls="section-configuration" aria-expanded="{% if sidebar_active == 'storage' or sidebar_active == 'inspection_master' or sidebar_active == 'configuration' or sidebar_active == 'presets' or sidebar_active == 'yolo_models' or request.resolver_match.url_name == 'user-management' or request.resolver_match.url_name == 'user-management-detail' or request.resolver_match.url_name == 'access-groups' or request.resolver_match.url_name == 'access-group-create' or request.resolver_match.url_name == 'access-group-edit' or request.resolver_match.url_name == 'access-group-permissions' or request.resolver_match.url_name == 'user-management-permissions' %}true{% else %}false{% endif %}">Configuration <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
                 <div class="vi-sidebar-collapse vi-collapsed" id="section-configuration">
                     {% if vi_access.storage_view %}<a href="{% url 'VisionInspection:storage-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'storage' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="Storage Settings">Storage Settings</span></a>{% endif %}
                     {% if vi_access.camera_setup_view %}
@@ -91,7 +91,11 @@
                     <a href="{% url 'VisionInspection:configuration' %}" class="vi-sidebar-link {% if sidebar_active == 'configuration' or sidebar_active == 'presets' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9881;</span><span class="vi-sidebar-label" title="Model Configuration">Model Configuration</span></a>
                     {% endif %}
                     {% if vi_access.approved_models_view %}<a href="{% url 'VisionInspection:ui-yolo-models' %}?approved=1" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' and request.GET.approved %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#10003;</span><span class="vi-sidebar-label" title="Approved Models">Approved Models</span></a>{% endif %}
-                    {% if vi_access.user_management %}<a href="{% url 'VisionInspection:user-management' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'user-management' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9881;</span><span class="vi-sidebar-label" title="User Management">User Management</span></a>{% endif %}
+                    {% if vi_access.user_management %}<a href="{% url 'VisionInspection:user-management' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'user-management' or request.resolver_match.url_name == 'user-management-detail' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9881;</span><span class="vi-sidebar-label" title="User Management">User Management</span></a>{% endif %}
+                    {% if vi_access.permission_management %}
+                    <a href="{% url 'VisionInspection:access-groups' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'access-groups' or request.resolver_match.url_name == 'access-group-create' or request.resolver_match.url_name == 'access-group-edit' or request.resolver_match.url_name == 'access-group-permissions' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9776;</span><span class="vi-sidebar-label" title="Access Groups">Access Groups</span></a>
+                    <a href="{% url 'VisionInspection:user-management-permissions' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'user-management-permissions' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#10003;</span><span class="vi-sidebar-label" title="Role Permissions">Role Permissions</span></a>
+                    {% endif %}
                 </div>
             </div>
             {% endif %}
@@ -106,7 +110,7 @@
             </div>{% endif %}
 
             <div class="vi-sidebar-footer">
-                {% if vi_access.administrator %}
+                {% if vi_access.storage_view %}
                 <a href="{% url 'VisionInspection:ui-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'settings' %}active{% endif %}">
                     <span class="vi-sidebar-icon">&#9881;</span> Settings
                 </a>
@@ -352,10 +356,13 @@
                 try {
                     var now = new Date();
                     var dateStamp = now.toLocaleDateString(undefined, {day: '2-digit', month: 'short', year: 'numeric'});
+                    var compactDateStamp = now.toLocaleDateString(undefined, {day: '2-digit', month: 'short'});
                     var timeStamp = now.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
                     var fullStamp = dateStamp + ' ' + timeStamp;
-                    var stamp = window.matchMedia("(max-width: 600px)").matches
-                        ? timeStamp + ' · ' + dateStamp
+                    var mobile = window.matchMedia("(max-width: 600px)").matches;
+                    var compact = window.matchMedia("(max-width: 420px)").matches;
+                    var stamp = mobile
+                        ? timeStamp + ' · ' + (compact ? compactDateStamp : dateStamp)
                         : fullStamp;
                     if (clock) {
                         clock.textContent = stamp;

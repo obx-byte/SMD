@@ -92,9 +92,20 @@
     background: #F8FAFC;
 }
 
+.vi-permissions-button--danger {
+    color: #9F1239;
+    background: #FFF1F2;
+    border-color: #FECDD3;
+}
+
+.vi-permissions-button--danger:hover {
+    background: #FFE4E6;
+}
+
 .vi-permissions-button:focus-visible,
 .vi-permissions-page select:focus-visible,
-.vi-permissions-page input:focus-visible {
+.vi-permissions-page input:focus-visible,
+.vi-permissions-page textarea:focus-visible {
     outline: 3px solid rgba(13, 148, 136, 0.28);
     outline-offset: 2px;
 }
@@ -207,6 +218,17 @@
     margin-top: 16px;
 }
 
+.vi-permissions-change-state {
+    margin: 12px 0 0;
+    color: #64748B;
+    font-size: 13px;
+}
+
+.vi-permissions-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
 .vi-permissions-empty {
     margin: 16px 0 0;
     padding: 14px;
@@ -214,6 +236,99 @@
     background: #F8FAFC;
     border: 1px dashed #CBD5E1;
     border-radius: 6px;
+    font-size: 13px;
+}
+
+.vi-access-group-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.vi-access-group-actions form {
+    margin: 0;
+}
+
+.vi-access-group-form {
+    display: grid;
+    max-width: 100%;
+    gap: 10px;
+}
+
+.vi-access-group-form > label {
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.vi-access-group-form > input,
+.vi-access-group-form textarea,
+.vi-permissions-user-picker input {
+    min-height: 38px;
+    padding: 8px 10px;
+    color: #334155;
+    background: #fff;
+    border: 1px solid #CBD5E1;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 13px;
+}
+
+.vi-access-group-active {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+}
+
+.vi-access-group-active input,
+.vi-screen-permissions-table input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #0D9488;
+}
+
+.vi-screen-permissions-parent th {
+    color: #172B4D;
+    background: #F8FAFC;
+    font-weight: 700;
+}
+
+.vi-screen-permissions-parent .vi-permissions-checkbox span {
+    font-weight: 600;
+}
+
+.vi-screen-permissions-table tbody + tbody {
+    border-top: 2px solid #CBD5E1;
+}
+
+.vi-user-detail-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 24px;
+    margin: 18px 0 0;
+}
+
+.vi-user-detail-list > div {
+    min-width: 0;
+}
+
+.vi-user-detail-list dt {
+    color: #64748B;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.vi-user-detail-list dd {
+    margin: 5px 0 0;
+    color: #172B4D;
+    font-size: 14px;
+}
+
+.vi-user-override-list {
+    margin-bottom: 0;
+    color: #334155;
     font-size: 13px;
 }
 
@@ -259,5 +374,13 @@
 
     .vi-permissions-table--overrides select {
         max-width: 190px;
+    }
+
+    .vi-access-group-actions {
+        align-items: stretch;
+    }
+
+    .vi-user-detail-list {
+        grid-template-columns: minmax(0, 1fr);
     }
 }

@@ -19,6 +19,7 @@ import uuid as uuid_module
 from urllib.parse import urlencode
 
 from django.db.models import Count, Q
+from django.utils import timezone
 
 from VisionInspection.models import (
     VisionInspectionEmployee,
@@ -33,6 +34,7 @@ RESULT_NOT_OK = "NOT_OK"
 RESULT_ERROR = "ERROR"
 RESULT_INCOMPLETE = "INCOMPLETE"
 RESULT_CHOICES = (RESULT_OK, RESULT_NOT_OK, RESULT_INCOMPLETE, RESULT_ERROR)
+RESULT_INCOMPLETE_ERROR = "INCOMPLETE_ERROR"
 
 # Longest values accepted from the query string (model limits + a margin).
 DATE_MAX = 10
@@ -79,6 +81,8 @@ def read_filters(params):
         "employee": clean(params.get("employee"), EMPLOYEE_MAX),
         "unique_number": clean(params.get("unique_number"), UNIQUE_NUMBER_MAX),
         "result": clean(params.get("result"), RESULT_MAX).upper(),
+        "front_result": clean(params.get("front_result"), RESULT_MAX).upper(),
+        "back_result": clean(params.get("back_result"), RESULT_MAX).upper(),
     }
 
 
@@ -130,6 +134,30 @@ def session_presets_for_unique_number(value):
     return [name for name in names if _session_ids_from_preset_names([name])]
 
 
+def _logs_for_sessions(logs, sessions):
+    """Match both current FK-linked rows and legacy SESSION# preset rows."""
+    ids = sessions.values_list("session_id", flat=True)
+    names = [
+        f"{_SESSION_PREFIX}{session_id}"
+        for session_id in sessions.values_list("session_id", flat=True)
+    ]
+    return logs.filter(Q(session__session_id__in=ids) | Q(preset_name__in=names))
+
+
+def _side_filter(logs, side, value):
+    if not value:
+        return logs
+    accepted = (
+        (RESULT_INCOMPLETE, RESULT_ERROR, "PENDING")
+        if value == RESULT_INCOMPLETE_ERROR
+        else (value,)
+    )
+    sessions = VisionInspectionSession.objects.filter(
+        **{f"{side}_verdict__in": accepted}
+    )
+    return _logs_for_sessions(logs, sessions)
+
+
 def filter_logs(logs, filters):
     """Apply *filters* to a ``VisionInspectionLog`` queryset."""
     if logs is None:
@@ -141,6 +169,11 @@ def filter_logs(logs, filters):
 
     if filters.get("result") in RESULT_CHOICES:
         logs = logs.filter(result=filters["result"])
+    elif filters.get("result") == RESULT_INCOMPLETE_ERROR:
+        logs = logs.filter(result__in=(RESULT_INCOMPLETE, RESULT_ERROR))
+
+    logs = _side_filter(logs, "front", filters.get("front_result", ""))
+    logs = _side_filter(logs, "back", filters.get("back_result", ""))
 
     if filters.get("employee"):
         logs = logs.filter(employee_code__iexact=filters["employee"])
@@ -155,10 +188,14 @@ def filter_logs(logs, filters):
         logs = logs.filter(part_number__icontains=filters["part_number"])
 
     if filters.get("unique_number"):
+        sessions = VisionInspectionSession.objects.filter(
+            Q(barcode__icontains=filters["unique_number"])
+            | Q(session_id__icontains=filters["unique_number"])
+        )
         logs = logs.filter(
-            preset_name__in=session_presets_for_unique_number(
-                filters["unique_number"]
-            )
+            Q(barcode__icontains=filters["unique_number"])
+            | Q(session__in=sessions)
+            | Q(preset_name__in=session_presets_for_unique_number(filters["unique_number"]))
         )
 
     if filters.get("date_from"):
@@ -274,13 +311,18 @@ def build_rows(logs, parts=None, employees=None, sessions=None):
         unique_number = barcode or (session.barcode if session else "") or ""
         front = side_result(session, "front")
         back = side_result(session, "back")
+        front_image_url = image_url(session, "front_image") if session else ""
+        back_image_url = image_url(session, "back_image") if session else ""
         tone = result_tone(log.result)
         rows.append(
             {
                 "log": log,
+                "inspection_id": log.pk,
                 "session": session,
-                "front_image_url": image_url(session, "front_image") if session else "",
-                "back_image_url": image_url(session, "back_image") if session else "",
+                "front_image_url": front_image_url,
+                "back_image_url": back_image_url,
+                "front_image_download_url": f"{front_image_url}?download=1" if front_image_url else "",
+                "back_image_download_url": f"{back_image_url}?download=1" if back_image_url else "",
                 "part_name": part_name,
                 "employee_code": employee_code,
                 "employee_name": employee_name,
@@ -329,6 +371,7 @@ def result_text(result):
         RESULT_NOT_OK: "NOT OK",
         RESULT_ERROR: "Error",
         RESULT_INCOMPLETE: "INCOMPLETE",
+        RESULT_INCOMPLETE_ERROR: "Incomplete / Error",
     }.get(result, result or "—")
 
 
@@ -370,7 +413,8 @@ def export_rows(rows):
         export.append(
             [
                 (str(index), ""),
-                (log.timestamp.strftime("%Y-%m-%d %H:%M:%S"), ""),
+                (str(log.pk), ""),
+                (timezone.localtime(log.timestamp).strftime("%Y-%m-%d %H:%M:%S"), ""),
                 (log.part_number or "—", ""),
                 (row["part_name"] or "—", ""),
                 (row["employee_label"], ""),
@@ -387,6 +431,7 @@ def export_headers():
     """Column headers shared by the report page and its exports."""
     return [
         "#",
+        "Inspection ID",
         "Date & Time",
         "Part No.",
         "Part Name",

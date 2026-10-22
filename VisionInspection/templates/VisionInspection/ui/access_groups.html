@@ -1,0 +1,62 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}Access Groups{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'VisionInspection/css/permission_management.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="vi-permissions-page">
+    <header class="vi-permissions-heading">
+        <div>
+            <h1>Access Groups</h1>
+            <p>Create reusable screen permissions and assign groups to employee accounts.</p>
+        </div>
+        <a class="vi-permissions-button vi-permissions-button--primary" href="{% url 'VisionInspection:access-group-create' %}">Add Access Group</a>
+    </header>
+
+    <section class="vi-permissions-panel" aria-labelledby="access-groups-heading">
+        <h2 id="access-groups-heading">Configured groups</h2>
+        <form class="vi-permissions-user-picker" method="get">
+            <label for="access-group-search">Search by group name</label>
+            <input id="access-group-search" type="search" name="q" value="{{ query }}" placeholder="Access Group name">
+            <button class="vi-permissions-button vi-permissions-button--secondary" type="submit">Search</button>
+            <a class="vi-permissions-button vi-permissions-button--secondary" href="{% url 'VisionInspection:access-groups' %}">Reset</a>
+        </form>
+
+        <div class="vi-permissions-table-wrap">
+            <table class="vi-permissions-table">
+                <thead>
+                    <tr>
+                        <th scope="col">S.No</th>
+                        <th scope="col">Group Name</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for profile in access_groups %}
+                    <tr>
+                        <td>{{ forloop.counter }}</td>
+                        <th scope="row">{{ profile.group.name }}</th>
+                        <td>
+                            <div class="vi-access-group-actions">
+                                <a class="vi-permissions-button vi-permissions-button--secondary" href="{% url 'VisionInspection:access-group-permissions' profile.pk %}">View</a>
+                                <a class="vi-permissions-button vi-permissions-button--secondary" href="{% url 'VisionInspection:access-group-edit' profile.pk %}">Edit</a>
+                                <form method="post" action="{% url 'VisionInspection:access-group-delete' profile.pk %}" onsubmit="return window.confirm('Delete this Access Group? Assigned groups cannot be deleted.');">
+                                    {% csrf_token %}
+                                    <button class="vi-permissions-button vi-permissions-button--danger" type="submit">Delete</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="3" class="vi-permissions-empty">No Access Groups found.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

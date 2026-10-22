@@ -102,7 +102,7 @@ body.vi-dashboard-chrome .vi-top-header .vi-signout-btn {
 body.vi-dashboard-chrome .vi-content .vi-dash .vi-page-title {
     margin: 0;
     color: var(--dash-ink);
-    font-size: clamp(26px, 2.2vw, 30px);
+    font-size: clamp(22px, 2vw, 26px);
     line-height: 1.2;
 }
 
@@ -278,7 +278,7 @@ body.vi-dashboard-chrome .vi-content .vi-dash .vi-btn-primary:hover {
 .vi-dash-kpi-value {
     margin: 3px 0 1px;
     color: var(--dash-ink);
-    font-size: clamp(28px, 2.5vw, 32px);
+    font-size: clamp(24px, 2.2vw, 30px);
     font-weight: 750;
     line-height: 1.1;
 }
@@ -466,6 +466,83 @@ body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-card-heading h3 {
     height: 7px;
 }
 
+.vi-dash-trend-card {
+    grid-column: 1 / -1;
+}
+
+.vi-dash-trend-period {
+    margin: 4px 0 0;
+    color: var(--dash-muted);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.vi-dash-trend-figure {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+}
+
+.vi-dash-trend-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+}
+
+.vi-dash-trend-gridline {
+    stroke: #E8EDF4;
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.vi-dash-trend-axis-label,
+.vi-dash-trend-date-label {
+    fill: #53627A;
+    font-family: inherit;
+    font-size: 12px;
+}
+
+.vi-dash-trend-line {
+    fill: none;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.vi-dash-trend-line.is-ok {
+    stroke: var(--dash-green);
+}
+
+.vi-dash-trend-line.is-not-ok {
+    stroke: var(--dash-red);
+}
+
+.vi-dash-trend-point {
+    stroke: #FFFFFF;
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+}
+
+.vi-dash-trend-point.is-ok {
+    fill: var(--dash-green);
+}
+
+.vi-dash-trend-point.is-not-ok {
+    fill: var(--dash-red);
+}
+
+.vi-dash-trend-point:focus {
+    outline: none;
+    stroke: var(--dash-ink);
+    stroke-width: 3;
+}
+
+.vi-dash-trend-empty {
+    min-height: 132px;
+}
+
 .vi-dash-bar-axis,
 .vi-dash-bar-row {
     display: grid;
@@ -626,7 +703,7 @@ body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-card-heading h3 {
 
 .vi-dash-recent-table {
     width: 100%;
-    min-width: 980px;
+    min-width: 760px;
     table-layout: fixed;
     border-collapse: collapse;
     color: var(--dash-text);
@@ -723,42 +800,64 @@ body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-card-heading h3 {
     text-align: center;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1100px) and (min-width: 901px) {
     .vi-dash-heading {
-        margin-bottom: 12px;
+        margin-bottom: 9px;
     }
 
     .vi-dash-filter {
-        margin-bottom: 12px;
-        padding: 11px 13px;
+        margin-bottom: 10px;
+        padding: 10px 12px;
     }
 
     .vi-dash-kpis {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-        margin-bottom: 12px;
+        gap: 8px;
+        margin-bottom: 10px;
     }
 
     .vi-dash-kpi {
-        gap: 9px;
-        padding: 12px;
+        gap: 8px;
+        padding: 11px 10px;
     }
 
     .vi-dash-kpi-icon {
-        width: 35px;
-        height: 35px;
+        width: 32px;
+        height: 32px;
+        font-size: 16px;
+    }
+
+    .vi-dash-kpi-label {
+        font-size: 12px;
+    }
+
+    .vi-dash-kpi-value {
+        font-size: 24px;
+    }
+
+    .vi-dash-kpi-note {
+        font-size: 11px;
     }
 
     .vi-dash-analytics {
-        gap: 12px;
+        gap: 10px;
     }
 
     .vi-dash-chart-card {
-        padding: 14px;
+        padding: 12px;
     }
 
     .vi-dash-donut-layout {
-        gap: 12px;
+        gap: 10px;
+    }
+
+    .vi-dash-donut {
+        width: clamp(108px, 11vw, 132px);
+    }
+}
+
+@media (max-width: 900px) {
+    .vi-dash-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
@@ -775,6 +874,10 @@ body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-card-heading h3 {
     .vi-dash-bar-row {
         grid-template-columns: minmax(90px, .8fr) minmax(110px, 1.5fr) 30px;
         gap: 8px;
+    }
+
+    .vi-dash-trend-card {
+        grid-column: auto;
     }
 }
 
@@ -835,6 +938,58 @@ body.vi-dashboard-chrome .vi-content .vi-dash .vi-dash-card-heading h3 {
     .vi-dash-bar-row {
         grid-template-columns: minmax(84px, .8fr) minmax(100px, 1.5fr) 28px;
         gap: 6px;
+    }
+
+    .vi-dash-trend-date-label {
+        font-size: 14px;
+    }
+}
+
+@media (min-width: 901px) and (max-height: 650px) {
+    .vi-dash-heading {
+        margin-bottom: 8px;
+    }
+
+    .vi-dash .vi-page-subtitle {
+        margin-top: 3px;
+        font-size: 13px;
+    }
+
+    .vi-dash-filter {
+        margin-bottom: 9px;
+        padding: 9px 12px;
+    }
+
+    .vi-dash .vi-control,
+    .vi-content .vi-dash .vi-dash-filter-actions .vi-btn {
+        min-height: 38px;
+    }
+
+    .vi-dash-kpis {
+        margin-bottom: 9px;
+    }
+
+    .vi-dash-kpi {
+        padding-top: 9px;
+        padding-bottom: 9px;
+    }
+
+    .vi-dash-chart-card {
+        padding: 11px;
+    }
+
+    .vi-dash-card-heading {
+        margin-bottom: 8px;
+    }
+
+    .vi-dash-donut-layout {
+        min-height: 132px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vi-dash-recent-table tbody tr {
+        transition: none;
     }
 }
 

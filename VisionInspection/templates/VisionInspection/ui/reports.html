@@ -5,7 +5,7 @@
 {% block title %}Inspection Report — VisionInspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}?v=20261021-1">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}?v=20261022-3">
 {% endblock %}
 
 {% block header_title %}Inspection Report{% endblock %}
@@ -58,6 +58,22 @@
                     <select id="reportResult" name="result" class="vi-control">
                         {% for option in result_options %}
                             <option value="{{ option.value }}" {% if filters.result == option.value %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label for="reportFrontResult">Front Result</label>
+                    <select id="reportFrontResult" name="front_result" class="vi-control">
+                        {% for option in side_result_options %}
+                            <option value="{{ option.value }}" {% if filters.front_result == option.value %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label for="reportBackResult">Back Result</label>
+                    <select id="reportBackResult" name="back_result" class="vi-control">
+                        {% for option in side_result_options %}
+                            <option value="{{ option.value }}" {% if filters.back_result == option.value %}selected{% endif %}>{{ option.label }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -153,6 +169,7 @@
                 <thead>
                     <tr>
                         <th>#</th>
+                        <th>Inspection ID</th>
                         <th>Date &amp; Time</th>
                         <th>Part No.</th>
                         <th>Part Name</th>
@@ -168,6 +185,7 @@
                     {% for row in recent_rows %}
                         <tr data-report-row>
                             <td>{{ page_first|add:forloop.counter0 }}</td>
+                            <td>{{ row.inspection_id }}</td>
                             <td>{{ row.log.timestamp|date:"Y-m-d H:i:s" }}</td>
                             <td>{{ row.log.part_number|default:"—" }}</td>
                             <td>{{ row.part_name|default:"—" }}</td>
@@ -177,15 +195,17 @@
                             <td><span class="vi-badge {{ row.front_badge }}">{{ row.front_label }}</span></td>
                             <td><span class="vi-badge {{ row.back_badge }}">{{ row.back_label }}</span></td>
                             <td class="vi-report-actions">
+                                <div class="vi-report-action-buttons">
                                 {% if row.front_image_url %}<a class="vi-btn vi-btn-sm" href="{{ row.front_image_url }}" target="_blank" rel="noopener" title="View captured front image">Front image</a>{% endif %}
                                 {% if row.back_image_url %}<a class="vi-btn vi-btn-sm" href="{{ row.back_image_url }}" target="_blank" rel="noopener" title="View captured back image">Back image</a>{% endif %}
                                 <a class="vi-btn vi-btn-sm" href="{% url 'VisionInspection:traceability-detail' row.log.pk %}?next={{ request.get_full_path|urlencode }}"
                                    title="View inspection details" aria-label="View inspection details">Details</a>
+                                </div>
                             </td>
                         </tr>
                     {% empty %}
                         <tr>
-                            <td colspan="10">
+                            <td colspan="11">
                                 <div class="vi-empty">
                                     <div class="vi-empty-icon">&#9702;</div>
                                     <div class="vi-empty-title">No inspection records found</div>
@@ -195,7 +215,7 @@
                         </tr>
                     {% endfor %}
                     <tr id="reportSearchEmpty" style="display:none">
-                        <td colspan="10">
+                        <td colspan="11">
                             <div class="vi-empty">
                                 <div class="vi-empty-title">No records on this page match the search</div>
                                 <div class="vi-empty-text">Clear the search box to see every record of this page again.</div>
@@ -211,6 +231,7 @@
                 <thead>
                     <tr>
                         <th>#</th>
+                        <th>Inspection ID</th>
                         <th>Date &amp; Time</th>
                         <th>Part No.</th>
                         <th>Part Name</th>
@@ -225,6 +246,7 @@
                     {% for row in print_rows %}
                     <tr data-print-row>
                         <td>{{ forloop.counter }}</td>
+                        <td>{{ row.inspection_id }}</td>
                         <td>{{ row.log.timestamp|localtime|date:"Y-m-d H:i:s" }}</td>
                         <td>{{ row.log.part_number|default:"—" }}</td>
                         <td>{{ row.part_name|default:"—" }}</td>
@@ -235,7 +257,7 @@
                         <td><span class="vi-report-print-result {{ row.back_badge }}">{{ row.back_label }}</span></td>
                     </tr>
                     {% empty %}
-                    <tr><td colspan="9">No inspection records found.</td></tr>
+                    <tr><td colspan="10">No inspection records found.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>

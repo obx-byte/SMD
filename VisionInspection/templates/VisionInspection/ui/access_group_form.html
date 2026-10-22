@@ -1,0 +1,130 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}{% if read_only %}View{% elif is_edit %}Edit{% else %}Create{% endif %} Access Group{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'VisionInspection/css/permission_management.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="vi-permissions-page">
+    <header class="vi-permissions-heading">
+        <div>
+            <h1>{% if read_only %}View{% elif is_edit %}Edit{% else %}Create{% endif %} Access Group</h1>
+            <p>{% if read_only %}Review the saved group permissions.{% else %}Set the group name and the screen permissions it grants.{% endif %}</p>
+        </div>
+    </header>
+
+    <section class="vi-permissions-panel">
+        <form method="post" class="vi-access-group-form" id="accessGroupForm">
+            {% csrf_token %}
+            <label for="access-group-name">Group Name</label>
+            <input id="access-group-name" name="name" type="text" maxlength="150" required value="{{ form_name }}" {% if read_only %}disabled{% endif %}>
+            <label for="access-group-description">Description <span class="vi-optional">(optional)</span></label>
+            <textarea id="access-group-description" name="description" maxlength="500" rows="3" {% if read_only %}disabled{% endif %}>{{ form_description }}</textarea>
+            <label class="vi-access-group-active">
+                <input type="checkbox" name="is_active" {% if form_is_active %}checked{% endif %} {% if read_only %}disabled{% endif %}>
+                Active (inactive groups do not grant screen permissions)
+            </label>
+
+            <div class="vi-permissions-panel__heading">
+                <div>
+                    <h2>Permissions</h2>
+                    <p id="permission-change-state" role="status" aria-live="polite">No unsaved changes.</p>
+                </div>
+            </div>
+            <div class="vi-permissions-table-wrap">
+                <table class="vi-permissions-table vi-screen-permissions-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Screen</th>
+                            <th scope="col">Sub Screen</th>
+                            <th scope="col">Select</th>
+                        </tr>
+                    </thead>
+                    {% for module in permission_groups %}
+                    <tbody>
+                        <tr class="vi-screen-permissions-parent">
+                            <th scope="rowgroup" colspan="2">{{ module.name }}</th>
+                            <td>
+                                <label class="vi-permissions-checkbox">
+                                    <input type="checkbox" class="vi-screen-parent" data-parent="{{ forloop.counter }}" aria-label="Select all {{ module.name }} permissions" {% if read_only %}disabled{% endif %}>
+                                    <span>Select all</span>
+                                </label>
+                            </td>
+                        </tr>
+                        {% for item in module.items %}
+                        <tr>
+                            <td>{{ module.name }}</td>
+                            <td>{{ item.screen }} — {{ item.action }}</td>
+                            <td>
+                                <label class="vi-permissions-checkbox">
+                                    <input type="checkbox" name="permission" value="{{ item.codename }}" data-parent="{{ forloop.parentloop.counter }}" {% if item.checked %}checked{% endif %} {% if read_only %}disabled{% endif %} aria-label="{{ module.name }}: {{ item.screen }} — {{ item.action }}">
+                                    <span>{% if item.checked %}Allowed{% else %}Allow{% endif %}</span>
+                                </label>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                    {% endfor %}
+                </table>
+            </div>
+            <div class="vi-permissions-submit-row vi-access-group-actions">
+                {% if read_only and access_group %}
+                <a class="vi-permissions-button vi-permissions-button--secondary" href="{% url 'VisionInspection:access-group-edit' access_group.pk %}">Edit</a>
+                {% elif not read_only %}
+                <button class="vi-permissions-button vi-permissions-button--primary" type="submit">Save Access Group</button>
+                {% endif %}
+                <a class="vi-permissions-button vi-permissions-button--secondary" href="{% url 'VisionInspection:access-groups' %}">Cancel</a>
+            </div>
+        </form>
+    </section>
+</div>
+{% if not read_only %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        var form = document.getElementById('accessGroupForm');
+        var state = document.getElementById('permission-change-state');
+        if (!form || !state) return;
+        var children = Array.from(form.querySelectorAll('input[name="permission"]'));
+        var parents = Array.from(form.querySelectorAll('.vi-screen-parent'));
+        var initial = children.map(function (input) { return input.checked; });
+
+        function updateParent(parent) {
+            var related = children.filter(function (input) {
+                return input.dataset.parent === parent.dataset.parent;
+            });
+            var selected = related.filter(function (input) { return input.checked; }).length;
+            parent.checked = related.length > 0 && selected === related.length;
+            parent.indeterminate = selected > 0 && selected < related.length;
+        }
+        function updateState() {
+            var changed = children.some(function (input, index) {
+                return input.checked !== initial[index];
+            });
+            state.textContent = changed ? 'Unsaved changes.' : 'No unsaved changes.';
+            parents.forEach(updateParent);
+        }
+
+        parents.forEach(function (parent) {
+            updateParent(parent);
+            parent.addEventListener('change', function () {
+                children.forEach(function (input) {
+                    if (input.dataset.parent === parent.dataset.parent) {
+                        input.checked = parent.checked;
+                    }
+                });
+                updateState();
+            });
+        });
+        children.forEach(function (input) {
+            input.addEventListener('change', updateState);
+        });
+        form.addEventListener('submit', function () {
+            state.textContent = 'Saving changes.';
+        });
+    });
+</script>
+{% endif %}
+{% endblock %}

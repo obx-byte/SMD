@@ -1,0 +1,43 @@
+{% extends "VisionInspection/ui/base.html" %}
+{% load static %}
+
+{% block title %}User Details{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'VisionInspection/css/permission_management.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="vi-permissions-page">
+    <header class="vi-permissions-heading">
+        <div>
+            <h1>User Details</h1>
+            <p>{{ account.username }}{% if account.get_full_name %} — {{ account.get_full_name }}{% endif %}</p>
+        </div>
+        <a class="vi-permissions-button vi-permissions-button--secondary" href="{% url 'VisionInspection:user-management' %}">Back to User Management</a>
+    </header>
+
+    <section class="vi-permissions-panel" aria-labelledby="user-details-heading">
+        <h2 id="user-details-heading">Account</h2>
+        <dl class="vi-user-detail-list">
+            <div><dt>Employee ID / Username</dt><dd>{{ account.username }}</dd></div>
+            <div><dt>Employee name</dt><dd>{{ account.get_full_name|default:"—" }}</dd></div>
+            <div><dt>Role</dt><dd>{% for group in account.groups.all %}<span class="vi-role-badge">{{ group.name }}</span>{% empty %}Unassigned{% endfor %}</dd></div>
+            <div><dt>Access Groups</dt><dd>{% for access_group in access_groups %}<span class="vi-role-badge">{{ access_group.group.name }}</span>{% empty %}None{% endfor %}</dd></div>
+            <div><dt>Account status</dt><dd>{% if account.is_active %}Active{% else %}Inactive{% endif %}</dd></div>
+            <div><dt>Last login</dt><dd>{{ account.last_login|date:"Y-m-d H:i"|default:"Never" }}</dd></div>
+        </dl>
+    </section>
+
+    {% if overrides %}
+    <section class="vi-permissions-panel" aria-labelledby="user-overrides-detail-heading">
+        <h2 id="user-overrides-detail-heading">Account permission overrides</h2>
+        <ul class="vi-user-override-list">
+            {% for override in overrides %}
+            <li>{{ override.permission.name }} — {% if override.granted %}Granted{% else %}Denied{% endif %}</li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

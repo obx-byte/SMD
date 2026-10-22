@@ -5,14 +5,16 @@ It is intentionally separate from the API/operator views in views.py.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
 from django.conf import settings
 from django.core.paginator import Paginator
 from django.db.models import Count, Q
+from django.db.models.functions import TruncDate
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
+from django.utils import timezone
 
 from VisionInspection.models import (
     VisionInspectionEmployee,
@@ -96,7 +98,7 @@ def dashboard(request):
             ok=Count("pk", filter=Q(result=records.RESULT_OK)),
             not_ok=Count("pk", filter=Q(result=records.RESULT_NOT_OK)),
         )
-        .order_by("-total", "part_number")
+        .order_by("-total", "part_number")[:8]
     )
     chart_max = max((row["total"] for row in grouped_parts), default=0)
     classified_total = summary["ok"] + summary["not_ok"]
@@ -114,6 +116,84 @@ def dashboard(request):
         }
         for row in grouped_parts
     ]
+    trend_rows = []
+    trend_ok_points = ""
+    trend_not_ok_points = ""
+    trend_has_results = False
+    latest_timestamp = logs.order_by("-timestamp", "-pk").values_list(
+        "timestamp", flat=True
+    ).first()
+    if latest_timestamp:
+        current_tz = timezone.get_current_timezone()
+        trend_end = timezone.localtime(latest_timestamp, current_tz).date()
+        trend_start = trend_end - timedelta(days=13)
+        trend_start_at = timezone.make_aware(
+            datetime.combine(trend_start, time.min), current_tz
+        )
+        trend_end_at = timezone.make_aware(
+            datetime.combine(trend_end + timedelta(days=1), time.min), current_tz
+        )
+        daily_results = (
+            logs.filter(
+                timestamp__gte=trend_start_at,
+                timestamp__lt=trend_end_at,
+            )
+            .annotate(day=TruncDate("timestamp", tzinfo=current_tz))
+            .values("day")
+            .annotate(
+                ok=Count("pk", filter=Q(result=records.RESULT_OK)),
+                not_ok=Count("pk", filter=Q(result=records.RESULT_NOT_OK)),
+            )
+        )
+        daily_by_date = {row["day"]: row for row in daily_results}
+        trend_max = max(
+            (
+                max(row["ok"], row["not_ok"])
+                for row in daily_by_date.values()
+            ),
+            default=0,
+        )
+        trend_has_results = trend_max > 0
+        ok_coordinates = []
+        not_ok_coordinates = []
+        for index in range(14):
+            day = trend_start + timedelta(days=index)
+            result_row = daily_by_date.get(day, {})
+            ok_count = result_row.get("ok", 0)
+            not_ok_count = result_row.get("not_ok", 0)
+            x = round(38 + index * (550 / 13), 1)
+            ok_y = round(126 - (ok_count / trend_max * 96), 1) if trend_max else 126
+            not_ok_y = (
+                round(126 - (not_ok_count / trend_max * 96), 1)
+                if trend_max
+                else 126
+            )
+            ok_coordinates.append(f"{x},{ok_y}")
+            not_ok_coordinates.append(f"{x},{not_ok_y}")
+            trend_rows.append(
+                {
+                    "date": day,
+                    "label": day.strftime("%d %b"),
+                    "ok": ok_count,
+                    "not_ok": not_ok_count,
+                    "x": x,
+                    "ok_y": ok_y,
+                    "not_ok_y": not_ok_y,
+                    "show_label": index % 2 == 0 or index == 13,
+                }
+            )
+        trend_ok_points = " ".join(ok_coordinates)
+        trend_not_ok_points = " ".join(not_ok_coordinates)
+        trend_grid = [
+            {
+                "value": value,
+                "y": round(126 - (value / trend_max * 96), 1) if trend_max else 126,
+            }
+            for value in sorted({0, round(trend_max / 2), trend_max})
+        ]
+    else:
+        trend_grid = []
+
     show_recent_inspections = has_permission(
         request.user, "view_inspection_reports"
     )
@@ -159,11 +239,20 @@ def dashboard(request):
             else 0
         ),
         "part_rows": part_rows,
+        "trend_rows": trend_rows,
+        "trend_ok_points": trend_ok_points,
+        "trend_not_ok_points": trend_not_ok_points,
+        "trend_ok_total": sum(point["ok"] for point in trend_rows),
+        "trend_not_ok_total": sum(point["not_ok"] for point in trend_rows),
+        "trend_has_results": trend_has_results,
+        "trend_grid": trend_grid,
+        "trend_period_start": trend_start if latest_timestamp else None,
+        "trend_period_end": trend_end if latest_timestamp else None,
         "recent_rows": recent_rows,
         "show_recent_inspections": show_recent_inspections,
         "can_view_reports": show_recent_inspections,
         "chart_max": chart_max,
-        "chart_mid": round(chart_max / 2),
+        "chart_mid": max(1, round(chart_max / 2)) if chart_max else 0,
     }
     return render(request, "VisionInspection/ui/dashboard.html", context)
 
@@ -510,8 +599,13 @@ def reports(request):
         {"value": "", "label": "All Results"},
         {"value": records.RESULT_OK, "label": "OK"},
         {"value": records.RESULT_NOT_OK, "label": "NOT OK"},
-        {"value": records.RESULT_INCOMPLETE, "label": "INCOMPLETE"},
-        {"value": records.RESULT_ERROR, "label": "Error"},
+        {"value": records.RESULT_INCOMPLETE_ERROR, "label": "Incomplete / Error"},
+    ]
+    side_result_options = [
+        {"value": "", "label": "All"},
+        {"value": records.RESULT_OK, "label": "OK"},
+        {"value": records.RESULT_NOT_OK, "label": "NOT OK"},
+        {"value": records.RESULT_INCOMPLETE_ERROR, "label": "Incomplete / Error"},
     ]
 
     context = {
@@ -523,6 +617,7 @@ def reports(request):
         "parts": _parts_for_filter(),
         "employees": _report_employees(),
         "result_options": result_options,
+        "side_result_options": side_result_options,
         "summary": records.summarize(logs),
         "recent_rows": rows,
         "print_rows": records.build_rows(list(ordered)),
@@ -581,46 +676,16 @@ def report_export_pdf(request):
 
 
 def settings_page(request):
-    """Render the dashboard/system settings page.
+    """Render the authorized server-side local storage manager."""
+    from VisionInspection.services import storage_service
 
-    Values are read from installed configuration so nothing is fabricated.
-    """
-    from django.conf import settings
-    from django.db import connection
-    from django.urls import get_resolver
-
-    relevant = {
-        "VISION_INSPECTION_DEFAULT_PLANT": getattr(
-            settings, "VISION_INSPECTION_DEFAULT_PLANT", None
-        ),
-        "VISION_INSPECTION_CAMERA_INDEX": getattr(
-            settings, "VISION_INSPECTION_CAMERA_INDEX", None
-        ),
-        "VISION_INSPECTION_INFERENCE_FPS": getattr(
-            settings, "VISION_INSPECTION_INFERENCE_FPS", None
-        ),
-        "VISION_INSPECTION_DEFAULT_STABLE_FRAMES": getattr(
-            settings, "VISION_INSPECTION_DEFAULT_STABLE_FRAMES", None
-        ),
-        "VISION_INSPECTION_TRIGGER_COOLDOWN": getattr(
-            settings, "VISION_INSPECTION_TRIGGER_COOLDOWN", None
-        ),
-        "VISION_TRAINING_DATA_DIR": getattr(
-            settings, "VISION_TRAINING_DATA_DIR", "/data/datasets"
-        ),
-        "VISION_MODEL_OUTPUT_DIR": getattr(
-            settings, "VISION_MODEL_OUTPUT_DIR", "/data/models"
-        ),
-        "DEBUG": getattr(settings, "DEBUG", False),
-        "DATABASE_ENGINE": connection.vendor,
-    }
-
-    poll_interval = getattr(settings, "VISION_INSPECTION_DASHBOARD_POLL_MS", 30000)
+    can_browse = has_permission(request.user, "view_storage_settings")
+    can_operate = has_permission(request.user, "change_storage_settings")
     context = {
-        "settings": relevant,
-        "poll_interval": poll_interval,
-        "django_version": _django_version(),
-        "admin_available": _admin_available(get_resolver),
+        "storage_roots": storage_service.storage_manager_roots() if can_browse else [],
+        "can_browse_storage": can_browse,
+        "can_manage_storage": can_operate,
+        "can_manage_storage_roots": is_admin(request.user),
         "sidebar_active": "settings",
     }
     return render(request, "VisionInspection/ui/settings.html", context)
@@ -735,7 +800,39 @@ def traceability_detail(request, inspection_id):
     log = get_object_or_404(VisionInspectionLog.objects.select_related("session"), pk=inspection_id)
     if not can_view_log(request.user, log):
         raise PermissionDenied
-    from VisionInspection.services.storage_service import image_url
+    from VisionInspection.services.storage_service import image_url, metadata_for_field
+
+    def evidence_reference(instance, field_name, fallback_timestamp=None):
+        metadata = metadata_for_field(instance, field_name)
+        url = image_url(instance, field_name)
+        filename = ""
+        storage_path = ""
+        storage_backend = ""
+        captured_at = fallback_timestamp
+        if metadata:
+            filename = metadata.relative_path.replace("\\", "/").rsplit("/", 1)[-1]
+            captured_at = metadata.captured_at or captured_at
+            storage_backend = metadata.get_storage_backend_display()
+            if metadata.storage_backend == "NETWORK" and metadata.destination_id:
+                destination = metadata.destination
+                path_parts = [
+                    destination.destination_directory.strip("/\\"),
+                    metadata.relative_path.replace("\\", "/").strip("/"),
+                ]
+                storage_path = destination.get_full_remote_path().rstrip("/\\")
+                suffix = "/".join(part for part in path_parts if part)
+                if suffix:
+                    storage_path = f"{storage_path}/{suffix}"
+            else:
+                storage_path = str(metadata.get_resolved_path())
+        return {
+            "url": url,
+            "download_url": f"{url}?download=1" if url else "",
+            "filename": filename,
+            "captured_at": captured_at,
+            "storage_path": storage_path,
+            "storage_backend": storage_backend,
+        }
 
     # ROI configuration snapshot preserved with this record.
     roi_config = []
@@ -755,11 +852,15 @@ def traceability_detail(request, inspection_id):
     sides = []
     if session:
         for side, title in (("front", "Front"), ("back", "Back")):
+            completed_at = getattr(session, f"{side}_completed_at", None)
+            original = evidence_reference(session, f"{side}_image", completed_at)
+            annotated = evidence_reference(session, f"{side}_annotated", completed_at)
+            roi_image = evidence_reference(session, f"{side}_roi_image", completed_at)
             sides.append({
                 "key": side, "title": title,
                 "result": getattr(session, f"{side}_verdict", "") or "INCOMPLETE",
                 "status": getattr(session, f"{side}_status", "") or "INCOMPLETE",
-                "captured_at": getattr(session, f"{side}_completed_at", None),
+                "captured_at": original["captured_at"],
                 "detections": getattr(session, f"{side}_detections", []) or [],
                 "results": [
                     {
@@ -771,16 +872,32 @@ def traceability_detail(request, inspection_id):
                     for item in (getattr(session, f"{side}_results", []) or [])
                     if isinstance(item, dict)
                 ],
-                "original_url": image_url(session, f"{side}_image"),
-                "annotated_url": image_url(session, f"{side}_annotated"),
-                "roi_url": image_url(session, f"{side}_roi_image"),
+                "original_url": original["url"],
+                "original_download_url": original["download_url"],
+                "original_filename": original["filename"],
+                "original_captured_at": original["captured_at"],
+                "original_storage_path": original["storage_path"],
+                "original_storage_backend": original["storage_backend"],
+                "annotated_url": annotated["url"],
+                "annotated_filename": annotated["filename"],
+                "annotated_captured_at": annotated["captured_at"],
+                "annotated_storage_path": annotated["storage_path"],
+                "roi_url": roi_image["url"],
+                "roi_filename": roi_image["filename"],
+                "roi_captured_at": roi_image["captured_at"],
+                "roi_storage_path": roi_image["storage_path"],
             })
     detections = log.detected_objects or []
     evidence = {"original": bool(log.inspection_image), "cropped_roi": False, "annotated": False}
+    legacy_image = evidence_reference(log, "inspection_image", log.timestamp)
     model_configured = bool(log.yolo_model_name)
     context = {
         "sidebar_active": "traceability", "log": log, "session": session,
-        "inspection_image_url": image_url(log, "inspection_image"),
+        "inspection_image_url": legacy_image["url"],
+        "inspection_image_download_url": legacy_image["download_url"],
+        "inspection_image_filename": legacy_image["filename"],
+        "inspection_image_captured_at": legacy_image["captured_at"],
+        "inspection_image_storage_path": legacy_image["storage_path"],
         "result_badge": _RESULT_BADGE.get(log.result, "vi-badge-skip"),
         "roi_config": roi_config, "detections": detections,
         "detections_count": len(detections), "evidence": evidence,

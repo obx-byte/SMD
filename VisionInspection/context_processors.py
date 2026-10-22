@@ -30,7 +30,8 @@ def access_flags(request):
         "training_jobs_view": has_permission(user, "view_training_jobs"),
         "user_management": is_admin(user)
         and has_permission(user, "manage_inspection_users"),
-        "permission_management": is_admin(user),
+        "permission_management": is_admin(user)
+        and has_permission(user, "manage_inspection_permissions"),
         "audit": has_permission(user, "view_inspection_audit_log"),
         "operator": "Operator" in groups,
         "supervisor": "Supervisor" in groups,
