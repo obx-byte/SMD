@@ -71,7 +71,10 @@ from VisionInspection.services.camera_service import (
     get_camera_capabilities,
 )
 from VisionInspection.services.continuous_inspection import ContinuousInspectionEngine
-from VisionInspection.services.inspection_workflow import InspectionWorkflow
+from VisionInspection.services.inspection_workflow import (
+    InspectionWorkflow,
+    evaluate_configured_rules,
+)
 from VisionInspection.services.part_configuration import (
     active_roi,
     common_roi_camera_error,
@@ -2291,6 +2294,7 @@ def api_part_vision_preview(request, part_id):
     if side not in (VisionPartConfiguration.SIDE_FRONT, VisionPartConfiguration.SIDE_BACK):
         return _error("side must be FRONT or BACK.")
 
+    workflow_session = None
     workflow_session_id = request.GET.get("session_id")
     if workflow_session_id:
         workflow_session, session_error = _active_workflow_session(
@@ -2327,11 +2331,18 @@ def api_part_vision_preview(request, part_id):
         "0", "false", "no",
     )
 
-    configuration = (
-        VisionPartConfiguration.objects.filter(part=part)
-        .order_by("-version")
-        .first()
-    )
+    if workflow_session and workflow_session.configuration_id:
+        configuration = workflow_session.configuration
+    else:
+        configuration = (
+            VisionPartConfiguration.objects.filter(
+                part=part,
+                is_active=True,
+                status=VisionPartConfiguration.STATUS_READY,
+            )
+            .order_by("-version")
+            .first()
+        )
     if configuration is None:
         return conflict(
             "No Part Vision configuration is saved.",
@@ -2351,13 +2362,22 @@ def api_part_vision_preview(request, part_id):
         )
 
     model_id = _as_int(request.GET.get("model_id"), 0)
-    part_models = configuration.part_models.filter(
-        is_enabled=True,
-        task_type=VisionPartModel.TASK_SEGMENT,
-    ).select_related("model")
+    part_models = list(
+        configuration.part_models.filter(
+            is_enabled=True,
+            task_type=VisionPartModel.TASK_SEGMENT,
+        )
+        .select_related("model")
+        .prefetch_related("class_configs")
+        .order_by("id")
+    )
     if model_id:
-        part_models = part_models.filter(model_id=model_id)
-    association = part_models.order_by("id").first()
+        association = next(
+            (item for item in part_models if item.model_id == model_id),
+            None,
+        )
+    else:
+        association = part_models[0] if part_models else None
     if association is None:
         return conflict(
             "No enabled segmentation model matches the requested model.",
@@ -2567,14 +2587,228 @@ def api_part_vision_preview(request, part_id):
     for detection in detections:
         class_name = str(detection["class"])
         counts[class_name] = counts.get(class_name, 0) + 1
+
+    preview_results = []
+    inference_by_model = {association.pk: (detections, inference_ms)}
+    for part_model in part_models:
+        side_rules = [
+            rule
+            for rule in part_model.class_configs.all()
+            if rule.is_enabled and rule.applies_to(side.lower())
+        ]
+        if not side_rules:
+            continue
+
+        try:
+            model_info = registry.inspect(
+                part_model.model.model_path,
+                task="segment",
+            )
+        except ModelLoadError as exc:
+            logger.exception(
+                "Could not validate live preview class mapping: part_id=%s "
+                "configuration_id=%s model_id=%s side=%s",
+                part.pk,
+                configuration.pk,
+                part_model.model_id,
+                side.lower(),
+            )
+            return preview_error(
+                f"Could not validate the configured model {part_model.model.name}: {exc}",
+                "model_inference_failed",
+                status=503,
+            )
+        if not model_info.get("ok"):
+            return preview_error(
+                f"Could not load the configured model {part_model.model.name}: {model_info.get('error') or 'model metadata is unavailable.'}",
+                "model_inference_failed",
+                status=503,
+            )
+        actual_classes = model_info.get("classes")
+        saved_classes = part_model.classes or []
+        if (
+            model_info.get("task") != "segment"
+            or not isinstance(actual_classes, list)
+            or not isinstance(saved_classes, list)
+            or actual_classes != saved_classes
+        ):
+            return preview_error(
+                f"The configured classes for {part_model.model.name} no longer match its segmentation model.",
+                "configuration_invalid",
+                status=422,
+            )
+        actual_class_map = {
+            int(item["id"]): str(item["name"])
+            for item in actual_classes
+            if isinstance(item, dict) and "id" in item and item.get("name")
+        }
+        if len(actual_class_map) != len(actual_classes):
+            return preview_error(
+                f"The class mapping for {part_model.model.name} is invalid.",
+                "configuration_invalid",
+                status=422,
+            )
+        rules = []
+        for rule in side_rules:
+            if rule.class_id not in actual_class_map or actual_class_map[rule.class_id] != rule.class_name:
+                return preview_error(
+                    f"The configured class mapping for {rule.class_name} is invalid.",
+                    "configuration_invalid",
+                    status=422,
+                )
+            rules.append({
+                "class_id": rule.class_id,
+                "class_name": rule.class_name,
+                "expected_front": rule.expected_front,
+                "expected_back": rule.expected_back,
+                "front_threshold": rule.front_threshold,
+                "back_threshold": rule.back_threshold,
+                "priority": rule.priority,
+                "required": rule.is_required,
+                "acceptance_rule": rule.acceptance_rule or configuration.acceptance_rule,
+            })
+
+        if part_model.pk not in inference_by_model:
+            class_ids = {rule["class_id"] for rule in rules}
+            try:
+                model_detections, model_inference_ms = registry.predict(
+                    part_model.model.model_path,
+                    inference_frame,
+                    conf=0.30,
+                    classes=class_ids,
+                    task="segment",
+                )
+            except ModelLoadError as exc:
+                logger.exception(
+                    "Live inspection inference failed: part_id=%s configuration_id=%s "
+                    "model_id=%s side=%s",
+                    part.pk,
+                    configuration.pk,
+                    part_model.model_id,
+                    side.lower(),
+                )
+                return preview_error(
+                    f"Live inference failed for {part_model.model.name}: {exc}",
+                    "model_inference_failed",
+                    status=503,
+                )
+            if (
+                not isinstance(model_detections, list)
+                or not isinstance(model_inference_ms, (int, float))
+                or not math.isfinite(float(model_inference_ms))
+            ):
+                return preview_error(
+                    f"Live inference failed for {part_model.model.name}.",
+                    "model_inference_failed",
+                    status=503,
+                )
+            inference_by_model[part_model.pk] = (
+                model_detections,
+                float(model_inference_ms),
+            )
+
+        model_detections = inference_by_model[part_model.pk][0]
+        rule_class_ids = {rule["class_id"] for rule in rules}
+        eligible = []
+        for detection in model_detections:
+            if not isinstance(detection, dict):
+                return preview_error(
+                    f"Live inference for {part_model.model.name} returned an invalid detection.",
+                    "model_inference_failed",
+                    status=503,
+                )
+            class_id = detection.get("class_id")
+            try:
+                confidence = float(detection.get("confidence"))
+            except (TypeError, ValueError):
+                return preview_error(
+                    f"Live inference for {part_model.model.name} returned an invalid confidence.",
+                    "model_inference_failed",
+                    status=503,
+                )
+            if (
+                not isinstance(class_id, int)
+                or isinstance(class_id, bool)
+                or class_id not in actual_class_map
+                or detection.get("class") != actual_class_map[class_id]
+                or not math.isfinite(confidence)
+                or not 0 <= confidence <= 1
+            ):
+                return preview_error(
+                    f"Live inference for {part_model.model.name} returned an invalid class or confidence.",
+                    "model_inference_failed",
+                    status=503,
+                )
+            try:
+                coordinates = [
+                    float(detection[key])
+                    for key in ("x1", "y1", "x2", "y2")
+                ]
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return preview_error(
+                    f"Live inference for {part_model.model.name} returned invalid detection geometry.",
+                    "model_inference_failed",
+                    status=503,
+                )
+            if (
+                not all(math.isfinite(value) for value in coordinates)
+                or coordinates[2] < coordinates[0]
+                or coordinates[3] < coordinates[1]
+            ):
+                return preview_error(
+                    f"Live inference for {part_model.model.name} returned invalid detection geometry.",
+                    "model_inference_failed",
+                    status=503,
+                )
+            if class_id in rule_class_ids and confidence >= 0.30:
+                eligible.append({**detection, "confidence": confidence})
+        model_config = {
+            "model_id": part_model.model_id,
+            "name": part_model.display_name or part_model.model.name,
+            "rules": rules,
+        }
+        try:
+            preview_results.extend(
+                evaluate_configured_rules(side.lower(), model_config, eligible)
+            )
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            return preview_error(
+                f"The configured acceptance rule for {part_model.model.name} is invalid: {exc}",
+                "configuration_invalid",
+                status=422,
+            )
+
+    required_results = [result for result in preview_results if result["required"]]
+    if not required_results:
+        return preview_error(
+            f"No required {side.title()} class rules are configured for live evaluation.",
+            "configuration_invalid",
+            status=422,
+        )
+    live_verdict = "NOT_OK" if any(
+        result["status"] != "OK" for result in required_results
+    ) else "OK"
+    live_status = "NOT OKAY" if live_verdict == "NOT_OK" else "OKAY"
+    preview_results.sort(
+        key=lambda result: (
+            result["priority"],
+            result["model_id"],
+            result["class_id"],
+        )
+    )
     return _json_response(
         {
             "ok": True,
+            "part_id": part.pk,
+            "session_id": workflow_session_id,
             "configuration_id": configuration.pk,
             "configuration_version": configuration.version,
             "model_id": association.model_id,
             "side": side,
             "inference_status": "complete",
+            "live_status": live_status,
+            "live_verdict": live_verdict,
+            "rule_results": preview_results,
             "frame_seq": frame_meta.get("seq"),
             "frame_age_ms": frame_age_ms,
             "roi_applied": bool(roi_rect),

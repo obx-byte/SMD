@@ -68,6 +68,61 @@ def _norm(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().lower()
 
 
+def evaluate_configured_rules(side, model_config, detections):
+    """Evaluate validated detections with the configured side-specific rules."""
+    results = []
+    for rule in model_config["rules"]:
+        configured_threshold = float(rule[f"{side}_threshold"])
+        expected = int(rule[f"expected_{side}"])
+        if (
+            not math.isfinite(configured_threshold)
+            or not 0 <= configured_threshold <= 1
+            or expected < 0
+        ):
+            raise ValueError("The configured confidence threshold or expected count is invalid.")
+        threshold = max(_CONFIGURED_MODEL_CONFIDENCE, configured_threshold)
+        matching = [
+            detection for detection in detections
+            if detection.get("class_id") == rule["class_id"]
+            and float(detection.get("confidence", 0.0)) >= threshold
+        ]
+        count = len(matching)
+        confidence = max(
+            (float(detection.get("confidence", 0.0)) for detection in matching),
+            default=None,
+        )
+        acceptance = rule["acceptance_rule"]
+        if acceptance == "presence":
+            passed = count > 0
+        elif acceptance == "confidence":
+            passed = confidence is not None
+        elif acceptance == "count_confidence":
+            passed = count == expected and confidence is not None
+        elif acceptance == "count":
+            passed = count == expected
+        else:
+            raise ValueError(f"Unsupported acceptance rule: {acceptance}")
+        results.append({
+            "priority": rule["priority"],
+            "model_id": model_config["model_id"],
+            "model": model_config["name"],
+            "class_id": rule["class_id"],
+            "stitch": rule["class_name"],
+            "side": side.upper(),
+            "expected_count": expected,
+            "actual_count": count,
+            "confidence": round(confidence, 4) if confidence is not None else None,
+            "threshold": threshold,
+            "required": rule["required"],
+            "status": "OK" if passed else ("NOT_OK" if rule["required"] else "OPTIONAL_NOT_OK"),
+            "reason": (
+                f"Expected {expected} detection(s), found {count}."
+                if not passed else f"{count} detection(s) met the configured rule."
+            ),
+        })
+    return results
+
+
 def station_id() -> str:
     """Return the configured station label, or an empty value."""
     return _clean(getattr(settings, "VISION_INSPECTION_STATION_ID", ""))
@@ -1340,49 +1395,13 @@ class InspectionWorkflow:
                 {**detection, "model_id": model_config["model_id"]}
                 for detection in eligible_detections
             )
-            for rule in rules:
-                threshold = max(
-                    _CONFIGURED_MODEL_CONFIDENCE,
-                    float(rule[f"{side}_threshold"]),
+            results.extend(
+                evaluate_configured_rules(
+                    side,
+                    {**model_config, "rules": rules},
+                    eligible_detections,
                 )
-                matching = [
-                    detection for detection in eligible_detections
-                    if detection.get("class_id") == rule["class_id"]
-                    and float(detection.get("confidence", 0.0)) >= threshold
-                ]
-                count = len(matching)
-                confidence = max(
-                    (float(detection.get("confidence", 0.0)) for detection in matching),
-                    default=None,
-                )
-                expected = int(rule[f"expected_{side}"])
-                acceptance = rule["acceptance_rule"]
-                if acceptance == "presence":
-                    passed = count > 0
-                elif acceptance == "confidence":
-                    passed = confidence is not None
-                elif acceptance == "count_confidence":
-                    passed = count == expected and confidence is not None
-                else:
-                    passed = count == expected
-                results.append({
-                    "priority": rule["priority"],
-                    "model_id": model_config["model_id"],
-                    "model": model_config["name"],
-                    "class_id": rule["class_id"],
-                    "stitch": rule["class_name"],
-                    "side": side.upper(),
-                    "expected_count": expected,
-                    "actual_count": count,
-                    "confidence": round(confidence, 4) if confidence is not None else None,
-                    "threshold": threshold,
-                    "required": rule["required"],
-                    "status": "OK" if passed else ("NOT_OK" if rule["required"] else "OPTIONAL_NOT_OK"),
-                    "reason": (
-                        f"Expected {expected} detection(s), found {count}."
-                        if not passed else f"{count} detection(s) met the configured rule."
-                    ),
-                })
+            )
         results.sort(key=lambda row: (row["priority"], row["model_id"], row["class_id"]))
         logger.info(
             "Required-class evaluation complete: session=%s side=%s classes=%s",
@@ -1407,6 +1426,27 @@ class InspectionWorkflow:
     #  Step 4/5 — Run one side (real camera + YOLO + ROI crop)
     # ------------------------------------------------------------------ #
     def run_side(self, session_id: str, side: str, frame=None):
+        session = self._get_session(session_id)
+        if session is None or side not in ("front", "back"):
+            return self._run_side(session_id, side, frame=frame)
+        try:
+            return self._run_side(session_id, side, frame=frame)
+        except Exception as exc:
+            logger.exception(
+                "Unexpected inspection failure: session=%s side=%s",
+                session.session_id,
+                side,
+            )
+            session.refresh_from_db()
+            if getattr(session, f"{side}_status") == _S.IN_PROGRESS:
+                return self._fail_side(
+                    session,
+                    side,
+                    f"Inspection failed unexpectedly: {exc}",
+                )
+            raise
+
+    def _run_side(self, session_id: str, side: str, frame=None):
         if side not in ("front", "back"):
             return {"ok": False, "state": "invalid_side", "message": "Inspection side is invalid."}
         session = self._get_session(session_id)
@@ -1969,7 +2009,8 @@ class InspectionWorkflow:
                 preset_name=f"SESSION#{session.session_id}"
             ).first()
             return {"ok": True, "state": "already_saved", "session_id": str(session.session_id),
-                    "inspection_id": log.pk if log else None}
+                    "inspection_id": log.pk if log else None,
+                    "timestamp": log.timestamp.isoformat() if log else None}
         if self._expire_if_needed(session):
             return {"ok": False, "state": "session_expired", "message": "This inspection session expired. Scan the part again."}
         if not session.is_active or session.stage == "cancelled":
@@ -2034,7 +2075,8 @@ class InspectionWorkflow:
         )
         logger.info("Inspection session %s saved as log %s", session.session_id, log.pk)
         return {"ok": True, "state": "saved", "session_id": str(session.session_id),
-                "inspection_id": log.pk, "overall": session.overall}
+            "inspection_id": log.pk, "overall": session.overall,
+            "timestamp": log.timestamp.isoformat()}
 
     # ------------------------------------------------------------------ #
     #  Progress + cancel
@@ -2115,10 +2157,16 @@ class InspectionWorkflow:
             else:
                 st = "Pending"
             out.append({"step": key, "label": label, "status": st})
+        saved_log = None
+        if session.is_saved:
+            saved_log = VisionInspectionLog.objects.filter(
+                preset_name=f"SESSION#{session.session_id}"
+            ).only("pk", "timestamp").first()
         return {
             "ok": True,
             "session_id": str(session.session_id),
             "part_number": session.part_number,
+            "configuration_id": session.configuration_id,
             "stage": session.stage,
             "front_status": session.front_status,
             "back_status": session.back_status,
@@ -2127,6 +2175,9 @@ class InspectionWorkflow:
             "overall": session.overall,
             "inspection_status": inspection_status,
             "is_saved": session.is_saved,
+            "inspection_id": saved_log.pk if saved_log else None,
+            "timestamp": saved_log.timestamp.isoformat() if saved_log else None,
+            "saved_at": session.saved_at.isoformat() if session.saved_at else None,
             "is_active": session.is_active,
             "front_results": session.front_results,
             "back_results": session.back_results,

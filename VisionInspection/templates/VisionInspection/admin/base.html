@@ -5,66 +5,103 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}VisionInspection Admin{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261022-6">
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-2">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261022-7">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-4">
+    <script>
+        (function () {
+            try {
+                var compact = localStorage.getItem("vi-sidebar-compact");
+                if (compact === "true" || compact === "false") {
+                    document.documentElement.setAttribute("data-sidebar-compact", compact);
+                }
+            } catch (e) {}
+        })();
+    </script>
 </head>
 <body>
     <aside class="vi-sidebar" id="viSidebar">
         <div class="vi-sidebar-header">
-            <span class="vi-sidebar-title">VISIONINSPECTION</span>
+            <span class="vi-sidebar-logo">&#9670;</span>
+            <div class="vi-sidebar-brand">
+                <span class="vi-sidebar-title">Vision Inspection</span>
+                <span class="vi-sidebar-subtitle">Airbag Stitch Inspection</span>
+            </div>
+            <button class="vi-sidebar-compact-toggle" id="viSidebarCompactToggle" type="button"
+                    aria-label="Collapse navigation" aria-expanded="true" title="Collapse navigation">
+                <span aria-hidden="true">&#171;</span>
+            </button>
         </div>
         <nav class="vi-sidebar-nav">
             <a href="{% url 'VisionInspection:admin-dashboard' %}" class="vi-sidebar-link {% if sidebar_active == 'dashboard' %}active{% endif %}">
-                <span class="vi-sidebar-icon">&#9632;</span> Dashboard
+                <span class="vi-sidebar-icon">&#9632;</span><span class="vi-sidebar-label">Dashboard</span>
             </a>
 
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-master" aria-controls="section-master" aria-expanded="false">Master <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-master">
-                    <a href="{% url 'VisionInspection:admin-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' %}active{% endif %}">Employee Master</a>
-                    <a href="{% url 'VisionInspection:admin-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}">Part Master</a>
-                    <a href="{% url 'VisionInspection:admin-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' %}active{% endif %}">YOLO Model Master</a>
-                    <a href="{% url 'VisionInspection:admin-presets' %}" class="vi-sidebar-link {% if sidebar_active == 'presets' %}active{% endif %}">Inspection Preset Master</a>
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-master" aria-label="Master Data navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9638;</span>
+                    <span class="vi-sidebar-section-label">Master Data</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-master">
+                    <a href="{% url 'VisionInspection:admin-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' %}active{% endif %}"><span class="vi-sidebar-icon">&#9737;</span><span class="vi-sidebar-label">Employee Master</span></a>
+                    <a href="{% url 'VisionInspection:admin-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' %}active{% endif %}"><span class="vi-sidebar-icon">&#9638;</span><span class="vi-sidebar-label">Part Master</span></a>
+                    <a href="{% url 'VisionInspection:admin-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' %}active{% endif %}"><span class="vi-sidebar-icon">&#9632;</span><span class="vi-sidebar-label">YOLO Model Master</span></a>
+                    <a href="{% url 'VisionInspection:admin-presets' %}" class="vi-sidebar-link {% if sidebar_active == 'presets' %}active{% endif %}"><span class="vi-sidebar-icon">&#9776;</span><span class="vi-sidebar-label">Inspection Preset Master</span></a>
                 </div>
             </div>
 
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-inspection" aria-controls="section-inspection" aria-expanded="false">Vision Inspection <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-inspection">
-                    <a href="{% url 'VisionInspection:admin-state' %}" class="vi-sidebar-link {% if sidebar_active == 'state' %}active{% endif %}">Inspection State</a>
-                    <a href="{% url 'VisionInspection:admin-rois' %}" class="vi-sidebar-link {% if sidebar_active == 'rois' %}active{% endif %}">ROI Configuration</a>
-                    <a href="{% url 'VisionInspection:admin-trigger-zones' %}" class="vi-sidebar-link {% if sidebar_active == 'trigger_zones' %}active{% endif %}">Trigger Zone Configuration</a>
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-inspection" aria-label="Vision Inspection navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9679;</span>
+                    <span class="vi-sidebar-section-label">Vision Inspection</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-inspection">
+                    <a href="{% url 'VisionInspection:admin-state' %}" class="vi-sidebar-link {% if sidebar_active == 'state' %}active{% endif %}"><span class="vi-sidebar-icon">&#9679;</span><span class="vi-sidebar-label">Inspection State</span></a>
+                    <a href="{% url 'VisionInspection:admin-rois' %}" class="vi-sidebar-link {% if sidebar_active == 'rois' %}active{% endif %}"><span class="vi-sidebar-icon">&#9638;</span><span class="vi-sidebar-label">ROI Configuration</span></a>
+                    <a href="{% url 'VisionInspection:admin-trigger-zones' %}" class="vi-sidebar-link {% if sidebar_active == 'trigger_zones' %}active{% endif %}"><span class="vi-sidebar-icon">&#9675;</span><span class="vi-sidebar-label">Trigger Zone Configuration</span></a>
                 </div>
             </div>
 
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-ai" aria-controls="section-ai" aria-expanded="false">AI / Model <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-ai">
-                    <a href="{% url 'VisionInspection:admin-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' %}active{% endif %}">YOLO Models</a>
-                    <a href="{% url 'VisionInspection:admin-training-jobs' %}" class="vi-sidebar-link {% if sidebar_active == 'training_jobs' %}active{% endif %}">Training Jobs</a>
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-ai" aria-label="AI and Models navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9881;</span>
+                    <span class="vi-sidebar-section-label">AI / Models</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-ai">
+                    <a href="{% url 'VisionInspection:admin-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' %}active{% endif %}"><span class="vi-sidebar-icon">&#9632;</span><span class="vi-sidebar-label">YOLO Models</span></a>
+                    <a href="{% url 'VisionInspection:admin-training-jobs' %}" class="vi-sidebar-link {% if sidebar_active == 'training_jobs' %}active{% endif %}"><span class="vi-sidebar-icon">&#9776;</span><span class="vi-sidebar-label">Training Jobs</span></a>
                 </div>
             </div>
 
             <div class="vi-sidebar-section">
                 <a href="{% url 'VisionInspection:admin-reports' %}" class="vi-sidebar-link {% if sidebar_active == 'reports' %}active{% endif %}">
-                    <span class="vi-sidebar-icon">&#9632;</span> Reports
+                    <span class="vi-sidebar-icon">&#9776;</span><span class="vi-sidebar-label">Reports</span>
                 </a>
             </div>
 
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-system" aria-controls="section-system" aria-expanded="false">System <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-system">
-                    <a href="{% url 'VisionInspection:admin-system-status' %}" class="vi-sidebar-link {% if sidebar_active == 'system_status' %}active{% endif %}">System Status</a>
-                    <a href="{% url 'VisionInspection:admin-camera-status' %}" class="vi-sidebar-link {% if sidebar_active == 'camera_status' %}active{% endif %}">Camera Status</a>
-                    <a href="{% url 'VisionInspection:admin-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'settings' %}active{% endif %}">Settings</a>
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-system" aria-label="System navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9881;</span>
+                    <span class="vi-sidebar-section-label">System</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-system">
+                    <a href="{% url 'VisionInspection:admin-system-status' %}" class="vi-sidebar-link {% if sidebar_active == 'system_status' %}active{% endif %}"><span class="vi-sidebar-icon">&#9679;</span><span class="vi-sidebar-label">System Status</span></a>
+                    <a href="{% url 'VisionInspection:admin-camera-status' %}" class="vi-sidebar-link {% if sidebar_active == 'camera_status' %}active{% endif %}"><span class="vi-sidebar-icon">&#9675;</span><span class="vi-sidebar-label">Camera Status</span></a>
                 </div>
             </div>
         </nav>
+        <div class="vi-sidebar-footer">
+            <a href="{% url 'VisionInspection:admin-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'settings' %}active{% endif %}">
+                <span class="vi-sidebar-icon">&#9881;</span><span class="vi-sidebar-label">Settings</span>
+            </a>
+        </div>
     </aside>
 
     <div class="vi-main-wrapper">
         <header class="vi-top-header">
-            <button class="vi-sidebar-toggle" id="viSidebarToggle" type="button" aria-label="Expand sidebar" aria-expanded="false" aria-controls="viSidebar">&#9776;</button>
             <h1 class="vi-header-title">VisionInspection</h1>
             <div class="vi-header-actions">
                 <span class="vi-user-display">{{ user.get_full_name|default:user.username }}</span>
@@ -77,36 +114,6 @@
         </main>
     </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const toggle = document.getElementById('viSidebarToggle');
-            const sidebar = document.getElementById('viSidebar');
-            if (toggle && sidebar) {
-                toggle.addEventListener('click', function() {
-                    const open = sidebar.classList.toggle('vi-sidebar-collapsed');
-                    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-                    toggle.setAttribute('aria-label', open ? 'Collapse sidebar' : 'Expand sidebar');
-                });
-            }
-            document.querySelectorAll('.vi-sidebar-section-title').forEach(function(title) {
-                const target = document.getElementById(title.getAttribute('data-target'));
-                if (!target) return;
-                const expanded = Boolean(target.querySelector('.vi-sidebar-link.active'));
-                target.classList.toggle('vi-collapsed', !expanded);
-                target.setAttribute('aria-hidden', expanded ? 'false' : 'true');
-                target.inert = !expanded;
-                title.classList.toggle('vi-expanded', expanded);
-                title.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-                title.addEventListener('click', function() {
-                    const open = target.classList.contains('vi-collapsed');
-                    target.classList.toggle('vi-collapsed', !open);
-                    target.setAttribute('aria-hidden', open ? 'false' : 'true');
-                    target.inert = !open;
-                    title.classList.toggle('vi-expanded', open);
-                    title.setAttribute('aria-expanded', open ? 'true' : 'false');
-                });
-            });
-        });
-    </script>
+    <script src="{% static 'VisionInspection/js/sidebar.js' %}?v=20261022-1"></script>
 </body>
 </html>

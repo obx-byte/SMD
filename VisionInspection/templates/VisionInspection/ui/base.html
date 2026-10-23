@@ -17,11 +17,19 @@
                 document.documentElement.setAttribute("data-theme", "purple");
             }
         })();
+        (function () {
+            try {
+                var compact = localStorage.getItem("vi-sidebar-compact");
+                if (compact === "true" || compact === "false") {
+                    document.documentElement.setAttribute("data-sidebar-compact", compact);
+                }
+            } catch (e) {}
+        })();
     </script>
     <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}?v=20261015-1">
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261022-6">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261022-7">
     {% block extra_head %}{% endblock %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-3">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-4">
 </head>
 {# The Airbag Stitch Inspection station page uses the dark reference chrome. #}
 <body class="{% if sidebar_active == 'inspection_master' or sidebar_active == 'inspection' %}vi-fullscreen-chrome{% if sidebar_active == 'inspection' %} vi-inspection-chrome{% endif %}{% endif %}{% if sidebar_active == 'dashboard' %} vi-dashboard-chrome{% endif %}">
@@ -32,13 +40,21 @@
                 <span class="vi-sidebar-title">Vision Inspection</span>
                 <span class="vi-sidebar-subtitle">Airbag Stitch Inspection</span>
             </div>
+            <button class="vi-sidebar-compact-toggle" id="viSidebarCompactToggle" type="button"
+                    aria-label="Collapse navigation" aria-expanded="true" title="Collapse navigation">
+                <span aria-hidden="true">&#171;</span>
+            </button>
         </div>
         <nav class="vi-sidebar-nav" id="viSidebarNav" aria-label="Application navigation">
             <!-- HOME -->
             {% if vi_access.dashboard %}
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-home" aria-controls="section-home" aria-expanded="{% if sidebar_active == 'dashboard' %}true{% else %}false{% endif %}">Home <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse{% if sidebar_active != 'dashboard' %} vi-collapsed{% endif %}" id="section-home">
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-home" aria-label="Home navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9632;</span>
+                    <span class="vi-sidebar-section-label">Home</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-home">
                     <a href="{% url 'VisionInspection:dashboard' %}" class="vi-sidebar-link {% if sidebar_active == 'dashboard' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9632;</span><span class="vi-sidebar-label" title="Dashboard">Dashboard</span></a>
                 </div>
             </div>
@@ -47,8 +63,12 @@
             <!-- MASTER DATA (privileged) -->
             {% if vi_access.master_data_view or vi_access.master_data_create %}
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-master-data" aria-controls="section-master-data" aria-expanded="false">Master Data <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-master-data">
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-master-data" aria-label="Master Data navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9638;</span>
+                    <span class="vi-sidebar-section-label">Master Data</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-master-data">
                     {% if vi_access.master_data_create %}<a href="{% url 'VisionInspection:ui-parts' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'parts' and request.resolver_match.url_name == 'ui-parts' and request.GET.action == 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#43;</span><span class="vi-sidebar-label" title="Add Part">Add Part</span></a>{% endif %}
                     {% if vi_access.master_data_view %}<a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' and request.resolver_match.url_name == 'ui-parts' and request.GET.action != 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="View Parts">View Parts</span></a>{% endif %}
                     {% if vi_access.master_data_create %}<a href="{% url 'VisionInspection:ui-employees' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'employees' and request.resolver_match.url_name == 'ui-employees' and request.GET.action == 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#43;</span><span class="vi-sidebar-label" title="Add Employee">Add Employee</span></a>{% endif %}
@@ -60,8 +80,12 @@
             <!-- VISION INSPECTION -->
             {% if vi_access.inspection or vi_access.part_vision_view %}
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-vision" aria-controls="section-vision" aria-expanded="{% if sidebar_active == 'inspection' or sidebar_active == 'parts' %}true{% else %}false{% endif %}">Vision Inspection <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-vision">
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-vision" aria-label="Vision Inspection navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9679;</span>
+                    <span class="vi-sidebar-section-label">Vision Inspection</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-vision">
                     {% if vi_access.inspection %}<a href="{% url 'VisionInspection:inspection' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9679;</span><span class="vi-sidebar-label" title="Start Inspection">Start Inspection</span></a>{% endif %}
                     {% if vi_access.part_vision_view %}<a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'part-vision-configuration' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="Part Vision Setup">Part Vision Setup</span></a>{% endif %}
                 </div>
@@ -71,8 +95,12 @@
             <!-- AI / MODELS -->
             {% if vi_access.yolo_models_view or vi_access.training_jobs_view %}
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-ai" aria-controls="section-ai" aria-expanded="{% if sidebar_active == 'yolo_models' or sidebar_active == 'training_jobs' %}true{% else %}false{% endif %}">AI / Models <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-ai">
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-ai" aria-label="AI and Models navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9881;</span>
+                    <span class="vi-sidebar-section-label">AI / Models</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-ai">
                     {% if vi_access.yolo_models_view %}<a href="{% url 'VisionInspection:ui-yolo-models' %}" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' and not request.GET.approved %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9632;</span><span class="vi-sidebar-label" title="YOLO Models">YOLO Models</span></a>{% endif %}
                     {% if vi_access.training_jobs_view %}<a href="{% url 'VisionInspection:ui-training-jobs' %}" class="vi-sidebar-link {% if sidebar_active == 'training_jobs' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9776;</span><span class="vi-sidebar-label" title="Training Jobs">Training Jobs</span></a>{% endif %}
                 </div>
@@ -81,8 +109,12 @@
 
             {% if vi_access.storage_view or vi_access.camera_setup_view or vi_access.model_configuration_view or vi_access.approved_models_view or vi_access.user_management or vi_access.permission_management %}
             <div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-configuration" aria-controls="section-configuration" aria-expanded="{% if sidebar_active == 'storage' or sidebar_active == 'inspection_master' or sidebar_active == 'configuration' or sidebar_active == 'presets' or sidebar_active == 'yolo_models' or request.resolver_match.url_name == 'user-management' or request.resolver_match.url_name == 'user-management-detail' or request.resolver_match.url_name == 'access-groups' or request.resolver_match.url_name == 'access-group-create' or request.resolver_match.url_name == 'access-group-edit' or request.resolver_match.url_name == 'access-group-permissions' or request.resolver_match.url_name == 'user-management-permissions' %}true{% else %}false{% endif %}">Configuration <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-configuration">
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-configuration" aria-label="Configuration navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9881;</span>
+                    <span class="vi-sidebar-section-label">Configuration</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-configuration">
                     {% if vi_access.storage_view %}<a href="{% url 'VisionInspection:storage-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'storage' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="Storage Settings">Storage Settings</span></a>{% endif %}
                     {% if vi_access.camera_setup_view %}
                     <a href="{% url 'VisionInspection:inspection-master' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection_master' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9679;</span><span class="vi-sidebar-label" title="Camera Setup">Camera Setup</span></a>
@@ -103,8 +135,12 @@
             {# Intentionally omitted from this station sidebar: Traceability, ROI Setup, Inspection Logs, and Inspection History. #}
             <!-- REPORTS -->
             {% if vi_access.reports %}<div class="vi-sidebar-section">
-                <button class="vi-sidebar-section-title" type="button" data-target="section-reports" aria-controls="section-reports" aria-expanded="{% if sidebar_active == 'reports' %}true{% else %}false{% endif %}">Reports <span class="vi-caret" aria-hidden="true">&#9656;</span></button>
-                <div class="vi-sidebar-collapse vi-collapsed" id="section-reports">
+                <button class="vi-sidebar-section-title" type="button" data-sidebar-group
+                        aria-expanded="false" aria-controls="section-reports" aria-label="Reports navigation group">
+                    <span class="vi-sidebar-group-icon" aria-hidden="true">&#9776;</span>
+                    <span class="vi-sidebar-section-label">Reports</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
+                </button>
+                <div class="vi-sidebar-collapse" id="section-reports">
                     <a href="{% url 'VisionInspection:ui-reports' %}" class="vi-sidebar-link {% if sidebar_active == 'reports' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9776;</span><span class="vi-sidebar-label" title="Inspection Report">Inspection Report</span></a>
                 </div>
             </div>{% endif %}
@@ -112,7 +148,7 @@
             <div class="vi-sidebar-footer">
                 {% if vi_access.storage_view %}
                 <a href="{% url 'VisionInspection:ui-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'settings' %}active{% endif %}">
-                    <span class="vi-sidebar-icon">&#9881;</span> Settings
+                    <span class="vi-sidebar-icon">&#9881;</span><span class="vi-sidebar-label">Settings</span>
                 </a>
                 {% endif %}
             </div>
@@ -121,11 +157,6 @@
 
     <div class="vi-main-wrapper">
         <header class="vi-top-header">
-            <button class="vi-sidebar-toggle" id="viSidebarToggle" type="button" aria-label="Expand sidebar" aria-expanded="false" aria-controls="viSidebar" title="Expand sidebar">
-                <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
-                    <path d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-            </button>
             {% if sidebar_active == 'inspection' %}
             <a href="{% url 'VisionInspection:dashboard' %}" class="vi-ins-header-home" title="Home dashboard" aria-label="Home dashboard">
                 <span aria-hidden="true">&#8962;</span><span>Home</span>
@@ -146,7 +177,7 @@
                 {% block header_actions %}{% endblock %}
                 {% if user.is_authenticated %}
                 <div class="vi-profile" id="viProfile">
-                    <button class="vi-profile-btn" id="viProfileBtn" type="button" aria-label="Account for {{ user.get_username }}" aria-haspopup="true" aria-expanded="false">
+                    <button class="btn btn-primary" id="viProfileBtn" type="button" aria-label="Account for {{ user.get_username }}" aria-haspopup="true" aria-expanded="false">
                         <span class="vi-profile-icon" aria-hidden="true">
                             <svg viewBox="0 0 24 24" focusable="false">
                                 <circle cx="12" cy="8" r="4" />
@@ -209,108 +240,6 @@
                         // Browser storage may be disabled; the server session is still flushed.
                     }
                     window.dispatchEvent(new Event('vi:signout'));
-                });
-            }
-
-            // Sidebar drawer toggle (tablet/mobile)
-            var toggle = document.getElementById('viSidebarToggle');
-            var sidebar = document.getElementById('viSidebar');
-            if (toggle && sidebar) {
-                function syncSidebarToggle(open) {
-                    var label = open ? 'Collapse sidebar' : 'Expand sidebar';
-                    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-                    toggle.setAttribute('aria-label', label);
-                    toggle.setAttribute('title', label);
-                    toggle.classList.toggle('is-active', open);
-                }
-                toggle.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    var open = sidebar.classList.toggle('vi-sidebar-collapsed');
-                    syncSidebarToggle(open);
-                });
-                syncSidebarToggle(sidebar.classList.contains('vi-sidebar-collapsed'));
-            }
-
-            // Dismiss the sidebar overlay when clicking outside it (works in
-            // full-screen chrome and tablet/mobile drawer modes).
-            document.addEventListener('click', function(e) {
-                if (!sidebar) return;
-                if (!sidebar.classList.contains('vi-sidebar-collapsed')) return; // not open as overlay
-                if (sidebar.contains(e.target)) return;                          // click inside
-                if (toggle && toggle.contains(e.target)) return;                 // toggle handles itself
-                sidebar.classList.remove('vi-sidebar-collapsed');
-                if (toggle) {
-                    toggle.setAttribute('aria-expanded', 'false');
-                    toggle.setAttribute('aria-label', 'Expand sidebar');
-                    toggle.setAttribute('title', 'Expand sidebar');
-                    toggle.classList.remove('is-active');
-                }
-            });
-
-            // Collapsible parent sections (open the active one; caret rotates)
-            function closeDrawerOnNav() {
-                var fullscreen = document.body.classList.contains("vi-fullscreen-chrome");
-                if ((fullscreen || window.matchMedia("(max-width: 1023px)").matches) && sidebar) {
-                    sidebar.classList.remove("vi-sidebar-collapsed");
-                    if (toggle) {
-                        toggle.setAttribute('aria-expanded', 'false');
-                        toggle.setAttribute('aria-label', 'Expand sidebar');
-                        toggle.setAttribute('title', 'Expand sidebar');
-                        toggle.classList.remove('is-active');
-                    }
-                }
-            }
-            document.querySelectorAll('.vi-sidebar-section').forEach(function(section) {
-                var title = section.querySelector('.vi-sidebar-section-title');
-                var collapse = section.querySelector('.vi-sidebar-collapse');
-                if (!title || !collapse) return;
-                var hasActive = collapse.querySelector('.vi-sidebar-link.active');
-                var expanded = Boolean(hasActive);
-                title.classList.toggle('has-active', expanded);
-                title.classList.toggle('vi-expanded', expanded);
-                title.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-                collapse.classList.toggle('vi-collapsed', !expanded);
-                collapse.setAttribute('aria-hidden', expanded ? 'false' : 'true');
-                collapse.inert = !expanded;
-                title.addEventListener('click', function() {
-                    var open = collapse.classList.contains('vi-collapsed');
-                    collapse.classList.toggle('vi-collapsed', !open);
-                    collapse.setAttribute('aria-hidden', open ? 'false' : 'true');
-                    collapse.inert = !open;
-                    title.setAttribute('aria-expanded', open ? 'true' : 'false');
-                    title.classList.toggle('vi-expanded', open);
-                });
-                collapse.querySelectorAll('.vi-sidebar-link').forEach(function(a) {
-                    a.addEventListener('click', closeDrawerOnNav);
-                });
-            });
-
-            // Menu search (filters sidebar links; honest, no backend calls)
-            var search = document.getElementById('viNavSearch');
-            if (search) {
-                search.addEventListener('input', function() {
-                    var q = this.value.trim().toLowerCase();
-                    var nav = document.getElementById('viSidebarNav');
-                    nav.querySelectorAll('a.vi-sidebar-link').forEach(function(a) {
-                        var t = a.textContent.toLowerCase();
-                        a.style.display = (!q || t.indexOf(q) !== -1) ? '' : 'none';
-                    });
-                    nav.querySelectorAll('.vi-sidebar-section').forEach(function(section) {
-                        var title = section.querySelector('.vi-sidebar-section-title');
-                        var collapse = section.querySelector('.vi-sidebar-collapse');
-                        var anyVisible = Array.prototype.some.call(
-                            collapse.querySelectorAll('a.vi-sidebar-link'),
-                            function(a) { return a.style.display !== 'none'; }
-                        );
-                        section.style.display = anyVisible ? '' : 'none';
-                        if (q && anyVisible) {
-                            collapse.classList.remove('vi-collapsed');
-                            collapse.setAttribute('aria-hidden', 'false');
-                            collapse.inert = false;
-                            title.setAttribute('aria-expanded', 'true');
-                            title.classList.add('vi-expanded');
-                        }
-                    });
                 });
             }
 
@@ -395,6 +324,7 @@
             }
         });
     </script>
+    <script src="{% static 'VisionInspection/js/sidebar.js' %}?v=20261022-1"></script>
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>

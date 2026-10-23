@@ -4,6 +4,7 @@
     var INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
     var INSPECTION_REQUEST_TIMEOUT_MS = 120 * 1000;
     var CAMERA_READY_TIMEOUT_MS = 20000;
+    var RESULT_DISPLAY_MS = 500;
     var MAX_PREVIEW_RETRIES = 3;
     var cfg = window.__VI_WS__ || { urls: {} };
     var URL = cfg.urls || {};
@@ -26,6 +27,7 @@
         leaveTarget: null,
         partNumber: "",
         partId: null,
+        configurationId: null,
         selectedBarcode: "",
         validatedModelId: null,
         predictionTimer: null,
@@ -40,6 +42,7 @@
         cameraReadyTimer: null,
         cameraPollInterval: null,
         cameraInFlight: false,
+        cancellingPart: false,
         sessionPollTimer: null,
         sessionPollInFlight: false,
         sessionPollGeneration: 0,
@@ -52,18 +55,26 @@
         inactivityDeadline: null,
         screenSaverActive: false,
         activityMonitoring: false,
+        finalTransitionTimer: null,
+        finalTransitionScheduled: false,
         leaveInvoker: null,
         ready: false
     };
     var initialized = false;
 
     function byId(id) { return document.getElementById(id); }
+    function cancelFinalTransition() {
+        if (state.finalTransitionTimer) window.clearTimeout(state.finalTransitionTimer);
+        state.finalTransitionTimer = null;
+        state.finalTransitionScheduled = false;
+    }
     function csrf() {
         var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
         return cfg.csrf || (input && input.value) || "";
     }
     function stageNode(name) { return byId("wfStage" + name); }
     function showStage(name) {
+        if (name !== "Final") cancelFinalTransition();
         ["Scan", "Front", "Back", "Saving", "Final"].forEach(function (item) {
             var node = stageNode(item);
             if (node) node.hidden = item !== name;
@@ -146,19 +157,27 @@
         var previousStatus = state.cameraStatus[side];
         state.cameraStatus[side] = status;
         if (node) {
-            node.className = "wf-camera-status is-" + status.toLowerCase();
-            node.innerHTML = "<i></i> " + status;
+            var cameraOn = status === "ON";
+            node.className = "wf-camera-status " + (cameraOn ? "is-on" : "is-off");
+            node.innerHTML = "<i></i> " + (cameraOn ? "ON" : "OFF");
         }
         if (overlay) {
-            overlay.textContent = message || (status === "ON" ? "" : "Camera " + status.toLowerCase());
+            overlay.textContent = status === "ERROR" ? "Camera unavailable"
+                : status === "CONNECTING" ? "Connecting camera..." : "Camera off";
             overlay.hidden = status === "ON";
         }
         var retry = byId("wf" + side + "RetryCamera");
-        if (retry) retry.hidden = status !== "ERROR";
+        if (retry) retry.hidden = false;
         var button = byId(side === "Front" ? "wfFrontSubmitBtn" : "wfBackSubmitBtn");
+        var previewReady = state.predictionReady[side] === true;
+        if (button) {
+            button.textContent = status === "ON" && !previewReady
+                ? "PREPARING..."
+                : side.toUpperCase() + " SCAN";
+        }
         if (button && !state.busy) {
             button.disabled = status !== "ON" ||
-                state.predictionReady[side] !== true ||
+                !previewReady ||
                 button.dataset.completed === "true";
         }
         if (status !== "CONNECTING" && state.cameraReadyTimer) {
@@ -369,6 +388,7 @@ function setBusy(button, value) {
                 sessionId: state.sessionId,
                 partNumber: state.partNumber,
                 partId: state.partId,
+                configurationId: state.configurationId,
                 validatedModelId: state.validatedModelId,
                 savedRecordId: state.savedRecordId
             }));
@@ -379,6 +399,7 @@ function setBusy(button, value) {
         catch (error) { /* Storage may be disabled on the station browser. */ }
     }
     function clearTransientState() {
+        cancelFinalTransition();
         state.requestVersion += 1;
         state.cameraActivationKey = null;
         state.cameraActivationPromise = null;
@@ -390,6 +411,7 @@ function setBusy(button, value) {
         state.sessionActive = false;
         state.partNumber = "";
         state.partId = null;
+        state.configurationId = null;
         state.selectedBarcode = "";
         state.validatedModelId = null;
         state.predictionReady = { Front: false, Back: false };
@@ -414,6 +436,9 @@ function setBusy(button, value) {
         setText("wfFinalBack", "—");
         setText("wfFinalSaved", "—");
         setText("wfFinalMessage", "");
+        byId("wfNewInspectionBtn").hidden = true;
+        byId("wfChangePartBtn").hidden = true;
+        byId("wfNewInspectionBtn").textContent = "NEXT INSPECTION CYCLE — SAME PART";
         setText("wfSavingTitle", "Saving results");
         setText("wfSavingMessage", "The backend is finalizing this inspection session.");
         byId("wfRetrySaveBtn").hidden = true;
@@ -538,8 +563,14 @@ function setBusy(button, value) {
                 if (generation !== state.sessionPollGeneration || sessionId !== state.sessionId) return;
                 state.frontVerdict = progress.front_verdict || state.frontVerdict;
                 state.backVerdict = progress.back_verdict || state.backVerdict;
-                setResult("Front", progress.front_status, progress.front_verdict, progress.inspection_status);
-                setResult("Back", progress.back_status, progress.back_verdict, progress.inspection_status);
+                if (!(state.busy && side === "front" &&
+                        progress.front_status === "PENDING")) {
+                    setResult("Front", progress.front_status, progress.front_verdict);
+                }
+                if (!(state.busy && side === "back" &&
+                        progress.back_status === "PENDING")) {
+                    setResult("Back", progress.back_status, progress.back_verdict);
+                }
                 if (progress.inspection_status === "ERROR") {
                     showError(progress.error_message || "Inspection failed. Retry the failed side.");
                     console.error("Inspection session polling reported an error", {
@@ -611,6 +642,10 @@ function setBusy(button, value) {
         var requestVersion = state.requestVersion;
         var image = byId(side === "FRONT" ? "feedFront" : "feedBack");
         if (!image) return;
+        var label = side === "FRONT" ? "Front" : "Back";
+        if (state.predictionReady[label] !== true) {
+            setResult(label, "IN_PROGRESS", "PENDING");
+        }
         state.predictionInFlight = true;
         try {
             var url = URL.partVisionPreview.replace(
@@ -631,18 +666,39 @@ function setBusy(button, value) {
                     !Array.isArray(data.detections) ||
                     data.inference_status !== "complete" ||
                     !Number.isInteger(Number(data.frame_seq)) ||
-                    Number(data.frame_seq) < 1) {
-                throw new Error("The live prediction response did not confirm a completed real-frame inference.");
+                    Number(data.frame_seq) < 1 ||
+                    Number(data.part_id) !== Number(state.partId) ||
+                    data.session_id !== sessionId ||
+                    data.side !== side ||
+                    Number(data.model_id) !== Number(state.validatedModelId) ||
+                    !Number.isInteger(Number(data.configuration_id)) ||
+                    !["OKAY", "NOT OKAY"].includes(data.live_status) ||
+                    !["OK", "NOT_OK"].includes(data.live_verdict) ||
+                    (data.live_status === "OKAY") !== (data.live_verdict === "OK") ||
+                    !Array.isArray(data.rule_results) ||
+                    !data.rule_results.some(function (item) {
+                        return item && item.required === true;
+                    })) {
+                throw new Error("The live prediction response did not include a complete, current configured inspection decision.");
             }
+            if (state.configurationId &&
+                    Number(data.configuration_id) !== Number(state.configurationId)) {
+                throw new Error("The live prediction used a different Part Vision Configuration than the active session.");
+            }
+            state.configurationId = Number(data.configuration_id);
             image.src = data.image;
             state.predictionReady[side === "FRONT" ? "Front" : "Back"] = true;
             state.predictionRetryCount = 0;
+            setResult(
+                label,
+                "COMPLETED",
+                data.live_verdict === "OK" ? "OK" : "NOT_OK"
+            );
             setModelStatus(
                 side === "FRONT" ? "Front" : "Back",
                 "ready",
-                "INFERENCE READY · FRAME " + data.frame_seq
+                "READY"
             );
-            var label = side === "FRONT" ? "Front" : "Back";
             if (state.cameraStatus[label] === "ON") setCameraStatus(label, "ON", "");
             showError("");
             schedulePredictionPreview(side, generation, 300);
@@ -680,6 +736,7 @@ function setBusy(button, value) {
                     "side_not_enabled"
                 ].indexOf(errorCode) !== -1;
                 if (cameraError) {
+                    setResult(label, "ERROR", "ERROR");
                     var retryableCameraFrame = [
                         "camera_frame_missing",
                         "camera_frame_stale"
@@ -700,13 +757,16 @@ function setBusy(button, value) {
                 }
                 setCameraStatus(label, state.cameraStatus[label], "");
                 if (roiError) {
+                    setResult(label, "ERROR", "ERROR");
                     setModelStatus(label, "roi-error", "ROI CONFIGURATION ERROR");
                     return;
                 }
                 if (configurationError || (error.status === 409 && !errorCode)) {
+                    setResult(label, "ERROR", "ERROR");
                     setModelStatus(label, "configuration-error", "PREVIEW CONFIGURATION ERROR");
                     return;
                 }
+                setResult(label, "ERROR", "ERROR");
                 setModelStatus(label, "error", "MODEL / INFERENCE ERROR");
                 var retryableCameraWarmup = error.status === 409 &&
                     /configured camera is (connecting|starting); waiting for it to produce a frame|camera has not produced a frame yet|latest camera frame is stale/i
@@ -762,6 +822,7 @@ function setBusy(button, value) {
         byId("wfModelDetail").hidden = true;
         setText("wfModelDetail", "");
         state.validatedModelId = null;
+        state.configurationId = null;
         showError("");
         setText("wfScanState", "Validating part...");
         setDot("wfScanDot", "working");
@@ -826,6 +887,7 @@ function setBusy(button, value) {
                     throw new Error(modelData.message || "The model validation response did not identify a valid model.");
                 }
                 state.validatedModelId = Number(modelData.model_id);
+                state.configurationId = Number(modelData.configuration_id) || null;
                 setText("wfModelState", modelData.message || "Model and configuration valid");
                 setDot("wfModelDot", "ready");
                 renderOperatorInstructions(modelData.operator_instructions);
@@ -912,21 +974,35 @@ function setBusy(button, value) {
     }
 
     async function changePart(button) {
-        if (state.busy) return;
+        var canCancelSideScan = state.stage === STAGE.FRONT_INSPECTION ||
+            state.stage === STAGE.BACK_INSPECTION;
+        if (state.cancellingPart || (state.busy && !canCancelSideScan)) return;
+        state.cancellingPart = true;
         setBusy(button, true);
         showError("");
+        var previousSessionId = state.sessionId;
+        var restoreActiveStage = false;
+        state.requestVersion += 1;
+        cancelFinalTransition();
+        stopCameraPolling();
+        stopSessionProgressPolling();
+        stopPredictionPreview();
         try {
-            if (state.sessionId) {
-                await jsonRequest(URL.wfCancel, "POST", { session_id: state.sessionId });
+            if (previousSessionId) {
+                await jsonRequest(URL.wfCancel, "POST", { session_id: previousSessionId });
             }
-            state.requestVersion += 1;
             clearTransientState();
             byId("wfBarcode").value = "";
             byId("wfBarcode").focus();
         } catch (error) {
             showError(error.message || "The current inspection could not be closed.");
+            restoreActiveStage = Boolean(
+                previousSessionId && previousSessionId === state.sessionId && activeCameraSide()
+            );
         } finally {
+            state.cancellingPart = false;
             setBusy(button, false);
+            if (restoreActiveStage) refreshCamera();
         }
     }
 
@@ -938,10 +1014,14 @@ function setBusy(button, value) {
         if (!progress || !progress.ok) progress = await loadProgress();
         state.frontVerdict = progress.front_verdict || state.frontVerdict;
         state.backVerdict = progress.back_verdict || state.backVerdict;
-        setResult("Front", progress.front_status, progress.front_verdict, progress.inspection_status);
-        setResult("Back", progress.back_status, progress.back_verdict, progress.inspection_status);
+        setResult("Front", progress.front_status, progress.front_verdict);
+        setResult("Back", progress.back_status, progress.back_verdict);
         if (progress.is_saved) {
-            showFinal(progress, { inspection_id: state.savedRecordId || state.sessionId, overall: progress.overall });
+            showFinal(progress, {
+                inspection_id: progress.inspection_id || state.savedRecordId,
+                timestamp: progress.timestamp,
+                overall: progress.overall
+            });
             return;
         }
         if ([progress.front_status, progress.back_status].every(function (status) {
@@ -993,15 +1073,22 @@ function setBusy(button, value) {
         } catch (error) {
             if (sessionId !== state.sessionId || requestVersion !== state.requestVersion) return;
             setCameraStatus(isBack ? "Back" : "Front", "ERROR", error.message);
+            setResult(isBack ? "Back" : "Front", "ERROR", "ERROR");
             showError(error.message + " Check the configured camera and retry the inspection stage.");
         }
     }
 
-    async function retryCamera(side) {
+    async function retryCamera(side, triggerButton) {
         if (state.busy) return;
-        var button = byId("wf" + side + "RetryCamera");
+        var button = triggerButton || byId("wf" + side + "RetryCamera");
         var sessionId = state.sessionId;
         var requestVersion = state.requestVersion;
+        stopPredictionPreview();
+        state.predictionReady[side] = false;
+        state.predictionRetryCount = 0;
+        setFeed(side);
+        setResult(side, "PENDING", "PENDING");
+        setModelStatus(side, "waiting", "WAITING FOR FIRST VALID FRAME");
         setBusy(button, true);
         showError("");
         try {
@@ -1012,29 +1099,51 @@ function setBusy(button, value) {
             showError(error.message + " Check the configured camera and retry.");
         } finally {
             if (requestVersion === state.requestVersion) {
-                state.busy = false;
-                if (button) button.disabled = false;
+                setBusy(button, false);
+                if (state.cameraStatus[side] === "ON") {
+                    startPredictionPreview(side.toUpperCase());
+                }
             }
         }
     }
 
-    function resultDisplayState(inspectionStatus, status, verdict) {
+    function resultDisplayState(status, verdict) {
         var normalizedStatus = String(status || "PENDING").trim().toUpperCase();
         var normalizedVerdict = String(verdict || "PENDING").trim().toUpperCase();
-        var normalizedOverall = String(inspectionStatus || "").trim().toUpperCase();
-        if (normalizedStatus === "ERROR" || normalizedVerdict === "ERROR" || normalizedOverall === "ERROR") {
+        if (normalizedStatus === "ERROR" || normalizedVerdict === "ERROR") {
             return { text: "ERROR", className: "error" };
         }
-        if (normalizedOverall === "INSPECTING" || normalizedStatus === "IN_PROGRESS") {
+        if (normalizedStatus === "SKIPPED" || normalizedVerdict === "NOT_REQUIRED") {
+            return { text: "NOT REQUIRED", className: "not_required" };
+        }
+        if (normalizedStatus === "COMPLETED" && normalizedVerdict === "OK") {
+            return { text: "OKAY", className: "ok" };
+        }
+        if (normalizedStatus === "COMPLETED" && normalizedVerdict === "NOT_OK") {
+            return { text: "NOT OKAY", className: "not_ok" };
+        }
+        if (normalizedStatus === "COMPLETED" && normalizedVerdict === "INDETERMINATE") {
+            return { text: "INCOMPLETE", className: "error" };
+        }
+        if (normalizedStatus === "COMPLETED") {
+            return { text: "ERROR", className: "error" };
+        }
+        if (normalizedStatus === "IN_PROGRESS") {
             return { text: "INSPECTING", className: "inspecting" };
         }
-        if (normalizedOverall === "OKAY PART") return { text: "OKAY PART", className: "ok" };
-        if (normalizedOverall === "NOT OKAY PART") return { text: "NOT OKAY PART", className: "not_ok" };
         return { text: "REQUEST PENDING", className: "pending" };
     }
 
-    function setResult(side, status, verdict, inspectionStatus) {
-        var displayState = resultDisplayState(inspectionStatus, status, verdict);
+    function hasValidSideProgress(progress, side, sessionId) {
+        var verdict = progress && progress[side + "_verdict"];
+        return Boolean(progress && progress.ok === true &&
+            progress.session_id === sessionId &&
+            progress[side + "_status"] === "COMPLETED" &&
+            ["OK", "NOT_OK", "INDETERMINATE"].includes(verdict));
+    }
+
+    function setResult(side, status, verdict) {
+        var displayState = resultDisplayState(status, verdict);
         var el = byId("wf" + side + "Result");
         var scanStatus = byId("wfScanResult");
         if (scanStatus) {
@@ -1043,7 +1152,7 @@ function setBusy(button, value) {
         }
         if (!el) return;
         el.textContent = displayState.text;
-        el.className = "wf-side-result is-" + displayState.className;
+        el.className = "wf-side-result wf-prediction-status is-" + displayState.className;
         var resultPanel = el.closest(".wf-camera-result");
         if (resultPanel) {
             resultPanel.className = "wf-stage-result wf-camera-result is-" + displayState.className;
@@ -1084,10 +1193,13 @@ function setBusy(button, value) {
         stopPredictionPreview();
         var isBack = side === "back";
         var button = byId(isBack ? "wfBackSubmitBtn" : "wfFrontSubmitBtn");
+        var label = isBack ? "Back" : "Front";
         var sessionId = state.sessionId;
         var requestVersion = state.requestVersion;
+        var keepProgressPolling = false;
         setBusy(button, true);
         showError("");
+        setModelStatus(label, "running", "INFERENCE RUNNING");
         setResult(isBack ? "Back" : "Front", "IN_PROGRESS", "PENDING");
         console.info("Inspection submitted", {
             session_id: state.sessionId,
@@ -1099,7 +1211,13 @@ function setBusy(button, value) {
                 session_id: sessionId
             }, INSPECTION_REQUEST_TIMEOUT_MS);
             if (sessionId !== state.sessionId || requestVersion !== state.requestVersion) return;
-            var progress = data.progress || await loadProgress(sessionId);
+            var progress = data.progress;
+            if (!hasValidSideProgress(progress, side, sessionId)) {
+                progress = await loadProgress(sessionId);
+            }
+            if (!hasValidSideProgress(progress, side, sessionId)) {
+                throw new Error("The server completed the request without a valid inspection status. Check the session before retrying.");
+            }
             if (sessionId !== state.sessionId || requestVersion !== state.requestVersion) return;
             console.info("Inspection response received", {
                 session_id: state.sessionId,
@@ -1116,8 +1234,7 @@ function setBusy(button, value) {
             setResult(
                 isBack ? "Back" : "Front",
                 progress[side + "_status"],
-                isBack ? state.backVerdict : state.frontVerdict,
-                progress.inspection_status
+                isBack ? state.backVerdict : state.frontVerdict
             );
             if (progress.inspection_status === "OKAY PART" ||
                     progress.inspection_status === "NOT OKAY PART") {
@@ -1164,6 +1281,8 @@ function setBusy(button, value) {
             }
             if (error.data && error.data.state === "side_in_progress") {
                 setResult(isBack ? "Back" : "Front", "IN_PROGRESS", "PENDING");
+                keepProgressPolling = true;
+                startSessionProgressPolling(side);
                 if (button) button.disabled = true;
                 showError(error.message || "Inspection is still in progress.");
                 return;
@@ -1172,19 +1291,24 @@ function setBusy(button, value) {
                 setResult(isBack ? "Back" : "Front", "SKIPPED", "NOT_REQUIRED");
             } else {
                 setResult(isBack ? "Back" : "Front", "ERROR", "ERROR");
+                setModelStatus(label, "error", "INFERENCE ERROR");
             }
             showError(error.message || "Inspection failed. Reset this session before retrying.");
             if (button) button.disabled = false;
         } finally {
             if (requestVersion === state.requestVersion) {
-                stopSessionProgressPolling();
+                if (!keepProgressPolling) stopSessionProgressPolling();
                 state.busy = false;
                 if (button) {
                     button.setAttribute("aria-busy", "false");
                     if (button.dataset.completed === "true") {
                         button.disabled = true;
                     } else if (state.stage === (isBack ? STAGE.BACK_INSPECTION : STAGE.FRONT_INSPECTION)) {
-                        button.disabled = false;
+                        button.disabled = state.cameraStatus[label] !== "ON" ||
+                            state.predictionReady[label] !== true;
+                        button.textContent = button.disabled
+                            ? "PREPARING..."
+                            : (isBack ? "BACK SCAN" : "FRONT SCAN");
                     }
                 }
             }
@@ -1208,8 +1332,8 @@ function setBusy(button, value) {
             state.backVerdict = resultData.back_verdict || resultData.progress.back_verdict;
             var saved = await jsonRequest(URL.wfSave, "POST", { session_id: sessionId });
             if (sessionId !== state.sessionId || requestVersion !== state.requestVersion) return;
-            if (!saved.inspection_id && !saved.session_id) throw new Error("The backend did not confirm persistence of this inspection.");
-            state.savedRecordId = saved.inspection_id || saved.session_id;
+            if (!saved.inspection_id) throw new Error("The backend did not return a persisted inspection ID.");
+            state.savedRecordId = saved.inspection_id;
             state.sessionActive = false;
             clearLocal();
             persistLocal();
@@ -1231,15 +1355,28 @@ function setBusy(button, value) {
     function showFinal(progress, saved) {
         progress = progress || {};
         saved = saved || {};
+        var inspectionId = saved.inspection_id || progress.inspection_id || state.savedRecordId;
+        if (!inspectionId) {
+            showStage("Saving");
+            setText("wfSavingTitle", "Inspection reference unavailable");
+            setText("wfSavingMessage", "The backend did not return a persisted inspection ID. Do not rescan this part; ask a supervisor to verify the inspection record.");
+            byId("wfRetrySaveBtn").hidden = true;
+            return;
+        }
         var verdict = saved.overall || progress.overall || "INCOMPLETE";
         var title = byId("wfFinalTitle");
         if (title) {
-            title.textContent = verdict === "OK" ? "OKAY PART" : "NOT OKAY PART";
-            title.className = "wf-verdict " + (verdict === "OK" ? "is-ok" : "is-not-ok");
+            title.textContent = verdict === "OK" ? "OKAY PART"
+                : verdict === "NOT_OK" ? "NOT OKAY PART" : "INCOMPLETE / ERROR";
+            title.className = "wf-verdict " + (verdict === "OK" ? "is-ok"
+                : verdict === "NOT_OK" ? "is-not-ok" : "is-error");
         }
         setText("wfFinalPart", state.partNumber || progress.part_number);
-        setText("wfFinalId", saved.inspection_id || state.sessionId);
-        setText("wfFinalTime", new Date().toLocaleString());
+        setText("wfFinalId", inspectionId);
+        var persistedTimestamp = saved.timestamp || progress.timestamp;
+        var parsedTimestamp = persistedTimestamp ? new Date(persistedTimestamp) : null;
+        setText("wfFinalTime", parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime())
+            ? parsedTimestamp.toLocaleString() : "Not recorded");
         setText("wfFinalFront", progress.front_verdict || state.frontVerdict);
         setText("wfFinalBack", progress.back_status === "SKIPPED" ? "NOT REQUIRED" : (progress.back_verdict || state.backVerdict));
         setText("wfFinalSaved", "SAVED");
@@ -1249,6 +1386,20 @@ function setBusy(button, value) {
         showStage("Final");
         stopCameraPolling();
         clearFeeds();
+        byId("wfNewInspectionBtn").hidden = true;
+        byId("wfChangePartBtn").hidden = true;
+        if (!state.finalTransitionScheduled) {
+            state.finalTransitionScheduled = true;
+            var completedSession = state.sessionId;
+            var requestVersion = state.requestVersion;
+            state.finalTransitionTimer = window.setTimeout(function () {
+                state.finalTransitionTimer = null;
+                if (state.stage !== STAGE.FINAL_RESULT ||
+                        state.sessionId !== completedSession ||
+                        state.requestVersion !== requestVersion) return;
+                newInspection();
+            }, RESULT_DISPLAY_MS);
+        }
     }
 
     async function retrySave() {
@@ -1262,6 +1413,7 @@ function setBusy(button, value) {
     async function newInspection() {
         if (state.busy || !state.partNumber) return;
         var button = byId("wfNewInspectionBtn");
+        var requestVersion = state.requestVersion;
         setBusy(button, true);
         showError("");
         state.validatedModelId = null;
@@ -1269,6 +1421,8 @@ function setBusy(button, value) {
             var validation = await jsonRequest(URL.wfValidate, "POST", {
                 part_number: state.partNumber
             });
+            if (requestVersion !== state.requestVersion ||
+                    state.stage !== STAGE.FINAL_RESULT) return;
             if (!validation.model_id) {
                 throw new Error("The selected part no longer has a valid inspection model.");
             }
@@ -1280,7 +1434,15 @@ function setBusy(button, value) {
             setBusy(button, false);
             await startInspection(button);
         } catch (error) {
+            if (requestVersion !== state.requestVersion ||
+                    state.stage !== STAGE.FINAL_RESULT) return;
             showError(error.message || "The selected part could not be revalidated.");
+            setText("wfFinalMessage", "The result was saved, but the next cycle could not start. " +
+                (error.message || "Revalidate the part before continuing."));
+            byId("wfNewInspectionBtn").hidden = false;
+            byId("wfNewInspectionBtn").textContent = "RETRY NEXT CYCLE";
+            byId("wfChangePartBtn").hidden = false;
+            state.finalTransitionScheduled = false;
         } finally {
             setBusy(button, false);
         }
@@ -1304,6 +1466,7 @@ function setBusy(button, value) {
                 startPredictionPreview(side.toUpperCase());
             } else if (data.status === "ERROR") {
                 setCameraStatus(side, "ERROR", data.error || "Configured camera is not connected.");
+                setResult(side, "ERROR", "ERROR");
                 setModelStatus(side, "waiting", "WAITING FOR CAMERA");
             } else if (data.status === "CONNECTING" ||
                     (data.status === "ON" && data.ready !== true)) {
@@ -1314,6 +1477,7 @@ function setBusy(button, value) {
                 setModelStatus(side, "waiting", "WAITING FOR CAMERA");
             } else {
                 setCameraStatus(side, "ERROR", data.error || "Configured camera is stopped.");
+                setResult(side, "ERROR", "ERROR");
                 setModelStatus(side, "waiting", "WAITING FOR CAMERA");
             }
         } catch (error) {
@@ -1337,6 +1501,7 @@ function setBusy(button, value) {
                     "ERROR",
                     error.message || "Camera status is unavailable."
                 );
+                setResult(side, "ERROR", "ERROR");
             }
         } finally { state.cameraInFlight = false; }
     }
@@ -1366,6 +1531,7 @@ function setBusy(button, value) {
         state.sessionActive = false;
         state.partNumber = "";
         state.partId = null;
+        state.configurationId = null;
         state.validatedModelId = null;
         state.predictionReady = { Front: false, Back: false };
         state.predictionRetryCount = 0;
@@ -1393,12 +1559,17 @@ function setBusy(button, value) {
             state.sessionId = saved.sessionId;
             state.partNumber = saved.partNumber;
             state.partId = saved.partId;
+            state.configurationId = progress.configuration_id || saved.configurationId || null;
             state.validatedModelId = saved.validatedModelId;
             state.savedRecordId = saved.savedRecordId || saved.sessionId;
             state.sessionActive = false;
-            setResult("Front", progress.front_status, progress.front_verdict, progress.inspection_status);
-            setResult("Back", progress.back_status, progress.back_verdict, progress.inspection_status);
-            showFinal(progress, { inspection_id: state.savedRecordId, overall: progress.overall });
+            setResult("Front", progress.front_status, progress.front_verdict);
+            setResult("Back", progress.back_status, progress.back_verdict);
+            showFinal(progress, {
+                inspection_id: progress.inspection_id || state.savedRecordId,
+                timestamp: progress.timestamp,
+                overall: progress.overall
+            });
             return;
         }
         if (!progress.is_active) {
@@ -1422,6 +1593,7 @@ function setBusy(button, value) {
         state.sessionActive = true;
         state.partNumber = saved.partNumber;
         state.partId = Number(saved.partId);
+        state.configurationId = progress.configuration_id || saved.configurationId || null;
         state.validatedModelId = Number(saved.validatedModelId);
         state.savedRecordId = saved.savedRecordId || null;
         state.frontVerdict = progress.front_verdict || "PENDING";
@@ -1480,12 +1652,17 @@ function setBusy(button, value) {
     }
 
     function handleBeforeUnload(event) {
+        if (state.stage === STAGE.FINAL_RESULT) {
+            cancelFinalTransition();
+            state.requestVersion += 1;
+        }
         if (!hasUnfinishedSession()) return;
         event.preventDefault();
         event.returnValue = "";
     }
 
     function pauseInspectionPage() {
+        cancelFinalTransition();
         state.requestVersion += 1;
         stopActivityMonitoring();
         stopCameraPolling();
@@ -1532,7 +1709,6 @@ function setBusy(button, value) {
     }
 
     function interceptNavigation(event) {
-        if (!hasUnfinishedSession()) return;
         if (event.button !== 0 || event.metaKey || event.ctrlKey ||
                 event.shiftKey || event.altKey) return;
         var link = event.target && event.target.closest
@@ -1543,6 +1719,12 @@ function setBusy(button, value) {
         catch (error) { return; }
         if (target.origin !== window.location.origin ||
                 target.href === window.location.href) return;
+        if (state.stage === STAGE.FINAL_RESULT) {
+            cancelFinalTransition();
+            state.requestVersion += 1;
+            return;
+        }
+        if (!hasUnfinishedSession()) return;
         event.preventDefault();
         event.stopPropagation();
         openLeaveDialog(target.href, link);
@@ -1565,8 +1747,10 @@ function setBusy(button, value) {
         byId("wfStartInspectionBtn").addEventListener("click", startInspection);
         byId("wfFrontSubmitBtn").addEventListener("click", function () { submitSide("front"); });
         byId("wfBackSubmitBtn").addEventListener("click", function () { submitSide("back"); });
-        byId("wfFrontRetryCamera").addEventListener("click", function () { retryCamera("Front"); });
-        byId("wfBackRetryCamera").addEventListener("click", function () { retryCamera("Back"); });
+        byId("wfFrontChangePartBtn").addEventListener("click", function () { changePart(this); });
+        byId("wfBackChangePartBtn").addEventListener("click", function () { changePart(this); });
+        byId("wfFrontRetryCamera").addEventListener("click", function () { retryCamera("Front", this); });
+        byId("wfBackRetryCamera").addEventListener("click", function () { retryCamera("Back", this); });
         byId("wfFrontRetryModel").addEventListener("click", function () { retryPrediction("Front"); });
         byId("wfBackRetryModel").addEventListener("click", function () { retryPrediction("Back"); });
         byId("wfRetrySaveBtn").addEventListener("click", retrySave);

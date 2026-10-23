@@ -5,7 +5,7 @@
 {% block title %}Inspection Report — VisionInspection{% endblock %}
 
 {% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}?v=20261022-3">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/report.css' %}?v=20261023-1">
 {% endblock %}
 
 {% block header_title %}Inspection Report{% endblock %}
@@ -17,11 +17,17 @@
     <div class="vi-page-head">
         <div>
             <h2 class="vi-page-title">Inspection Report</h2>
-            <p class="vi-page-subtitle">View{% if vi_access.report_export %} and export{% endif %} Airbag Stitch Inspection records.</p>
+            <p class="vi-page-subtitle">Review inspection outcomes and captured evidence</p>
+            <p class="vi-report-match-count">{{ page_total }} matching record{{ page_total|pluralize }}</p>
         </div>
     </div>
 
     {# ============ Filters (applied on the backend) ============ #}
+    <section class="vi-report-filter-disclosure" aria-labelledby="reportFiltersHeading">
+        <h3 class="vi-report-filter-heading" id="reportFiltersHeading">
+            <span>Filters</span>
+            <span class="vi-report-filter-summary-count">{{ page_total }} matching record{{ page_total|pluralize }}</span>
+        </h3>
     <div class="vi-card vi-filter-card">
         <form method="get" action="{% url 'VisionInspection:ui-reports' %}" class="vi-report-filters" id="reportFilters">
             <div class="vi-filter-grid">
@@ -102,6 +108,7 @@
             </div>
         </form>
     </div>
+    </section>
 
     {# ============ Summary cards ============ #}
     <div class="vi-grid vi-grid-cols-4">

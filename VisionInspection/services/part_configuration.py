@@ -197,7 +197,7 @@ def camera_roles(configuration):
 
 
 def common_roi_camera_error(configuration):
-    """Return why a common ROI cannot be shared by the configured cameras."""
+    """Return why Front and Back cannot share one physical camera and ROI."""
     roles = camera_roles(configuration)
     if "front" not in roles or "back" not in roles:
         return ""
@@ -210,9 +210,9 @@ def common_roi_camera_error(configuration):
     )
     if not same_source or not same_opencv_index:
         return (
-            "A common ROI requires the Front and Back roles to use the same "
-            "camera source and, for OpenCV cameras, the same index. Configure "
-            "matching cameras before saving the ROI."
+            "Front and Back stages must use the same camera source and, for "
+            "OpenCV cameras, the same index so both stages use one physical "
+            "camera. Configure one camera for both stages before inspection."
         )
     return ""
 
@@ -404,10 +404,9 @@ def validate_configuration(configuration, discovered=None):
         or roi.pixel_rect(roi.ref_width, roi.ref_height) is None
     ):
         errors.append("The saved ROI is outside the source frame or too small.")
-    if roi is not None:
-        camera_error = common_roi_camera_error(configuration)
-        if camera_error:
-            errors.append(camera_error)
+    camera_error = common_roi_camera_error(configuration)
+    if camera_error:
+        errors.append(camera_error)
 
     return errors
 

@@ -523,3 +523,174 @@ body.vi-configuration-page :is(input, select, textarea, button):focus-visible {
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+/* Shared expandable navigation and compact sidebar mode. */
+html {
+    --vi-sidebar-width: 212px;
+}
+
+html[data-sidebar-compact="true"] {
+    --vi-sidebar-width: 68px;
+}
+
+@media (max-width: 1023px) {
+    html:not([data-sidebar-compact="false"]) {
+        --vi-sidebar-width: 68px;
+    }
+}
+
+.vi-sidebar,
+.vi-main-wrapper {
+    transition: width 180ms ease, margin-left 180ms ease;
+}
+
+.vi-sidebar {
+    width: var(--vi-sidebar-width);
+}
+
+.vi-main-wrapper {
+    margin-left: var(--vi-sidebar-width);
+    min-width: 0;
+}
+
+.vi-sidebar-header {
+    min-width: 0;
+}
+
+.vi-sidebar-compact-toggle {
+    display: inline-flex;
+    flex: 0 0 30px;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid rgba(203, 215, 234, 0.26);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #E2E8F0;
+    font: inherit;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.vi-sidebar-compact-toggle:hover {
+    background: rgba(138, 180, 248, 0.15);
+    border-color: rgba(203, 215, 234, 0.55);
+}
+
+.vi-sidebar-compact-toggle:focus-visible {
+    outline: 2px solid #A78BFA;
+    outline-offset: 2px;
+}
+
+.vi-sidebar-section-title {
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: #9EAFC9;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.vi-sidebar-section-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vi-sidebar-collapse {
+    max-height: 560px;
+    overflow: hidden;
+    transition: max-height 200ms ease, opacity 160ms ease, margin 200ms ease,
+        padding 200ms ease, visibility 0s;
+}
+
+.vi-sidebar-collapse.vi-collapsed {
+    max-height: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-left-color: transparent;
+    opacity: 0;
+    visibility: hidden;
+    transition: max-height 200ms ease, opacity 160ms ease, margin 200ms ease,
+        padding 200ms ease, visibility 0s linear 200ms;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-header {
+    justify-content: center;
+    gap: 4px;
+    padding-right: 6px;
+    padding-left: 6px;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-logo {
+    width: 24px;
+    height: 24px;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-compact-toggle {
+    flex-basis: 26px;
+    width: 26px;
+    height: 26px;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-brand,
+html[data-sidebar-compact="true"] .vi-sidebar-section-label,
+html[data-sidebar-compact="true"] .vi-sidebar-section-title .vi-caret,
+html[data-sidebar-compact="true"] .vi-sidebar .vi-sidebar-label {
+    display: none;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-section-title {
+    justify-content: center;
+    padding: 0;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-group-icon {
+    display: inline;
+}
+
+html:not([data-sidebar-compact="true"]) .vi-sidebar-group-icon {
+    display: none;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-section-title,
+html[data-sidebar-compact="true"] .vi-sidebar-collapse .vi-sidebar-link,
+html[data-sidebar-compact="true"] .vi-sidebar-footer .vi-sidebar-link {
+    justify-content: center;
+    gap: 0;
+    padding-right: 4px;
+    padding-left: 4px;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-collapse {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-collapse .vi-sidebar-link {
+    min-height: 38px;
+}
+
+html[data-sidebar-compact="true"] .vi-sidebar-section-title:focus-visible,
+html[data-sidebar-compact="true"] .vi-sidebar-collapse .vi-sidebar-link:focus-visible,
+html[data-sidebar-compact="true"] .vi-sidebar-footer .vi-sidebar-link:focus-visible {
+    outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vi-sidebar,
+    .vi-main-wrapper,
+    .vi-sidebar-collapse,
+    .vi-sidebar-compact-toggle {
+        transition-duration: 0.01ms;
+    }
+}

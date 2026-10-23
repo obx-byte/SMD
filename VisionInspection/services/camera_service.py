@@ -82,6 +82,7 @@ def get_camera_capabilities() -> dict:
                 "label": "Raspberry Pi Camera",
                 "available": picamera_available(),
                 "needs_index": False,
+
             },
         ],
         "default_source": CAMERA_SOURCES["OPENCV"],
@@ -90,7 +91,7 @@ def get_camera_capabilities() -> dict:
 
 # Maximum number of frames in the bounded ring buffer used by get_frame_buffer().
 # The real-time inspection path uses a single latest-frame slot instead.
-_FRAME_BUFFER_SIZE = 5
+_FRAME_BUFFER_SIZE = 10
 
 # ---------------------------------------------------------------------------
 #  Process-wide device ownership

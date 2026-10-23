@@ -201,7 +201,7 @@ body.vi-inspection-chrome {
     color: var(--vi-sidebar-text);
     font-size: 12.5px;
     font-weight: 600;
-    cursor: pointer;
+    cursor: default;
     user-select: none;
     min-width: 0;
     transition: background 0.15s, color 0.15s;
@@ -228,10 +228,6 @@ body.vi-inspection-chrome {
     margin: 2px 0 6px 20px;
     padding-left: 10px;
     border-left: 1px solid rgba(255, 255, 255, 0.22);
-}
-
-.vi-sidebar-collapse.vi-collapsed {
-    display: none;
 }
 
 .vi-sidebar-collapse .vi-sidebar-link {
@@ -675,53 +671,15 @@ body.vi-inspection-chrome {
 }
 
 /* Responsive */
-/* Desktop and tablet-landscape use the 180px docked sidebar;
-   tablet portrait and below switch to an off-canvas drawer (margin-left:0). */
-
-/* Full-screen inspection chrome (Inspection Master / ROI drawing / Live Inspection).
-   Drives the reserved sidebar off-screen to maximize workspace; the hamburger
-   opens it as an overlay only when the operator needs navigation. */
-body.vi-fullscreen-chrome .vi-sidebar {
-    transform: translateX(-100%);
-}
-
-body.vi-fullscreen-chrome .vi-sidebar.vi-sidebar-collapsed {
-    transform: translateX(0);
-    box-shadow: 0 0 0 100vmax rgba(17, 24, 47, 0.35);
-}
-
 body.vi-fullscreen-chrome .vi-main-wrapper {
-    margin-left: 0;
+    margin-left: var(--vi-sidebar-width);
 }
 
-body.vi-fullscreen-chrome .vi-sidebar-toggle {
-    display: inline-flex;
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.28);
-    color: #ffffff;
-}
-
-body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
-    background: rgba(138, 116, 220, 0.28);
-    border-color: rgba(196, 181, 253, 0.82);
-}
-
-/* Tablet portrait and below: off-canvas drawer, full-width content. */
+/* Keep role-authorized navigation visible on compact screens. */
 @media (max-width: 1023px) {
-    .vi-sidebar {
-        transform: translateX(-100%);
-    }
-
-    .vi-sidebar.vi-sidebar-collapsed {
-        transform: translateX(0);
-        box-shadow: 0 0 0 100vmax rgba(17, 24, 47, 0.35);
-    }
-
     .vi-main-wrapper {
-        margin-left: 0;
+        margin-left: var(--vi-sidebar-width);
     }
-
-    .vi-sidebar-toggle { display: inline-flex; }
 
     .vi-top-header {
         padding: 0 14px;
@@ -1482,13 +1440,12 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
 .vi-top-header .vi-profile-menu { color: var(--smd-ink); }
 
 @media (max-width: 900px) {
-    .vi-brand-title,
-    .vi-top-header .vi-header-title { display: none; }
+    .vi-brand-title { font-size: 12px; }
+    .vi-top-header .vi-header-title { font-size: 16px; }
     .vi-header-inspect { font-size: 12px; padding: 0 8px; }
 }
 
 @media (max-width: 600px) {
-    .vi-header-inspect { display: none; }
     .vi-top-header { padding: 0 10px; gap: 8px; }
     .vi-header-actions { gap: 6px; }
     .vi-top-header .vi-profile-btn { gap: 6px; padding: 0 8px; }
@@ -1584,28 +1541,14 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
 .vi-sidebar .vi-caret { transition: transform 0.22s ease; }
 .vi-sidebar-section-title.vi-expanded .vi-caret { transform: rotate(90deg); }
 .vi-sidebar-collapse {
-    max-height: 520px;
-    overflow: hidden;
+    max-height: none;
+    overflow: visible;
     margin: 1px 0 5px 8px;
     padding: 0 0 0 8px;
     border-left: 1px solid rgba(154, 174, 204, 0.2);
     opacity: 1;
     visibility: visible;
-    transition: max-height 0.22s ease, opacity 0.16s ease, margin 0.22s ease,
-        padding 0.22s ease, visibility 0s;
-}
-.vi-sidebar-collapse.vi-collapsed {
-    display: block;
-    max-height: 0;
-    margin-top: 0;
-    margin-bottom: 0;
-    padding-top: 0;
-    padding-bottom: 0;
-    border-left-color: transparent;
-    opacity: 0;
-    visibility: hidden;
-    transition: max-height 0.22s ease, opacity 0.16s ease, margin 0.22s ease,
-        padding 0.22s ease, visibility 0s linear 0.22s;
+    transition: none;
 }
 .vi-sidebar-collapse .vi-sidebar-link {
     min-height: 40px;
@@ -1639,7 +1582,6 @@ body.vi-fullscreen-chrome .vi-sidebar-toggle:hover {
 @media (prefers-reduced-motion: reduce) {
     .vi-sidebar-section-title,
     .vi-sidebar-collapse,
-    .vi-sidebar-collapse.vi-collapsed,
     .vi-sidebar .vi-caret {
         transition-duration: 0.01ms;
     }

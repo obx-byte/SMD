@@ -27,6 +27,29 @@
     margin-top: 3px;
 }
 
+.vi-report-match-count {
+    margin: 4px 0 0;
+    color: var(--vi-text-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.vi-report-filter-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 42px;
+    margin-bottom: 8px;
+    padding: 0 12px;
+    border: 1px solid var(--vi-border);
+    border-radius: 6px;
+    background: #FFFFFF;
+    color: var(--vi-text-bright);
+    font-size: 13px;
+    font-weight: 700;
+}
+
 /* --------------------------------------------------------------------------
    Filters
    -------------------------------------------------------------------------- */
@@ -239,6 +262,10 @@
     white-space: nowrap;
 }
 
+.vi-report-table {
+    min-width: 1080px;
+}
+
 .vi-report-actions {
     white-space: normal !important;
 }
@@ -293,12 +320,32 @@
     .vi-grid-cols-4 {
         grid-template-columns: repeat(2, 1fr);
     }
+
+    .vi-report-filter-heading {
+        cursor: default;
+    }
+
+    .vi-report-filter-summary-count { color: var(--vi-text-muted); font-size: 11px; font-weight: 600; }
+    .vi-filter-card { margin-bottom: 12px; }
+    .vi-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+    .vi-filter-actions { gap: 6px; }
+    .vi-report-search { min-width: 140px; }
+    .vi-report-action-buttons { min-width: 0; }
 }
 
 @media (max-width: 640px) {
     .vi-grid-cols-4 {
         grid-template-columns: 1fr;
     }
+
+    .vi-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .vi-report-toolbar { align-items: flex-start; }
+    .vi-report-tools { width: 100%; }
+    .vi-report-tools > .vi-btn { flex: 1 1 auto; }
+    .vi-report-search { flex: 1 1 100%; min-width: 0; }
+    .vi-report-footer { align-items: flex-start; }
+    .vi-pagination { max-width: 100%; overflow-x: auto; }
+    .vi-report-action-buttons { min-width: 0; }
 }
 
 /* --------------------------------------------------------------------------
@@ -324,6 +371,7 @@
 
     .vi-sidebar,
     .vi-top-header,
+    .vi-report-filter-disclosure,
     .vi-filter-card,
     .vi-report-tools,
     .vi-pagination,

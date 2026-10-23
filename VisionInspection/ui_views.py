@@ -5,6 +5,7 @@ It is intentionally separate from the API/operator views in views.py.
 """
 
 import logging
+import json
 from datetime import datetime, time, timedelta
 
 from django.conf import settings
@@ -785,6 +786,119 @@ def traceability(request):
     return render(request, "VisionInspection/ui/traceability.html", context)
 
 
+def _trace_configuration(snapshot, session, log):
+    """Build safe, readable fields from current and legacy config snapshots."""
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except (TypeError, ValueError):
+            snapshot = {}
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+
+    hidden_keys = {
+        "path", "model_path", "file_path", "resolved_path", "absolute_path",
+        "storage_path", "current_storage_path",
+    }
+    entries = []
+
+    def flatten(value, prefix=""):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_name = str(key).lower()
+                if key_name in hidden_keys or key_name.endswith("_path"):
+                    continue
+                item_label = str(key).replace("_", " ").strip().title()
+                flatten(item, f"{prefix} / {item_label}" if prefix else item_label)
+        elif isinstance(value, list):
+            for index, item in enumerate(value, start=1):
+                flatten(item, f"{prefix} {index}".strip())
+        elif value is not None and value != "":
+            entries.append({"label": prefix, "value": str(value)})
+
+    flatten(snapshot)
+    camera = snapshot.get("camera")
+    camera = camera if isinstance(camera, dict) else {}
+
+    def camera_label(side):
+        details = snapshot.get(f"{side}_camera")
+        if not isinstance(details, dict):
+            details = camera.get(side)
+        if not isinstance(details, dict):
+            return "Not recorded"
+        source = details.get("source")
+        index = details.get("index")
+        if not source and index is None:
+            return "Not recorded"
+        value = str(source or "Camera")
+        if index is not None:
+            value += f" {index}"
+        return value
+
+    roi = snapshot.get("roi") or snapshot.get("common_roi")
+    if isinstance(roi, dict):
+        coordinates = []
+        for key, alternate in (("x", None), ("y", None), ("width", "w"), ("height", "h")):
+            value = roi.get(key, roi.get(alternate) if alternate else None)
+            if isinstance(value, (int, float)):
+                coordinates.append(f"{key.title()} {value * 100:g}%")
+        roi_summary = ", ".join(coordinates) if coordinates else "Recorded"
+    else:
+        roi_summary = "Not recorded"
+
+    classes = snapshot.get("classes") or snapshot.get("rules") or []
+    if not isinstance(classes, list):
+        classes = []
+    class_rules = []
+    for item in classes:
+        if not isinstance(item, dict):
+            continue
+        required_key = "required" if "required" in item else "is_required" if "is_required" in item else None
+        required_label = (
+            ("Required" if item[required_key] else "Optional")
+            if required_key
+            else "Not recorded"
+        )
+        class_rules.append({
+            "name": item.get("class_name") or item.get("name") or item.get("class") or "Not recorded",
+            "side": item.get("side") or "Not recorded",
+            "expected_front": item.get("expected_front", item.get("expected_count", "Not recorded")),
+            "expected_back": item.get("expected_back", item.get("expected_count", "Not recorded")),
+            "required": required_label,
+            "acceptance_rule": item.get("acceptance_rule") or "Not recorded",
+            "front_threshold": item.get("front_threshold", "Not recorded"),
+            "back_threshold": item.get("back_threshold", "Not recorded"),
+        })
+
+    models = snapshot.get("models") or []
+    model_names = []
+    if isinstance(models, list):
+        for model in models:
+            if isinstance(model, dict) and model.get("name"):
+                name = str(model["name"])
+                version = model.get("version")
+                model_names.append(f"{name} v{version}" if version else name)
+    model_summary = ", ".join(model_names) or str(log.yolo_model_name or "Not recorded")
+    if not model_names and log.yolo_model_version:
+        model_summary += f" v{log.yolo_model_version}"
+
+    return {
+        "entries": entries,
+        "class_rules": class_rules,
+        "session_id": str(session.session_id) if session else "Not recorded",
+        "version": snapshot.get(
+            "configuration_version",
+            snapshot.get("config_version", getattr(session, "config_version", "Not recorded")),
+        ),
+        "mode": snapshot.get("inspection_mode") or "Not recorded",
+        "acceptance_rule": snapshot.get("acceptance_rule") or "Not recorded",
+        "front_camera": camera_label("front"),
+        "back_camera": camera_label("back"),
+        "roi": roi_summary,
+        "model": model_summary,
+    }
+
+
 def traceability_detail(request, inspection_id):
     """Detail view for a single inspection with whatever evidence exists.
 
@@ -806,32 +920,15 @@ def traceability_detail(request, inspection_id):
         metadata = metadata_for_field(instance, field_name)
         url = image_url(instance, field_name)
         filename = ""
-        storage_path = ""
-        storage_backend = ""
         captured_at = fallback_timestamp
         if metadata:
             filename = metadata.relative_path.replace("\\", "/").rsplit("/", 1)[-1]
             captured_at = metadata.captured_at or captured_at
-            storage_backend = metadata.get_storage_backend_display()
-            if metadata.storage_backend == "NETWORK" and metadata.destination_id:
-                destination = metadata.destination
-                path_parts = [
-                    destination.destination_directory.strip("/\\"),
-                    metadata.relative_path.replace("\\", "/").strip("/"),
-                ]
-                storage_path = destination.get_full_remote_path().rstrip("/\\")
-                suffix = "/".join(part for part in path_parts if part)
-                if suffix:
-                    storage_path = f"{storage_path}/{suffix}"
-            else:
-                storage_path = str(metadata.get_resolved_path())
         return {
             "url": url,
             "download_url": f"{url}?download=1" if url else "",
             "filename": filename,
             "captured_at": captured_at,
-            "storage_path": storage_path,
-            "storage_backend": storage_backend,
         }
 
     # ROI configuration snapshot preserved with this record.
@@ -876,28 +973,26 @@ def traceability_detail(request, inspection_id):
                 "original_download_url": original["download_url"],
                 "original_filename": original["filename"],
                 "original_captured_at": original["captured_at"],
-                "original_storage_path": original["storage_path"],
-                "original_storage_backend": original["storage_backend"],
                 "annotated_url": annotated["url"],
                 "annotated_filename": annotated["filename"],
                 "annotated_captured_at": annotated["captured_at"],
-                "annotated_storage_path": annotated["storage_path"],
                 "roi_url": roi_image["url"],
                 "roi_filename": roi_image["filename"],
                 "roi_captured_at": roi_image["captured_at"],
-                "roi_storage_path": roi_image["storage_path"],
             })
     detections = log.detected_objects or []
     evidence = {"original": bool(log.inspection_image), "cropped_roi": False, "annotated": False}
     legacy_image = evidence_reference(log, "inspection_image", log.timestamp)
     model_configured = bool(log.yolo_model_name)
+    config_display = _trace_configuration(
+        session.config_snapshot if session else {}, session, log
+    )
     context = {
         "sidebar_active": "traceability", "log": log, "session": session,
         "inspection_image_url": legacy_image["url"],
         "inspection_image_download_url": legacy_image["download_url"],
         "inspection_image_filename": legacy_image["filename"],
         "inspection_image_captured_at": legacy_image["captured_at"],
-        "inspection_image_storage_path": legacy_image["storage_path"],
         "result_badge": _RESULT_BADGE.get(log.result, "vi-badge-skip"),
         "roi_config": roi_config, "detections": detections,
         "detections_count": len(detections), "evidence": evidence,
@@ -905,6 +1000,7 @@ def traceability_detail(request, inspection_id):
         "trigger_zone": log.trigger_zone_polygon, "sides": sides,
         "back_url": request.GET.get("next", ""),
         "part": VisionInspectionPart.objects.filter(part_number=log.part_number).first(),
+        "config_display": config_display,
         "employee": VisionInspectionEmployee.objects.filter(employee_code=log.employee_code).first(),
         "employee_display": (
             (VisionInspectionEmployee.objects.filter(employee_code=log.employee_code).values_list("employee_name", flat=True).first() or "")

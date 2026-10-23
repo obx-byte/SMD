@@ -765,7 +765,7 @@ class SessionTraceabilityAcceptanceTests(TestCase):
         response = self.client.get(reverse("VisionInspection:traceability-detail", args=[log.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "INCOMPLETE")
-        self.assertContains(response, "Image not captured")
+        self.assertContains(response, "Image unavailable. Not captured.")
         self.assertContains(response, "Annotation not generated")
         self.assertContains(response, "SERIAL-77")
         report = self.client.get(reverse("VisionInspection:ui-reports"))
