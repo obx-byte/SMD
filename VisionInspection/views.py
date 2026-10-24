@@ -22,13 +22,16 @@ Design rules followed throughout:
 
 import base64
 import binascii
+import functools
 import io
 import json
 import logging
 import math
 import os
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 from django.core.paginator import Paginator
@@ -97,6 +100,26 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PAGE_SIZE = 15
 MAX_PAGE_SIZE = 500
+_LIVE_PREVIEW_CACHE_LIMIT = 2
+_live_preview_cache = OrderedDict()
+_live_preview_cache_lock = threading.Lock()
+_LIVE_PREVIEW_METRICS_INTERVAL = 30.0
+_LIVE_PREVIEW_UNIQUE_SEQUENCE_LIMIT = 2048
+_live_preview_metrics_lock = threading.Lock()
+_live_preview_metrics = {
+    "started_at": time.monotonic(),
+    "process_cpu_started_at": time.process_time(),
+    "requests": 0,
+    "inference_count": 0,
+    "inference_ms_total": 0.0,
+    "render_count": 0,
+    "render_ms_total": 0.0,
+    "encode_count": 0,
+    "encode_ms_total": 0.0,
+    "response_bytes_total": 0,
+    "response_count": 0,
+    "unique_frame_sequences": set(),
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -107,6 +130,130 @@ MAX_PAGE_SIZE = 500
 def _json_response(payload, status=200):
     """Return a JSON response that accepts lists as well as dicts."""
     return JsonResponse(payload, status=status, safe=False)
+
+
+def _live_preview_cache_get(key):
+    if key is None:
+        return None
+    with _live_preview_cache_lock:
+        payload = _live_preview_cache.get(key)
+        if payload is not None:
+            _live_preview_cache.move_to_end(key)
+            return payload
+    return None
+
+
+def _live_preview_cache_set(key, payload):
+    if key is None:
+        return
+    with _live_preview_cache_lock:
+        _live_preview_cache[key] = payload
+        _live_preview_cache.move_to_end(key)
+        while len(_live_preview_cache) > _LIVE_PREVIEW_CACHE_LIMIT:
+            _live_preview_cache.popitem(last=False)
+
+
+def _emit_live_preview_metrics(now=None):
+    now = time.monotonic() if now is None else now
+    with _live_preview_metrics_lock:
+        elapsed = now - _live_preview_metrics["started_at"]
+        if elapsed < _LIVE_PREVIEW_METRICS_INTERVAL:
+            return
+        metrics = _live_preview_metrics.copy()
+        process_cpu_elapsed = time.process_time() - metrics["process_cpu_started_at"]
+        metrics["unique_frame_sequences"] = len(
+            _live_preview_metrics["unique_frame_sequences"]
+        )
+        _live_preview_metrics.update({
+            "started_at": now,
+            "process_cpu_started_at": time.process_time(),
+            "requests": 0,
+            "inference_count": 0,
+            "inference_ms_total": 0.0,
+            "render_count": 0,
+            "render_ms_total": 0.0,
+            "encode_count": 0,
+            "encode_ms_total": 0.0,
+            "response_bytes_total": 0,
+            "response_count": 0,
+            "unique_frame_sequences": set(),
+        })
+    request_count = metrics["requests"]
+    response_count = metrics["response_count"]
+    inference_count = metrics["inference_count"]
+    render_count = metrics["render_count"]
+    encode_count = metrics["encode_count"]
+    cpu_percent = 100.0 * process_cpu_elapsed / elapsed if elapsed else 0.0
+    peak_rss_mb = None
+    try:
+        import resource
+
+        peak_rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except (ImportError, AttributeError, OSError):
+        pass
+    logger.info(
+        "Live preview metrics: requests=%s inferences=%s unique_frame_sequences=%s "
+        "mask_renders=%s jpeg_encodes=%s avg_inference_ms=%.2f "
+        "avg_render_ms=%.2f avg_encode_ms=%.2f avg_response_bytes=%.0f "
+        "inference_fps=%.2f preview_fps=%.2f preview_requests_fps=%.2f "
+        "cpu_percent=%.1f peak_rss_mb=%s",
+        request_count,
+        inference_count,
+        metrics["unique_frame_sequences"],
+        render_count,
+        encode_count,
+        metrics["inference_ms_total"] / inference_count if inference_count else 0.0,
+        metrics["render_ms_total"] / render_count if render_count else 0.0,
+        metrics["encode_ms_total"] / encode_count if encode_count else 0.0,
+        metrics["response_bytes_total"] / response_count if response_count else 0.0,
+        inference_count / elapsed if elapsed else 0.0,
+        metrics["unique_frame_sequences"] / elapsed if elapsed else 0.0,
+        request_count / elapsed if elapsed else 0.0,
+        cpu_percent,
+        round(peak_rss_mb, 1) if peak_rss_mb is not None else "unavailable",
+    )
+
+
+def _record_live_preview_request(response_bytes):
+    with _live_preview_metrics_lock:
+        _live_preview_metrics["requests"] += 1
+        _live_preview_metrics["response_count"] += 1
+        _live_preview_metrics["response_bytes_total"] += response_bytes
+    _emit_live_preview_metrics()
+
+
+def _record_live_preview_inference(sequence_identity, inference_ms):
+    with _live_preview_metrics_lock:
+        _live_preview_metrics["inference_count"] += 1
+        _live_preview_metrics["inference_ms_total"] += inference_ms
+        sequences = _live_preview_metrics["unique_frame_sequences"]
+        if len(sequences) < _LIVE_PREVIEW_UNIQUE_SEQUENCE_LIMIT:
+            sequences.add(sequence_identity)
+    _emit_live_preview_metrics()
+
+
+def _record_live_preview_render(render_ms):
+    with _live_preview_metrics_lock:
+        _live_preview_metrics["render_count"] += 1
+        _live_preview_metrics["render_ms_total"] += render_ms
+    _emit_live_preview_metrics()
+
+
+def _record_live_preview_encode(encode_ms):
+    with _live_preview_metrics_lock:
+        _live_preview_metrics["encode_count"] += 1
+        _live_preview_metrics["encode_ms_total"] += encode_ms
+    _emit_live_preview_metrics()
+
+
+def _instrument_live_preview(view):
+    @functools.wraps(view)
+    def wrapped(request, *args, **kwargs):
+        response = view(request, *args, **kwargs)
+        _record_live_preview_request(len(response.content))
+        return response
+
+    return wrapped
 
 
 def _body_json(request):
@@ -2268,10 +2415,18 @@ def api_part_vision_configuration(request, part_id):
 
 
 @require_GET
+@_instrument_live_preview
 def api_part_vision_preview(request, part_id):
     """Infer and render predictions from the shared camera's latest frame."""
     part = get_object_or_404(VisionInspectionPart, pk=part_id)
     side = _clean(request.GET.get("side", "FRONT")).upper()
+    raw_after_seq = request.GET.get("after_seq")
+    try:
+        after_seq = int(raw_after_seq) if raw_after_seq is not None else None
+    except (TypeError, ValueError):
+        return _error("after_seq must be a non-negative integer.")
+    if after_seq is not None and after_seq < 0:
+        return _error("after_seq must be a non-negative integer.")
 
     def preview_error(message, error_code, status):
         return _json_response(
@@ -2492,6 +2647,102 @@ def api_part_vision_preview(request, part_id):
             configuration.pk,
             "roi_invalid",
         )
+    captured_at = frame_meta.get("captured_at")
+    preview_cache_key = None
+    if isinstance(captured_at, (int, float)) and math.isfinite(captured_at):
+        model_rule_signature = []
+        cacheable_models = True
+        for part_model in part_models:
+            try:
+                model_path = resolve_model_path(part_model.model.model_path)
+                model_stat = os.stat(model_path)
+            except (ModelPathResolutionError, OSError):
+                cacheable_models = False
+                break
+            model_rule_signature.append(
+                (
+                    part_model.pk,
+                    part_model.model_id,
+                    part_model.task_type,
+                    part_model.is_enabled,
+                    json.dumps(
+                        part_model.classes or [],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    part_model.model.updated_at.isoformat(),
+                    model_stat.st_mtime_ns,
+                    model_stat.st_size,
+                    tuple(
+                        sorted(
+                            (
+                                rule.pk,
+                                rule.class_id,
+                                rule.class_name,
+                                rule.side,
+                                rule.is_enabled,
+                                rule.expected_front,
+                                rule.expected_back,
+                                rule.front_threshold,
+                                rule.back_threshold,
+                                rule.priority,
+                                rule.is_required,
+                                rule.acceptance_rule,
+                            )
+                            for rule in part_model.class_configs.all()
+                        )
+                    ),
+                )
+            )
+        if cacheable_models:
+            preview_cache_key = (
+                part.pk,
+                configuration.pk,
+                configuration.version,
+                tuple(model_rule_signature),
+                association.pk,
+                side,
+                str(workflow_session_id or ""),
+                int(frame_meta.get("seq") or 0),
+                float(captured_at),
+                roi.pk,
+                roi_rect["x"],
+                roi_rect["y"],
+                roi_rect["width"],
+                roi_rect["height"],
+                confidence_threshold,
+                show_masks,
+                show_boxes,
+            )
+        cached_payload = _live_preview_cache_get(preview_cache_key)
+        if cached_payload is not None:
+            if workflow_session_id and not _workflow().camera_session_is_owned(
+                workflow_session_id
+            ):
+                return preview_error(
+                    "This inspection session is no longer active.",
+                    "session_inactive",
+                    status=409,
+                )
+            if after_seq == cached_payload["frame_seq"]:
+                return _json_response({
+                    "ok": True,
+                    "unchanged": True,
+                    "part_id": cached_payload["part_id"],
+                    "session_id": cached_payload["session_id"],
+                    "configuration_id": cached_payload["configuration_id"],
+                    "configuration_version": cached_payload["configuration_version"],
+                    "model_id": cached_payload["model_id"],
+                    "side": cached_payload["side"],
+                    "inference_status": cached_payload["inference_status"],
+                    "live_status": cached_payload["live_status"],
+                    "live_verdict": cached_payload["live_verdict"],
+                    "frame_seq": cached_payload["frame_seq"],
+                    "frame_age_ms": frame_age_ms,
+                })
+            cached_payload = dict(cached_payload)
+            cached_payload["frame_age_ms"] = frame_age_ms
+            return _json_response(cached_payload)
     offset_x = roi_rect["x"]
     offset_y = roi_rect["y"]
     inference_frame = frame[
@@ -2510,7 +2761,7 @@ def api_part_vision_preview(request, part_id):
     )
 
     try:
-        detections, rendered_roi, inference_ms = registry.predict_segmentation(
+        detections, rendered_roi, inference_ms, mask_render_ms = registry.predict_segmentation(
             association.model.model_path,
             inference_frame,
             conf=confidence_threshold,
@@ -2541,6 +2792,13 @@ def api_part_vision_preview(request, part_id):
             "session_inactive",
             status=409,
         )
+    sequence_identity = (
+        part.pk,
+        str(workflow_session_id or ""),
+        side,
+        int(frame_meta.get("seq") or 0),
+    )
+    _record_live_preview_inference(sequence_identity, inference_ms)
     logger.debug(
         "Prediction preview inference completed: part_id=%s configuration_id=%s "
         "side=%s frame_seq=%s roi_id=%s detections=%s inference_ms=%.1f",
@@ -2553,6 +2811,8 @@ def api_part_vision_preview(request, part_id):
         inference_ms,
     )
 
+    preview_render_started = time.perf_counter()
+    jpeg_encode_ms = 0.0
     try:
         output_frame = frame.copy()
         if rendered_roi.shape[:2] != inference_frame.shape[:2]:
@@ -2568,7 +2828,13 @@ def api_part_vision_preview(request, part_id):
             ] = rendered_roi
         else:
             output_frame = rendered_roi
+        render_ms = mask_render_ms + (
+            time.perf_counter() - preview_render_started
+        ) * 1000.0
+        _record_live_preview_render(render_ms)
+        encode_started = time.perf_counter()
         image = _jpeg_data_url(output_frame, quality=82)
+        jpeg_encode_ms = (time.perf_counter() - encode_started) * 1000.0
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         logger.exception("Could not render segmentation preview for part %s", part.pk)
         return preview_error(
@@ -2582,6 +2848,7 @@ def api_part_vision_preview(request, part_id):
             "preview_encode_failed",
             status=503,
         )
+    _record_live_preview_encode(jpeg_encode_ms)
 
     counts = {}
     for detection in detections:
@@ -2702,6 +2969,10 @@ def api_part_vision_preview(request, part_id):
                     "model_inference_failed",
                     status=503,
                 )
+            _record_live_preview_inference(
+                sequence_identity,
+                float(model_inference_ms),
+            )
             inference_by_model[part_model.pk] = (
                 model_detections,
                 float(model_inference_ms),
@@ -2796,43 +3067,46 @@ def api_part_vision_preview(request, part_id):
             result["class_id"],
         )
     )
-    return _json_response(
-        {
-            "ok": True,
-            "part_id": part.pk,
-            "session_id": workflow_session_id,
-            "configuration_id": configuration.pk,
-            "configuration_version": configuration.version,
-            "model_id": association.model_id,
-            "side": side,
-            "inference_status": "complete",
-            "live_status": live_status,
-            "live_verdict": live_verdict,
-            "rule_results": preview_results,
-            "frame_seq": frame_meta.get("seq"),
-            "frame_age_ms": frame_age_ms,
-            "roi_applied": bool(roi_rect),
-            "image": image,
-            "detection_count": len(detections),
-            "detections": [
-                {
-                    "class": str(detection["class"]),
-                    "class_id": int(detection["class_id"]),
-                    "confidence": float(detection["confidence"]),
-                    "confidence_percent": round(
-                        float(detection["confidence"]) * 100, 1
-                    ),
-                    "x1": int(detection["x1"]) + offset_x,
-                    "y1": int(detection["y1"]) + offset_y,
-                    "x2": int(detection["x2"]) + offset_x,
-                    "y2": int(detection["y2"]) + offset_y,
-                }
-                for index, detection in enumerate(detections)
-            ],
-            "counts_by_class": counts,
-            "inference_ms": inference_ms,
-        }
-    )
+    payload = {
+        "ok": True,
+        "part_id": part.pk,
+        "session_id": workflow_session_id,
+        "configuration_id": configuration.pk,
+        "configuration_version": configuration.version,
+        "model_id": association.model_id,
+        "side": side,
+        "inference_status": "complete",
+        "live_status": live_status,
+        "live_verdict": live_verdict,
+        "rule_results": preview_results,
+        "frame_seq": frame_meta.get("seq"),
+        "frame_age_ms": frame_age_ms,
+        "roi_applied": bool(roi_rect),
+        "image": image,
+        "detection_count": len(detections),
+        "detections": [
+            {
+                "class": str(detection["class"]),
+                "class_id": int(detection["class_id"]),
+                "confidence": float(detection["confidence"]),
+                "confidence_percent": round(
+                    float(detection["confidence"]) * 100, 1
+                ),
+                "x1": int(detection["x1"]) + offset_x,
+                "y1": int(detection["y1"]) + offset_y,
+                "x2": int(detection["x2"]) + offset_x,
+                "y2": int(detection["y2"]) + offset_y,
+            }
+            for index, detection in enumerate(detections)
+        ],
+        "counts_by_class": counts,
+        "inference_ms": inference_ms,
+        "mask_render_ms": round(mask_render_ms, 2),
+        "preview_render_ms": round(render_ms, 2),
+        "jpeg_encode_ms": round(jpeg_encode_ms, 2),
+    }
+    _live_preview_cache_set(preview_cache_key, payload)
+    return _json_response(payload)
 
 
 @require_GET

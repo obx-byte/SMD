@@ -21,6 +21,7 @@
 
     let running = false;
     let currentConfiguration = null;
+    let lastFrameSeq = null;
 
     function setStatus(message, isError) {
         status.textContent = message;
@@ -29,6 +30,7 @@
 
     function stop(message) {
         running = false;
+        lastFrameSeq = null;
         toggle.textContent = "Start Preview";
         if (message) setStatus(message, false);
     }
@@ -114,6 +116,9 @@
                 show_masks: showMasks.checked ? "1" : "0",
                 show_boxes: showBoxes.checked ? "1" : "0"
             });
+            if (Number.isInteger(lastFrameSeq) && lastFrameSeq > 0) {
+                query.set("after_seq", String(lastFrameSeq));
+            }
             try {
                 const response = await fetch(`${config.urls.preview}?${query}`, { cache: "no-store" });
                 const payload = await response.json();
@@ -124,7 +129,21 @@
                     throw error;
                 }
                 if (!running) return;
+                if (payload.unchanged === true) {
+                    if (Number(payload.frame_seq) !== lastFrameSeq ||
+                            payload.side !== sideSelect.value ||
+                            Number(payload.model_id) !== Number(modelSelect.value)) {
+                        throw new Error("The unchanged preview response does not match the selected side and model.");
+                    }
+                    setStatus(
+                        `Live ${payload.side.toLowerCase()} preview · frame ${payload.frame_seq}`,
+                        false
+                    );
+                    await new Promise((resolve) => window.setTimeout(resolve, 250));
+                    continue;
+                }
                 image.src = payload.image;
+                lastFrameSeq = Number(payload.frame_seq);
                 image.hidden = false;
                 placeholder.hidden = true;
                 inference.textContent = `${Number(payload.inference_ms).toFixed(1)} ms`;

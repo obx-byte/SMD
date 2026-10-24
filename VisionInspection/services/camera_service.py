@@ -426,6 +426,7 @@ class CameraService:
                 age_ms = (time.perf_counter() - service._last_frame_monotonic) * 1000.0
             meta = {
                 "seq": service._frame_seq,
+                "captured_at": service._last_frame_monotonic,
                 "age_ms": round(age_ms, 2) if age_ms is not None else None,
                 "dropped": service._frames_dropped,
             }

@@ -19,6 +19,7 @@ Design guarantees (see task spec):
 import logging
 import threading
 import time
+from collections import deque
 
 import numpy as np
 
@@ -104,8 +105,9 @@ class ContinuousInspectionEngine:
             "frames": 0,
             "inference_fps": 0.0,
         }
-        self._fps_accum = []
-        self._infer_accum = []
+        self._fps_accum = deque(maxlen=max(1, int(TARGET_FPS * 2)))
+        self._infer_accum = deque(maxlen=10)
+        self._last_processed_frame_seq = None
 
     # ------------------------------------------------------------------ #
     #  Public control API
@@ -188,6 +190,7 @@ class ContinuousInspectionEngine:
             engine._running = False
             engine._state = STATE_STOPPED
             engine._error = None
+            engine._last_processed_frame_seq = None
             engine._preview_jpeg = None
             engine._latest_result = {
                 "status": STATUS_MODEL_NOT_CONFIGURED,
@@ -251,8 +254,9 @@ class ContinuousInspectionEngine:
     # ------------------------------------------------------------------ #
 
     def _reset_metrics(self):
-        self._fps_accum = []
-        self._infer_accum = []
+        self._fps_accum = deque(maxlen=max(1, int(TARGET_FPS * 2)))
+        self._infer_accum = deque(maxlen=10)
+        self._last_processed_frame_seq = None
         self._metrics = {
             "fps": 0.0, "acquire_ms": 0.0, "frame_age_ms": None, "dropped": 0,
             "crop_ms": 0.0, "inference_ms": 0.0,
@@ -304,6 +308,9 @@ class ContinuousInspectionEngine:
                 if not ok or frame is None:
                     time.sleep(0.02)
                     continue
+                if meta.get("seq") == self._last_processed_frame_seq:
+                    time.sleep(frame_interval)
+                    continue
                 self._metrics["acquire_ms"] = round(_e2e_ms() - t_acq, 2)
                 self._metrics["frame_age_ms"] = meta.get("age_ms")
                 self._metrics["dropped"] = meta.get("dropped", 0)
@@ -330,6 +337,7 @@ class ContinuousInspectionEngine:
                 # --- 4. Inference (model load-once, reuse) ---
                 t_inf = _e2e_ms()
                 result = self._model.predict(roi_crop)
+                self._last_processed_frame_seq = meta.get("seq")
                 self._metrics["inference_ms"] = round(_e2e_ms() - t_inf, 2)
                 self._latest_result = result
 
@@ -355,11 +363,15 @@ class ContinuousInspectionEngine:
                 self._infer_accum.append(self._metrics["inference_ms"])
                 horizon = loop_start - 1000.0
                 while self._fps_accum and self._fps_accum[0] < horizon:
-                    self._fps_accum.pop(0)
+                    self._fps_accum.popleft()
                 self._metrics["fps"] = round(len(self._fps_accum), 1)
                 if self._infer_accum:
                     self._metrics["inference_fps"] = round(
-                        1000.0 / max(np.mean(self._infer_accum[-10:]), 1e-3), 1
+                        1000.0 / max(
+                            sum(self._infer_accum) / len(self._infer_accum),
+                            1e-3,
+                        ),
+                        1,
                     )
 
             except Exception as exc:  # pragma: no cover - defensive

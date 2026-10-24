@@ -13,6 +13,8 @@ import logging
 import threading
 from abc import ABC, abstractmethod
 
+from VisionInspection.services.model_registry import YOLO_IMAGE_SIZE
+
 logger = logging.getLogger(__name__)
 
 STATUS_MODEL_NOT_CONFIGURED = "MODEL_NOT_CONFIGURED"
@@ -174,7 +176,12 @@ class YOLOROIInferenceModel(BaseROIInferenceModel):
                 }
                 return dict(self._last_result)
             try:
-                results = self._model(roi_frame, conf=self._confidence, verbose=False)[0]
+                results = self._model(
+                    roi_frame,
+                    conf=self._confidence,
+                    verbose=False,
+                    imgsz=YOLO_IMAGE_SIZE,
+                )[0]
                 detections = []
                 if results.boxes is not None and len(results.boxes):
                     for box in results.boxes:

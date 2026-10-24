@@ -34,6 +34,7 @@
         predictionInFlight: false,
         predictionSide: null,
         predictionGeneration: 0,
+        predictionFrameSeq: null,
         frontVerdict: "PENDING",
         backVerdict: "PENDING",
         savedRecordId: null,
@@ -61,6 +62,18 @@
         ready: false
     };
     var initialized = false;
+    var previewTelemetry = {
+        startedAt: performance.now(),
+        requests: 0,
+        fullResponses: 0,
+        unchangedResponses: 0,
+        responseBytes: 0,
+        requestMs: 0,
+        transferMs: 0,
+        transferSamples: 0,
+        transferBytes: 0,
+        sequences: new Set()
+    };
 
     function byId(id) { return document.getElementById(id); }
     function cancelFinalTransition() {
@@ -534,8 +547,63 @@ function setBusy(button, value) {
     function stopPredictionPreview() {
         state.predictionGeneration += 1;
         state.predictionSide = null;
+        state.predictionFrameSeq = null;
         if (state.predictionTimer) window.clearTimeout(state.predictionTimer);
         state.predictionTimer = null;
+    }
+
+    function recordPreviewTelemetry(data, requestMs, transferMs, transferBytes) {
+        previewTelemetry.requests += 1;
+        previewTelemetry.requestMs += requestMs;
+        previewTelemetry.responseBytes += new Blob([JSON.stringify(data)]).size;
+        if (Number.isFinite(transferMs)) {
+            previewTelemetry.transferMs += transferMs;
+            previewTelemetry.transferSamples += 1;
+        }
+        if (Number.isFinite(transferBytes) && transferBytes > 0) {
+            previewTelemetry.transferBytes += transferBytes;
+        }
+        if (data.unchanged) {
+            previewTelemetry.unchangedResponses += 1;
+        } else {
+            previewTelemetry.fullResponses += 1;
+            previewTelemetry.sequences.add(Number(data.frame_seq));
+        }
+        var elapsed = performance.now() - previewTelemetry.startedAt;
+        if (elapsed < 30000) return;
+        console.info("Live preview client metrics", {
+            requests: previewTelemetry.requests,
+            imageResponses: previewTelemetry.fullResponses,
+            unchangedResponses: previewTelemetry.unchangedResponses,
+            uniqueFrameSequences: previewTelemetry.sequences.size,
+            averageResponseBytes: Math.round(
+                previewTelemetry.responseBytes / Math.max(previewTelemetry.requests, 1)
+            ),
+            averageRequestMs: Number(
+                (previewTelemetry.requestMs / Math.max(previewTelemetry.requests, 1)).toFixed(1)
+            ),
+            averageBodyTransferMs: previewTelemetry.transferSamples
+                ? Number(
+                    (previewTelemetry.transferMs / previewTelemetry.transferSamples).toFixed(1)
+                )
+                : "unavailable",
+            resourceTransferBytes: previewTelemetry.transferBytes || "unavailable",
+            previewFrameFps: Number(
+                (previewTelemetry.sequences.size / (elapsed / 1000)).toFixed(2)
+            )
+        });
+        previewTelemetry = {
+            startedAt: performance.now(),
+            requests: 0,
+            fullResponses: 0,
+            unchangedResponses: 0,
+            responseBytes: 0,
+            requestMs: 0,
+            transferMs: 0,
+            transferSamples: 0,
+            transferBytes: 0,
+            sequences: new Set()
+        };
     }
 
     function stopSessionProgressPolling() {
@@ -648,19 +716,62 @@ function setBusy(button, value) {
         }
         state.predictionInFlight = true;
         try {
+            var query = new URLSearchParams({
+                side: side,
+                model_id: String(state.validatedModelId),
+                session_id: String(state.sessionId),
+                confidence: "0.30",
+                show_masks: "1",
+                show_boxes: "1"
+            });
+            if (Number.isInteger(state.predictionFrameSeq) &&
+                    state.predictionFrameSeq > 0) {
+                query.set("after_seq", String(state.predictionFrameSeq));
+            }
             var url = URL.partVisionPreview.replace(
                 "__PART_ID__",
                 encodeURIComponent(state.partId)
-            ) + "?side=" + encodeURIComponent(side) +
-                "&model_id=" + encodeURIComponent(state.validatedModelId) +
-                "&session_id=" + encodeURIComponent(state.sessionId) +
-                "&confidence=0.30&show_masks=1&show_boxes=1";
+            ) + "?" + query.toString();
+            var requestStarted = performance.now();
             var data = await jsonRequest(url, "GET", null, INSPECTION_REQUEST_TIMEOUT_MS);
+            var requestMs = performance.now() - requestStarted;
+            var resourceEntries = performance.getEntriesByName(url);
+            var resourceEntry = null;
+            for (var resourceIndex = resourceEntries.length - 1;
+                    resourceIndex >= 0; resourceIndex -= 1) {
+                if (resourceEntries[resourceIndex].startTime >= requestStarted - 1) {
+                    resourceEntry = resourceEntries[resourceIndex];
+                    break;
+                }
+            }
+            var transferMs = resourceEntry
+                ? resourceEntry.responseEnd - resourceEntry.responseStart
+                : null;
+            var transferBytes = resourceEntry
+                ? Number(resourceEntry.transferSize) || null
+                : null;
             if (sessionId !== state.sessionId ||
                     requestVersion !== state.requestVersion ||
                     generation !== state.predictionGeneration ||
                     state.predictionSide !== side ||
                     state.stage !== (side === "FRONT" ? STAGE.FRONT_INSPECTION : STAGE.BACK_INSPECTION)) return;
+            if (data.unchanged === true) {
+                if (Number(data.frame_seq) !== state.predictionFrameSeq ||
+                        Number(data.part_id) !== Number(state.partId) ||
+                        data.session_id !== sessionId ||
+                        data.side !== side ||
+                        Number(data.model_id) !== Number(state.validatedModelId) ||
+                        !["OKAY", "NOT OKAY"].includes(data.live_status) ||
+                        !["OK", "NOT_OK"].includes(data.live_verdict) ||
+                        (data.live_status === "OKAY") !== (data.live_verdict === "OK") ||
+                        (state.configurationId &&
+                            Number(data.configuration_id) !== Number(state.configurationId))) {
+                    throw new Error("The unchanged preview response does not match the active inspection.");
+                }
+                recordPreviewTelemetry(data, requestMs, transferMs, transferBytes);
+                schedulePredictionPreview(side, generation, 300);
+                return;
+            }
             if (typeof data.image !== "string" ||
                     data.image.indexOf("data:image/jpeg;base64,") !== 0 ||
                     !Array.isArray(data.detections) ||
@@ -681,11 +792,13 @@ function setBusy(button, value) {
                     })) {
                 throw new Error("The live prediction response did not include a complete, current configured inspection decision.");
             }
+            recordPreviewTelemetry(data, requestMs, transferMs, transferBytes);
             if (state.configurationId &&
                     Number(data.configuration_id) !== Number(state.configurationId)) {
                 throw new Error("The live prediction used a different Part Vision Configuration than the active session.");
             }
             state.configurationId = Number(data.configuration_id);
+            state.predictionFrameSeq = Number(data.frame_seq);
             image.src = data.image;
             state.predictionReady[side === "FRONT" ? "Front" : "Back"] = true;
             state.predictionRetryCount = 0;

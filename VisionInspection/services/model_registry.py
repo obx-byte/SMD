@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_SUFFIXES = (".pt", ".onnx")
 MAX_MODEL_BYTES = 1024 * 1024 * 1024  # 1 GiB hard limit for uploads
+YOLO_IMAGE_SIZE = 640
 
 
 class ModelLoadError(RuntimeError):
@@ -203,7 +204,7 @@ class ModelRegistry:
     def predict_segmentation(
         self, model_path, frame, conf=0.50, show_masks=True, show_boxes=True
     ):
-        """Run cached segmentation inference and return detections and its rendered frame."""
+        """Run cached inference and return detections, frame and stage timings."""
         configured_path = str(model_path or "").strip()
         try:
             path = str(resolve_model_path(configured_path))
@@ -230,18 +231,20 @@ class ModelRegistry:
                     "The selected model does not expose Ultralytics segmentation results."
                 )
 
-            started = time.perf_counter()
             try:
+                inference_started = time.perf_counter()
                 results = model.predict(
                     source=frame,
                     conf=conf,
                     task="segment",
                     verbose=False,
-                    imgsz=640,
+                    imgsz=YOLO_IMAGE_SIZE,
                     show_boxes=show_boxes,
                 )
+                inference_ms = (time.perf_counter() - inference_started) * 1000.0
+                render_started = time.perf_counter()
                 detections = []
-                rendered = frame.copy()
+                rendered = None
                 for result in results:
                     names = getattr(result, "names", {}) or {}
                     boxes = getattr(result, "boxes", None)
@@ -285,6 +288,9 @@ class ModelRegistry:
                         if show_masks or show_boxes:
                             raise
                         rendered = frame.copy()
+                if rendered is None:
+                    rendered = frame.copy()
+                mask_render_ms = (time.perf_counter() - render_started) * 1000.0
             except ModelLoadError:
                 raise
             except Exception as exc:
@@ -292,15 +298,14 @@ class ModelRegistry:
                     "Segmentation preview failed for %s: %s", entry.path, exc
                 )
                 raise ModelLoadError(f"Segmentation inference failed: {exc}") from exc
-            elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
-        return detections, rendered, elapsed_ms
+        return detections, rendered, round(inference_ms, 2), round(mask_render_ms, 2)
 
     def _predict_ultralytics(self, model, frame, conf, iou, classes, task=""):
         options = {
             "source": frame,
             "conf": conf,
             "iou": iou,
-            "imgsz": 640,
+            "imgsz": YOLO_IMAGE_SIZE,
             "verbose": False,
         }
         if task == "segment":

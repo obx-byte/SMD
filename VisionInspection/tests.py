@@ -343,6 +343,7 @@ class CameraBufferTests(TestCase):
         self.assertTrue(np.array_equal(frame, np.full((4, 4, 3), 2, dtype=np.uint8)))
         self.assertEqual(meta["seq"], 3)
         self.assertEqual(meta["dropped"], 2)  # first two frames discarded
+        self.assertIsNotNone(meta["captured_at"])
         self.assertIsNotNone(meta["age_ms"])
 
     def test_buffer_is_bounded(self):
@@ -350,7 +351,7 @@ class CameraBufferTests(TestCase):
         for i in range(12):
             svc.push_frame(np.full((4, 4, 3), i, dtype=np.uint8))
         self.assertLessEqual(len(svc._frame_buffer), svc._frame_buffer.maxlen)
-        self.assertEqual(len(svc.get_frame_buffer()), svc._frame_buffer.maxlen)
+        self.assertEqual(len(svc.get_frame_buffer()), 5)
 
     def test_get_frame_returns_copy(self):
         svc = CameraService()
@@ -715,6 +716,40 @@ class ContinuousROIDSATests(TestCase):
         eng = self._engine()
         self.assertTrue(eng.stop())
         self.assertTrue(eng.stop())  # safe to call again
+
+    def test_worker_skips_an_already_processed_camera_frame(self):
+        import threading
+
+        eng = self._engine()
+        eng.configure("PART-A", 0, 0, 4, 4, 4, 4)
+        eng._active_part = "PART-A"
+        eng._stop_event = threading.Event()
+        eng._running = True
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        eng._model = mock.Mock()
+        eng._model.predict.return_value = {"status": "OK", "detections": []}
+        sleeps = []
+
+        def stop_after_repeated_frame(_duration):
+            sleeps.append(_duration)
+            if len(sleeps) == 2:
+                eng._stop_event.set()
+
+        with mock.patch.object(
+            eng._camera, "get_status", return_value="ON"
+        ), mock.patch.object(
+            CameraService,
+            "get_frame_with_meta",
+            return_value=(True, frame, {"seq": 42, "age_ms": 1, "dropped": 0}),
+        ), mock.patch(
+            "VisionInspection.services.continuous_inspection.time.sleep",
+            side_effect=stop_after_repeated_frame,
+        ):
+            eng._run()
+
+        eng._model.predict.assert_called_once()
+        self.assertEqual(eng._last_processed_frame_seq, 42)
+        self.assertEqual(len(sleeps), 2)
 
 
 class PartPaginationTests(TestCase):
@@ -2968,6 +3003,7 @@ class StationApiTests(TestCase):
             VisionPartModel,
         )
         from VisionInspection.services.model_registry import ModelRegistry
+        from VisionInspection.services.model_paths import resolve_model_path
 
         class FakeYOLO:
             def __init__(self, path, task=None):
@@ -3256,13 +3292,19 @@ class StationApiTests(TestCase):
                 patch(
                     "VisionInspection.views.CameraService.get_frame_with_meta",
                     return_value=(True, frame, {"seq": 4, "age_ms": 2501.0, "dropped": 0}),
-                ):
+                ), patch(
+                    "VisionInspection.views.registry.predict_segmentation"
+                ) as predict_segmentation, patch(
+                    "VisionInspection.views.registry.predict"
+                ) as predict:
             response = self.client.get(reverse("VisionInspection:camera-status"))
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["ready"])
         self.assertEqual(response.json()["frame_seq"], 4)
         self.assertEqual(response.json()["backend"], "Media Foundation")
+        predict_segmentation.assert_not_called()
+        predict.assert_not_called()
 
     def test_camera_stop_api_rejects_anonymous_access(self):
         r = self.anonymous_client.get(reverse("VisionInspection:camera-stop"))
@@ -4171,6 +4213,7 @@ class ModelRegistryConcurrencyTests(TestCase):
         import threading
         from unittest.mock import patch
 
+        from VisionInspection.services.model_paths import resolve_model_path
         from VisionInspection.services.model_registry import ModelRegistry
 
         first_entered = threading.Event()
@@ -4193,7 +4236,10 @@ class ModelRegistryConcurrencyTests(TestCase):
 
         with tempfile.NamedTemporaryFile(suffix=".pt") as model_file:
             registry = ModelRegistry()
-            entry = registry._entry(model_file.name, task="segment")
+            entry = registry._entry(
+                str(resolve_model_path(model_file.name)),
+                task="segment",
+            )
             entry.model = object()
             entry.task = "segment"
             results = []
@@ -4317,7 +4363,7 @@ class SegmentationPreviewRegistryTests(TestCase):
                 "_import_onnx",
                 return_value=object(),
             ):
-                detections, rendered, _elapsed = ModelRegistry().predict_segmentation(
+                detections, rendered, _elapsed, _render_ms = ModelRegistry().predict_segmentation(
                     path,
                     frame,
                 )
@@ -4528,6 +4574,7 @@ class SegmentationPreviewRegistryTests(TestCase):
     def test_pt_and_onnx_models_are_cached_and_use_ultralytics_predict(self):
         from unittest.mock import patch
 
+        from VisionInspection.services.model_paths import resolve_model_path
         from VisionInspection.services.model_registry import ModelRegistry, registry
 
         class Frame:
@@ -4596,10 +4643,11 @@ class SegmentationPreviewRegistryTests(TestCase):
                         show_masks=True,
                         show_boxes=False,
                     )
+                    registry.predict(path, frame, conf=0.45, task="segment")
 
                 self.assertEqual(len(FakeYOLO.loads), 1)
                 loaded_path, loaded_task, model = FakeYOLO.loads[0]
-                self.assertEqual(loaded_path, path)
+                self.assertEqual(loaded_path, str(resolve_model_path(path)))
                 if suffix == ".onnx":
                     self.assertEqual(loaded_task, "segment")
                 else:
@@ -4618,6 +4666,7 @@ class SegmentationPreviewRegistryTests(TestCase):
                 self.assertEqual(model.predict_calls[1]["conf"], 0.50)
                 self.assertEqual(model.predict_calls[1]["imgsz"], 640)
                 self.assertFalse(model.predict_calls[1]["show_boxes"])
+                self.assertEqual(model.predict_calls[2]["imgsz"], 640)
                 self.assertEqual(
                     model.plot_calls,
                     [
@@ -4641,7 +4690,36 @@ class SegmentationPreviewRegistryTests(TestCase):
                 self.assertEqual(first[0][0]["x1"], 1)
                 self.assertIs(first[1], frame)
                 self.assertGreaterEqual(first[2], 0)
+                self.assertGreaterEqual(first[3], 0)
                 self.assertEqual(second[0], first[0])
+
+    def test_roi_yolo_adapter_uses_the_shared_640_input_size(self):
+        import sys
+        import types
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import YOLO_IMAGE_SIZE
+        from VisionInspection.services.roi_inference import YOLOROIInferenceModel
+
+        class FakeYOLO:
+            def __init__(self, model_path):
+                self.names = {0: "stitch"}
+                self.predict_options = None
+
+            def __call__(self, frame, **options):
+                self.predict_options = options
+                return [types.SimpleNamespace(boxes=[])]
+
+        ultralytics = types.ModuleType("ultralytics")
+        ultralytics.YOLO = FakeYOLO
+        with tempfile.NamedTemporaryFile(suffix=".pt") as model_file:
+            with patch.dict(sys.modules, {"ultralytics": ultralytics}):
+                model = YOLOROIInferenceModel(model_file.name)
+                result = model.predict(np.zeros((24, 24, 3), dtype=np.uint8))
+
+        self.assertEqual(YOLO_IMAGE_SIZE, 640)
+        self.assertTrue(result["configured"])
+        self.assertEqual(model._model.predict_options["imgsz"], 640)
 
 
 class SegmentationPreviewApiTests(TestCase):
@@ -4653,6 +4731,10 @@ class SegmentationPreviewApiTests(TestCase):
             VisionPartModel,
             VisionYOLOModel,
         )
+        from VisionInspection import views
+
+        with views._live_preview_cache_lock:
+            views._live_preview_cache.clear()
 
         self.part = VisionInspectionPart.objects.create(
             part_number="PREVIEW-001",
@@ -4688,6 +4770,18 @@ class SegmentationPreviewApiTests(TestCase):
             is_required=True,
             acceptance_rule=VisionClassConfiguration.RULE_COUNT_CONFIDENCE,
         )
+
+    def test_preview_response_cache_is_bounded(self):
+        from VisionInspection import views
+
+        for index in range(views._LIVE_PREVIEW_CACHE_LIMIT + 1):
+            views._live_preview_cache_set((index,), {"frame": "cached"})
+
+        self.assertEqual(
+            len(views._live_preview_cache),
+            views._LIVE_PREVIEW_CACHE_LIMIT,
+        )
+        self.assertIsNone(views._live_preview_cache_get((0,)))
 
     def test_preview_uses_roi_and_returns_coordinates_for_same_frame(self):
         import numpy as np
@@ -4729,11 +4823,16 @@ class SegmentationPreviewApiTests(TestCase):
                 patch("VisionInspection.views.CameraService.get_camera_index", return_value=0), \
                 patch(
                     "VisionInspection.views.CameraService.get_frame_with_meta",
-                    return_value=(True, frame, {"seq": 12, "age_ms": 10, "dropped": 0}),
-                ), \
+                    return_value=(True, frame, {
+                        "seq": 12,
+                        "captured_at": 123.5,
+                        "age_ms": 10,
+                        "dropped": 0,
+                    }),
+                ) as get_frame, \
                 patch(
                     "VisionInspection.views.registry.predict_segmentation",
-                    return_value=(detections, frame[10:40, 20:60].copy(), 42.5),
+                    return_value=(detections, frame[10:40, 20:60].copy(), 42.5, 4.0),
                 ) as predict, \
                 patch(
                     "VisionInspection.views.registry.inspect",
@@ -4746,8 +4845,68 @@ class SegmentationPreviewApiTests(TestCase):
                 patch(
                     "VisionInspection.views._jpeg_data_url",
                     return_value="data:image/jpeg;base64,frame",
-                ):
+                ) as encode_preview:
             response = self.client.get(
+                reverse(
+                    "VisionInspection:api-part-vision-preview",
+                    args=[self.part.pk],
+                ),
+                {
+                    "side": "FRONT",
+                    "model_id": self.model.pk,
+                    "confidence": "0.65",
+                    "show_masks": "0",
+                    "show_boxes": "1",
+                },
+            )
+            repeated_response = self.client.get(
+                reverse(
+                    "VisionInspection:api-part-vision-preview",
+                    args=[self.part.pk],
+                ),
+                {
+                    "side": "FRONT",
+                    "model_id": self.model.pk,
+                    "confidence": "0.65",
+                    "show_masks": "0",
+                    "show_boxes": "1",
+                },
+            )
+            unchanged_response = self.client.get(
+                reverse(
+                    "VisionInspection:api-part-vision-preview",
+                    args=[self.part.pk],
+                ),
+                {
+                    "side": "FRONT",
+                    "model_id": self.model.pk,
+                    "confidence": "0.65",
+                    "show_masks": "0",
+                    "show_boxes": "1",
+                    "after_seq": "12",
+                },
+            )
+            self.association.class_configs.update(expected_front=2)
+            changed_rule_response = self.client.get(
+                reverse(
+                    "VisionInspection:api-part-vision-preview",
+                    args=[self.part.pk],
+                ),
+                {
+                    "side": "FRONT",
+                    "model_id": self.model.pk,
+                    "confidence": "0.65",
+                    "show_masks": "0",
+                    "show_boxes": "1",
+                },
+            )
+            get_frame.return_value = (True, frame, {
+                "seq": 13,
+                "captured_at": 124.5,
+                "age_ms": 5,
+                "dropped": 0,
+            })
+            new_frame_response = self.client.get(
                 reverse(
                     "VisionInspection:api-part-vision-preview",
                     args=[self.part.pk],
@@ -4762,6 +4921,19 @@ class SegmentationPreviewApiTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(repeated_response.status_code, 200, repeated_response.content)
+        self.assertEqual(repeated_response.json(), response.json())
+        self.assertEqual(unchanged_response.status_code, 200)
+        self.assertTrue(unchanged_response.json()["unchanged"])
+        self.assertEqual(unchanged_response.json()["frame_seq"], 12)
+        self.assertNotIn("image", unchanged_response.json())
+        self.assertLess(len(unchanged_response.content), 1024)
+        self.assertEqual(changed_rule_response.status_code, 200)
+        self.assertEqual(changed_rule_response.json()["live_status"], "NOT OKAY")
+        self.assertEqual(new_frame_response.status_code, 200)
+        self.assertEqual(new_frame_response.json()["frame_seq"], 13)
+        self.assertEqual(predict.call_count, 3)
+        self.assertEqual(encode_preview.call_count, 3)
         payload = response.json()
         self.assertEqual(payload["configuration_id"], self.configuration.pk)
         self.assertEqual(payload["part_id"], self.part.pk)
@@ -4775,6 +4947,7 @@ class SegmentationPreviewApiTests(TestCase):
         self.assertTrue(payload["roi_applied"])
         self.assertEqual(payload["image"], "data:image/jpeg;base64,frame")
         self.assertEqual(payload["inference_ms"], 42.5)
+        self.assertEqual(payload["mask_render_ms"], 4.0)
         self.assertEqual(payload["detection_count"], 1)
         self.assertEqual(payload["detections"][0]["class"], "real-class")
         self.assertEqual(payload["detections"][0]["confidence_percent"], 87.6)
@@ -4841,7 +5014,7 @@ class SegmentationPreviewApiTests(TestCase):
                 ), \
                 patch(
                     "VisionInspection.views.registry.predict_segmentation",
-                    return_value=([], frame[10:40, 20:60].copy(), 1.0),
+                    return_value=([], frame[10:40, 20:60].copy(), 1.0, 2.0),
                 ) as predict, \
                 patch(
                     "VisionInspection.views.registry.inspect",
@@ -4918,7 +5091,7 @@ class SegmentationPreviewApiTests(TestCase):
                 ), \
                 patch(
                     "VisionInspection.views.registry.predict_segmentation",
-                    return_value=(detections, frame[10:40, 20:60].copy(), 1.0),
+                    return_value=(detections, frame[10:40, 20:60].copy(), 1.0, 2.0),
                 ), \
                 patch(
                     "VisionInspection.views.registry.inspect",
@@ -5014,7 +5187,7 @@ class SegmentationPreviewApiTests(TestCase):
                 ), \
                 patch(
                     "VisionInspection.views.registry.predict_segmentation",
-                    return_value=([first_detection], frame[10:40, 20:60].copy(), 1.0),
+                    return_value=([first_detection], frame[10:40, 20:60].copy(), 1.0, 2.0),
                 ) as preview_predict, \
                 patch(
                     "VisionInspection.views.registry.inspect",
@@ -5101,7 +5274,7 @@ class SegmentationPreviewApiTests(TestCase):
                 ), \
                 patch(
                     "VisionInspection.views.registry.predict_segmentation",
-                    return_value=([], frame[10:40, 20:60].copy(), 1.0),
+                    return_value=([], frame[10:40, 20:60].copy(), 1.0, 2.0),
                 ), \
                 patch(
                     "VisionInspection.views.registry.inspect",
