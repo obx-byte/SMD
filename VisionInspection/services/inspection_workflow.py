@@ -264,8 +264,6 @@ class InspectionWorkflow:
             part=part, is_active=True, status=VisionPartConfiguration.STATUS_READY
         ).order_by("-version").first()
         has_model = bool(active_config and active_config.part_models.filter(is_enabled=True).exists())
-        if latest_config is None:
-            has_model = self._active_model() is not None
         active_session = None
         if operator is not None and getattr(operator, "is_authenticated", False):
             operator_sessions = VisionInspectionSession.objects.filter(
@@ -437,7 +435,13 @@ class InspectionWorkflow:
     # ------------------------------------------------------------------ #
     def validate_model(self, model_id: int | None = None, part_number: str | None = None):
         if part_number:
-            part = VisionInspectionPart.objects.filter(part_number__iexact=part_number).first()
+            normalized = _norm(part_number)
+            part = (
+                VisionInspectionPart.objects.filter(part_number__iexact=part_number).first()
+                or VisionInspectionPart.objects.filter(
+                    part_number_normalized=normalized
+                ).first()
+            )
             if part is None:
                 return {"ok": False, "state": "part_not_found", "message": "Part not found."}
             configuration = VisionPartConfiguration.objects.filter(
@@ -469,6 +473,11 @@ class InspectionWorkflow:
                     "message": " ".join(validation_errors)
                     or "This part has no active, validated vision configuration.",
                 }
+            return {
+                "ok": False,
+                "state": "configuration_missing",
+                "message": "No Part Vision Configuration exists for this part.",
+            }
 
         model = (
             VisionYOLOModel.objects.filter(pk=model_id).first()
@@ -511,6 +520,7 @@ class InspectionWorkflow:
             "ok": True,
             "state": "model_loaded",
             "model_id": model.id,
+            "model_name": model.name,
             "model_version": model.version or "",
             "classes": classes,
             "num_classes": len(classes),
@@ -705,6 +715,7 @@ class InspectionWorkflow:
             "configuration": configuration,
             "models": configured_models,
             "model_id": configured_models[0]["model_id"],
+            "model_name": configured_models[0]["name"],
             "model_version": ", ".join(model["version"] for model in configured_models),
             "classes": [
                 {"model_id": model["model_id"], **item}

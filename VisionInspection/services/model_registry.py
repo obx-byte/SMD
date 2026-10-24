@@ -239,7 +239,9 @@ class ModelRegistry:
                     task="segment",
                     verbose=False,
                     imgsz=YOLO_IMAGE_SIZE,
-                    show_boxes=show_boxes,
+                      iou=0.5,
+                    max_det=30,
+                retina_masks=False,
                 )
                 inference_ms = (time.perf_counter() - inference_started) * 1000.0
                 render_started = time.perf_counter()
@@ -307,6 +309,8 @@ class ModelRegistry:
             "iou": iou,
             "imgsz": YOLO_IMAGE_SIZE,
             "verbose": False,
+           
+            
         }
         if task == "segment":
             options["task"] = "segment"

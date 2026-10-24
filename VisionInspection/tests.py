@@ -584,6 +584,27 @@ class CameraBufferTests(TestCase):
         self.assertEqual(service.get_state(), "STOPPING")
         self.assertIsNotNone(service.get_error())
 
+    def test_camera_restart_does_not_open_until_previous_thread_is_retired(self):
+        from VisionInspection.services import camera_service
+
+        service = CameraService()
+        service._status = "ON"
+        service._state = "RUNNING"
+        service._source = "opencv"
+        service._camera_index = 0
+        service._thread = mock.Mock()
+        service._thread.is_alive.return_value = True
+
+        with mock.patch.object(
+            service, "_retire_capture_thread", return_value=False
+        ) as retire, mock.patch.object(camera_service.threading, "Thread") as thread:
+            started = CameraService.start_camera(camera_index=1, source="opencv")
+
+        self.assertFalse(started)
+        retire.assert_called_once()
+        thread.assert_not_called()
+        self.assertEqual(service.get_status(), "STOPPING")
+
     def test_release_exception_keeps_capture_owned_and_reports_error(self):
         from VisionInspection.services import camera_service
 
@@ -1079,6 +1100,8 @@ class InspectionWorkflowTests(TestCase):
         self.assertTrue(r["ok"])
         self.assertEqual(r["state"], "part_identified")
         self.assertEqual(r["part"]["part_number"], "AB-100")
+        self.assertFalse(r["has_model"])
+        self.assertEqual(r["configuration_status"], "NOT_CONFIGURED")
         self.assertIsNone(r["active_session"])
         self.assertEqual(VisionInspectionSession.objects.count(), 0)
 
@@ -1254,6 +1277,25 @@ class InspectionWorkflowTests(TestCase):
         stop_camera.assert_not_called()
         self.assertEqual(self.wf._camera_session_id, str(camera_session.session_id))
 
+    def test_failed_owned_camera_stop_keeps_session_as_owner(self):
+        session = self._session(stage="front", front_status="IN_PROGRESS")
+        self.wf._camera_session_id = str(session.session_id)
+
+        with mock.patch(
+            "VisionInspection.services.inspection_workflow.CameraService.stop_camera",
+            return_value=False,
+        ) as stop_camera, mock.patch(
+            "VisionInspection.services.inspection_workflow.CameraService.get_error",
+            return_value="camera thread is still stopping",
+        ), self.assertLogs(
+            "VisionInspection.services.inspection_workflow", level="ERROR"
+        ), self.captureOnCommitCallbacks(execute=True):
+            result = self.wf.cancel(str(session.session_id))
+
+        self.assertTrue(result["ok"])
+        stop_camera.assert_called_once_with()
+        self.assertEqual(self.wf._camera_session_id, str(session.session_id))
+
     def test_an_active_session_reserves_the_camera_for_other_parts(self):
         from unittest.mock import patch
 
@@ -1296,6 +1338,35 @@ class InspectionWorkflowTests(TestCase):
         r = self.wf.validate_model()
         self.assertFalse(r["ok"])
         self.assertEqual(r["state"], "model_missing")
+
+    def test_part_without_configuration_does_not_fall_back_to_global_model(self):
+        from unittest.mock import patch
+
+        VisionYOLOModel.objects.create(
+            name="Unrelated active model",
+            model_path=__file__,
+            is_active=True,
+            num_classes=1,
+        )
+
+        result = self.wf.validate_model(part_number=self.part.part_number)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "configuration_missing")
+        self.assertEqual(
+            result["message"],
+            "No Part Vision Configuration exists for this part.",
+        )
+        with patch(
+            "VisionInspection.services.inspection_workflow.storage_service.ensure_evidence_capacity"
+        ):
+            submitted = self.wf.submit(
+                self.part.part_number,
+                operator=self.operator,
+            )
+        self.assertFalse(submitted["ok"])
+        self.assertEqual(submitted["state"], "configuration_missing")
+        self.assertEqual(VisionInspectionSession.objects.count(), 0)
 
     def test_validate_model_invalid_path(self):
         VisionYOLOModel.objects.create(
@@ -1578,6 +1649,76 @@ class InspectionWorkflowTests(TestCase):
         self.assertNotEqual(session.front_roi_image.name, session.back_roi_image.name)
         self.assertEqual(session.front_detections[0]["class"], "perimeter")
         self.assertEqual(session.back_detections[0]["class"], "perimeter")
+
+    def test_front_back_inspection_persists_results_evidence_and_final_record(self):
+        from VisionInspection.models import VisionInspectionLog
+        from VisionInspection.services import storage_service
+
+        model = self._model_obj()
+        session = self._session(
+            model=model,
+            front_roi=self._roi("front"),
+            back_roi=self._roi("back"),
+            stage="front",
+            front_status="PENDING",
+            back_status="PENDING",
+        )
+
+        with mock.patch.object(
+            self.wf, "_side_verdict", side_effect=["OK", "NOT_OK"]
+        ):
+            front = self.wf.run_side(
+                str(session.session_id), "front", frame=_fake_frame()
+            )
+            back = self.wf.run_side(
+                str(session.session_id), "back", frame=_fake_frame()
+            )
+
+        self.assertTrue(front["ok"], front)
+        self.assertTrue(back["ok"], back)
+        session.refresh_from_db()
+        self.assertEqual(session.front_status, "COMPLETED")
+        self.assertEqual(session.back_status, "COMPLETED")
+        self.assertEqual(session.front_verdict, "OK")
+        self.assertEqual(session.back_verdict, "NOT_OK")
+        self.assertEqual(session.front_detections[0]["class"], "perimeter")
+        self.assertEqual(session.back_detections[0]["class"], "perimeter")
+        for field_name in (
+            "front_image",
+            "front_roi_image",
+            "front_annotated",
+            "back_image",
+            "back_roi_image",
+            "back_annotated",
+        ):
+            image = getattr(session, field_name)
+            self.assertTrue(image, field_name)
+            metadata = storage_service.metadata_for_field(
+                session, field_name, backfill=False
+            )
+            self.assertIsNotNone(metadata, field_name)
+            with storage_service.open_image(metadata) as stored_image:
+                self.assertGreater(len(stored_image.read()), 0, field_name)
+
+        result = self.wf.compute_result(str(session.session_id))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["overall"], "NOT_OK")
+        saved = self.wf.save(str(session.session_id))
+        self.assertTrue(saved["ok"], saved)
+
+        session.refresh_from_db()
+        record = VisionInspectionLog.objects.get(pk=saved["inspection_id"])
+        self.assertEqual(record.session_id, session.pk)
+        self.assertEqual(record.result, "NOT_OK")
+        self.assertEqual(record.roi_results[0]["results"], session.front_results)
+        self.assertEqual(record.roi_results[1]["results"], session.back_results)
+        self.assertEqual(
+            [item["class"] for item in record.detected_objects],
+            ["perimeter", "perimeter"],
+        )
+        self.assertEqual(record.inspection_image.name, session.front_image.name)
+        self.assertTrue(session.is_saved)
+        self.assertFalse(session.is_active)
 
     def test_completed_side_retry_returns_stored_state_without_rerunning_inference(self):
         session = self._session(
@@ -2987,6 +3128,8 @@ class StationApiTests(TestCase):
         url = reverse("VisionInspection:workflow-validate-model")
         for payload, error_code in (
             ({"part_number": ["AB-100"]}, "invalid_part_number"),
+            ({"part_id": True}, "invalid_part_id"),
+            ({"part_id": "not-an-id"}, "invalid_part_id"),
             ({"model_id": 1.5}, "invalid_model_id"),
             ({"model_id": True}, "invalid_model_id"),
         ):
@@ -2994,6 +3137,36 @@ class StationApiTests(TestCase):
                 response = _post(self.client, url, payload)
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(response.json()["error_code"], error_code)
+
+    def test_validate_model_resolves_selected_part_id_on_backend(self):
+        from unittest.mock import patch
+
+        url = reverse("VisionInspection:workflow-validate-model")
+        with patch("VisionInspection.views._workflow") as workflow:
+            workflow.return_value.validate_model.return_value = {
+                "ok": False,
+                "state": "configuration_missing",
+                "message": "No Part Vision Configuration exists for this part.",
+            }
+            response = _post(self.client, url, {"part_id": self.part.pk})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error_code"], "configuration_missing")
+        workflow.return_value.validate_model.assert_called_once_with(
+            None,
+            self.part.part_number,
+        )
+
+    def test_validate_model_rejects_part_id_and_number_mismatch(self):
+        url = reverse("VisionInspection:workflow-validate-model")
+        response = _post(
+            self.client,
+            url,
+            {"part_id": self.part.pk, "part_number": "OTHER-PART"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error_code"], "part_selection_mismatch")
 
     def test_validate_model_returns_runtime_diagnostic_for_registered_onnx(self):
         from unittest.mock import patch
@@ -3127,7 +3300,7 @@ class StationApiTests(TestCase):
             "front_camera_source": "OPENCV",
             "front_camera_index": 0,
             "back_camera_source": "OPENCV",
-            "back_camera_index": 1,
+            "back_camera_index": 0,
             "models": [{
                 "model_id": model.pk,
                 "enabled": True,
@@ -3267,12 +3440,16 @@ class StationApiTests(TestCase):
             response = _post(
                 self.client,
                 reverse("VisionInspection:workflow-validate-model"),
-                {"part_number": self.part.part_number},
+                {"part_id": self.part.pk},
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["model_id"], 42)
+        workflow.return_value.validate_model.assert_called_once_with(
+            None,
+            self.part.part_number,
+        )
 
     def test_camera_status_api_rejects_anonymous_access(self):
         r = self.anonymous_client.get(reverse("VisionInspection:camera-status"))
@@ -3842,7 +4019,7 @@ class StationApiTests(TestCase):
             "front_camera_source": "OPENCV",
             "front_camera_index": 0,
             "back_camera_source": "OPENCV",
-            "back_camera_index": 1,
+            "back_camera_index": 0,
             "models": [{
                 "model_id": model.pk,
                 "enabled": True,
@@ -4062,6 +4239,9 @@ class StationApiTests(TestCase):
                 service_result["configuration_id"],
                 configuration_id,
             )
+            self.assertEqual(service_result["models"][0]["model_id"], model.pk)
+            self.assertEqual(service_result["models"][0]["name"], model.name)
+            self.assertEqual(service_result["models"][0]["version"], "1.0")
             validation = _post(
                 self.client,
                 reverse("VisionInspection:workflow-validate-model"),
@@ -4209,6 +4389,89 @@ class ModelPathResolutionTests(TestCase):
 
 
 class ModelRegistryConcurrencyTests(TestCase):
+    def test_concurrent_inspection_loads_one_model_and_reuses_it(self):
+        import threading
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import ModelRegistry
+
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
+        results = []
+
+        class FakeYOLO:
+            loads = 0
+
+            def __init__(self, path, task=None):
+                type(self).loads += 1
+                first_entered.set()
+                release_first.wait(2)
+                self.task = task
+                self.names = {0: "stitch"}
+
+        with tempfile.NamedTemporaryFile(suffix=".pt") as model_file:
+            registry = ModelRegistry()
+
+            def inspect():
+                results.append(registry.inspect(model_file.name, task="segment"))
+
+            def inspect_second():
+                second_started.set()
+                inspect()
+
+            with patch.object(
+                ModelRegistry, "_import_ultralytics", return_value=FakeYOLO
+            ):
+                first = threading.Thread(target=inspect)
+                second = threading.Thread(target=inspect_second)
+                first.start()
+                self.assertTrue(first_entered.wait(2))
+                second.start()
+                self.assertTrue(second_started.wait(2))
+                release_first.set()
+                first.join(2)
+                second.join(2)
+                repeated = registry.inspect(model_file.name, task="segment")
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result["ok"] for result in results))
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(FakeYOLO.loads, 1)
+
+    def test_inspection_reloads_model_after_file_changes(self):
+        from unittest.mock import patch
+
+        from VisionInspection.services.model_registry import ModelRegistry
+
+        class FakeYOLO:
+            loads = 0
+
+            def __init__(self, path, task=None):
+                type(self).loads += 1
+                self.task = task
+                self.names = {0: "stitch"}
+
+        with tempfile.NamedTemporaryFile(suffix=".pt") as model_file:
+            model_file.write(b"initial model")
+            model_file.flush()
+            registry = ModelRegistry()
+            with patch.object(
+                ModelRegistry, "_import_ultralytics", return_value=FakeYOLO
+            ):
+                first = registry.inspect(model_file.name, task="segment")
+                model_file.seek(0)
+                model_file.truncate()
+                model_file.write(b"replacement model file with changed size")
+                model_file.flush()
+                second = registry.inspect(model_file.name, task="segment")
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(FakeYOLO.loads, 2)
+
     def test_concurrent_predictions_for_same_model_are_serialized(self):
         import threading
         from unittest.mock import patch
@@ -4782,6 +5045,44 @@ class SegmentationPreviewApiTests(TestCase):
             views._LIVE_PREVIEW_CACHE_LIMIT,
         )
         self.assertIsNone(views._live_preview_cache_get((0,)))
+
+    def test_concurrent_identical_preview_requests_reuse_one_inference(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        from django.http import HttpResponse
+        from django.test import RequestFactory
+        from VisionInspection import views
+
+        cache_key = ("concurrent-preview", self.part.pk)
+        ready = threading.Barrier(2)
+        inference_count = 0
+
+        def preview(request):
+            nonlocal inference_count
+            cached = views._live_preview_cache_get(cache_key)
+            if cached is not None:
+                return HttpResponse(cached["image"])
+            inference_count += 1
+            threading.Event().wait(0.05)
+            payload = {"image": "encoded-preview"}
+            views._live_preview_cache_set(cache_key, payload)
+            return HttpResponse(payload["image"])
+
+        instrumented_preview = views._instrument_live_preview(preview)
+        factory = RequestFactory()
+
+        def request_preview():
+            ready.wait(timeout=5)
+            return instrumented_preview(factory.get("/preview/"))
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _index: request_preview(), range(2)))
+
+        self.assertEqual(inference_count, 1)
+        self.assertEqual([response.content for response in responses], [
+            b"encoded-preview",
+            b"encoded-preview",
+        ])
 
     def test_preview_uses_roi_and_returns_coordinates_for_same_frame(self):
         import numpy as np
@@ -5542,16 +5843,14 @@ class StationTraceabilityTests(TestCase):
 class InspectionWorkspaceUiTests(TestCase):
     """Regression guards for the staged Airbag Stitch operator page."""
 
-    URL = "/vision-inspection/inspection/"
-
     def setUp(self):
         self.client, self.operator = _role_client("Operator", "WORKFLOW-OPERATOR")
+        self.URL = reverse("VisionInspection:inspection")
 
     # Required operator controls and workflow targets.
     TOOLBAR_IDS = ["wsApp", "wsError"]
     WORKFLOW_IDS = [
-        "wfScanForm", "wfBarcode", "wfScanBtn", "wfStartInspectionBtn",
-        "wfScanState", "wfScanDot", "wfScanResult", "wfPartConfigLink",
+        "wfScanForm", "wfBarcode", "wfScanState", "wfScanDot", "wfScanResult",
         "wfModelState", "wfModelDot", "wfModelDetail", "wfPartInfo", "wfStageScan", "wfStageFront",
         "wfStageBack", "wfStageSaving", "wfStageFinal", "wfFrontCameraStatus",
         "wfFrontChangePartBtn",
@@ -5575,6 +5874,73 @@ class InspectionWorkspaceUiTests(TestCase):
 
     def test_page_renders_for_an_operator(self):
         self.assertEqual(self.client.get(self.URL).status_code, 200)
+
+    def test_scan_part_uses_native_dropdown_with_database_parts(self):
+        part = VisionInspectionPart.objects.create(
+            part_number="SELECT-01",
+            part_name="Operator Select Part",
+        )
+        response = self.client.get(reverse("VisionInspection:inspection"))
+        html = response.content.decode("utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "VisionInspection/inspection.html")
+        self.assertIn('<select id="wfBarcode" class="vi-master-control"', html)
+        self.assertIn('<option value="">Select Part</option>', html)
+        self.assertIn(
+            f'<option value="{part.part_number}" data-part-id="{part.pk}" '
+            f'data-part-number="{part.part_number}" '
+            f'data-part-name="{part.part_name}">{part.part_number} — {part.part_name}</option>',
+            html,
+        )
+        self.assertNotIn('<input id="wfBarcode"', html)
+        self.assertNotIn('type="search"', html)
+        self.assertNotIn('id="wfScanBtn"', html)
+        self.assertNotIn('id="wfStartInspectionBtn"', html)
+        self.assertNotIn('id="wfPartConfigLink"', html)
+        self.assertIn("Select a part to validate its configuration and load its model.", html)
+        self.assertNotIn("RETRY VALIDATION", html)
+        self.assertNotIn("START INSPECTION", html)
+        self.assertNotIn("EDIT PART VISION SETTINGS", html)
+
+    def test_scan_part_dropdown_shows_empty_state_without_parts(self):
+        response = self.client.get(reverse("VisionInspection:inspection"))
+        html = response.content.decode("utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<option value="" disabled>No parts available</option>', html)
+        self.assertIn("No parts are available.", html)
+
+    def test_part_selection_automatically_validates_and_starts_inspection(self):
+        from django.conf import settings
+
+        script = (
+            __import__("pathlib").Path(settings.BASE_DIR)
+            / "VisionInspection"
+            / "static"
+            / "VisionInspection"
+            / "js"
+            / "inspection_workflow_ui.js"
+        ).read_text(encoding="utf-8")
+        handler = script.split(
+            "function handlePartSelectionChange()", 1
+        )[1].split("async function waitForCameraReady", 1)[0]
+        automatic_start = script.split("async function startInspection(", 1)[1].split(
+            "async function changePart(", 1
+        )[0]
+
+        self.assertIn("scan();", handler)
+        self.assertIn("state.validationController.abort()", handler)
+        self.assertIn("part_id: selectedPartId", script)
+        self.assertIn("await startInspection(version)", script)
+        self.assertIn("setBusy(partSelect, true)", script)
+        self.assertIn("URL.wfSubmit", automatic_start)
+        self.assertIn("await waitForCameraReady", automatic_start)
+        self.assertIn("await enterFromProgress", automatic_start)
+        self.assertIn('await jsonRequest(URL.wfCancel, "POST"', automatic_start)
+        self.assertIn("version !== state.requestVersion", automatic_start)
+        self.assertIn("URL.wfActivateSide", script)
+        self.assertIn("cameraStatusRequest(sessionId)", script)
 
     def test_active_inspection_has_navigation_cancellation_dialog(self):
         from django.conf import settings
@@ -5614,6 +5980,15 @@ class InspectionWorkspaceUiTests(TestCase):
         )
         base = (template_root / "ui" / "base.html").read_text(encoding="utf-8")
         admin_base = (template_root / "admin" / "base.html").read_text(encoding="utf-8")
+        sidebar_script_path = (
+            __import__("pathlib").Path(settings.BASE_DIR)
+            / "VisionInspection"
+            / "static"
+            / "VisionInspection"
+            / "js"
+            / "sidebar.js"
+        )
+        sidebar_script = sidebar_script_path.read_text(encoding="utf-8")
         css_path = (
             __import__("pathlib").Path(settings.BASE_DIR)
             / "VisionInspection"
@@ -5637,6 +6012,13 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertIn("{% if vi_access.master_data_view or vi_access.master_data_create %}", base)
         self.assertIn("{% url 'VisionInspection:admin-settings' %}", admin_base)
         self.assertIn('class="vi-sidebar-footer"', admin_base)
+        self.assertLess(
+            base.index("</nav>"),
+            base.index('<div class="vi-sidebar-footer">'),
+        )
+        self.assertIn("vi-sidebar-tooltip", css)
+        self.assertIn('document.addEventListener("pointerover", showTooltip)', sidebar_script)
+        self.assertIn('document.addEventListener("focusin", showTooltip)', sidebar_script)
 
     def test_camera_stage_exposes_model_readiness_status(self):
         html = self._page()
@@ -5669,7 +6051,10 @@ class InspectionWorkspaceUiTests(TestCase):
             / "js"
             / "inspection_workflow_ui.js"
         ).read_text(encoding="utf-8")
-        self.assertIn("inspection_workflow_ui.js?v=20261023-8", html)
+        self.assertIn("inspection_workflow_ui.js?v=20261024-6", html)
+        self.assertIn("state.validationController.abort()", script)
+        self.assertIn("state.validatedPartNumber === barcode", script)
+        self.assertIn('setText("wfModelState", "Model ready")', script)
         self.assertIn("function hasValidSideProgress(progress, side, sessionId)", script)
         self.assertIn('setResult(isBack ? "Back" : "Front", "IN_PROGRESS", "PENDING")', script)
         self.assertIn('if (normalizedStatus === "COMPLETED")', script)
@@ -5715,8 +6100,21 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertIn("margin: 0", camera_wrapper.group(1))
         self.assertIn("body.vi-camera-fullscreen .vi-top-header", css)
         self.assertNotIn("body.vi-camera-fullscreen .vi-sidebar,\nbody.vi-camera-fullscreen .vi-top-header", css)
-        self.assertIn("inspection_workspace.css?v=20261023-9", html)
-        self.assertIn("admin.css?v=20261022-7", html)
+        self.assertIn("inspection_workspace.css?v=20261024-4", html)
+        self.assertIn('class="btn btn-primary vi-profile-btn"', html)
+        self.assertIn("admin.css?v=20261024-2", html)
+        admin_css = (
+            __import__("pathlib").Path(settings.BASE_DIR)
+            / "VisionInspection"
+            / "static"
+            / "VisionInspection"
+            / "css"
+            / "admin.css"
+        ).read_text(encoding="utf-8")
+        self.assertIn(".vi-top-header .vi-header-datetime", admin_css)
+        self.assertIn(".vi-top-header .vi-profile-btn", admin_css)
+        self.assertIn(".vi-signout-btn", admin_css)
+        self.assertGreaterEqual(admin_css.count("height: 36px;"), 3)
         self.assertIn(
             "body.vi-inspection-chrome .vi-header-title",
             css,
@@ -5759,12 +6157,44 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertIn('normalizedStatus === "COMPLETED" && normalizedVerdict === "OK"', script)
         self.assertIn('normalizedStatus === "COMPLETED" && normalizedVerdict === "NOT_OK"', script)
         self.assertIn('normalizedStatus === "ERROR" || normalizedVerdict === "ERROR"', script)
-        self.assertIn("function startSessionProgressPolling(side)", script)
+        self.assertIn("function startSessionProgressPolling(side, recoverProcessing)", script)
         self.assertIn("var progress = await loadProgress(sessionId)", script)
         self.assertIn("startSessionProgressPolling(side)", script)
+        preview_poll = script.split(
+            "async function pollPredictionPreview(", 1
+        )[1].split("function retryPrediction(", 1)[0]
+        self.assertNotIn('setResult(label, "IN_PROGRESS", "PENDING")', preview_poll)
+        self.assertIn('return { text: "WAITING FOR RESULT", className: "pending" }', script)
+        self.assertIn('return { text: "INSPECTING", className: "inspecting" }', script)
+        self.assertNotIn('console.info("Result display state"', script)
+        self.assertIn('console.info("Inspection result state changed"', script)
+        self.assertIn("previous_status:", script)
+        self.assertIn("side: side.toLowerCase()", script)
+        self.assertIn("source: source || \"workflow\"", script)
+        self.assertNotIn(
+            'data.live_verdict === "OK" ? "OK" : "NOT_OK"',
+            script,
+        )
+        self.assertIn(
+            'var previewReadyAtRequest = state.predictionReady[side] === true;',
+            script,
+        )
+        self.assertIn(
+            'if (!previewReadyAtRequest &&\n'
+            '                    state.predictionReady[side] === true) return;',
+            script,
+        )
         self.assertIn("Inspection result received and rendered", script)
-        self.assertIn('text: "REQUEST PENDING"', script)
+        self.assertIn('text: "WAITING FOR RESULT"', script)
         self.assertIn('setResult(isBack ? "Back" : "Front", "IN_PROGRESS", "PENDING")', script)
+        self.assertIn(
+            'var data = await jsonRequest(isBack ? URL.wfInspectBack : URL.wfInspectFront',
+            script,
+        )
+        self.assertIn('if (!isBack && progress.back_status !== "SKIPPED")', script)
+        self.assertIn('await showInspection("back", progress)', script)
+        self.assertIn("await finalize()", script)
+        self.assertIn("renderInspectionOutput(isBack ? \"Back\" : \"Front\", data)", script)
         self.assertNotIn('setResult(side === "FRONT" ? "Front" : "Back", "IN_PROGRESS"', script)
         self.assertNotIn('normalizedOverall === "INSPECTING"', script)
         self.assertIn("INSPECTION_REQUEST_TIMEOUT_MS", script)
@@ -5788,6 +6218,77 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertNotIn("stopCameraPolling();", camera_polling)
         for state in ("inspecting", "ok", "not_ok", "error"):
             self.assertIn(".wf-prediction-status.is-" + state, css)
+
+    def test_refresh_restores_backend_progress_without_resubmitting_a_side(self):
+        from django.conf import settings
+
+        script = (
+            __import__("pathlib").Path(settings.BASE_DIR)
+            / "VisionInspection"
+            / "static"
+            / "VisionInspection"
+            / "js"
+            / "inspection_workflow_ui.js"
+        ).read_text(encoding="utf-8")
+        resume = script.split("async function resumeSession(saved)", 1)[1].split(
+            "function scheduleSessionRestoreRetry", 1
+        )[0]
+        show_inspection = script.split("async function showInspection(", 1)[1].split(
+            "async function retryCamera(", 1
+        )[0]
+        polling = script.split("function startSessionProgressPolling(", 1)[1].split(
+            "function startPredictionPreview(", 1
+        )[0]
+        enter_progress = script.split("async function enterFromProgress(", 1)[1].split(
+            "async function showInspection(", 1
+        )[0]
+
+        self.assertIn("var progress = await loadProgress(saved.sessionId)", resume)
+        self.assertIn("progress.session_id !== saved.sessionId", resume)
+        self.assertIn("progress.part_number !== saved.partNumber", resume)
+        self.assertIn("progress.configuration_id", resume)
+        self.assertNotIn("URL.wfInspectFront", resume)
+        self.assertNotIn("URL.wfInspectBack", resume)
+        self.assertIn('progress[side + "_status"] === "IN_PROGRESS"', show_inspection)
+        self.assertIn("startSessionProgressPolling(side, true)", show_inspection)
+        self.assertIn("var progress = await loadProgress(sessionId)", polling)
+        self.assertIn("progress.is_active", polling)
+        self.assertIn('recoveredSideStatus === "COMPLETED"', polling)
+        self.assertIn('recoveredSideStatus === "SKIPPED"', polling)
+        self.assertIn("await enterFromProgress(progress, null, false)", polling)
+        self.assertIn("Math.min(\n                        8000,", polling)
+        self.assertIn('progress.front_status === "COMPLETED"', enter_progress)
+        self.assertIn("await finalize()", enter_progress)
+
+    def test_session_restore_retries_temporary_status_failures_and_handles_expiry(self):
+        from django.conf import settings
+
+        script = (
+            __import__("pathlib").Path(settings.BASE_DIR)
+            / "VisionInspection"
+            / "static"
+            / "VisionInspection"
+            / "js"
+            / "inspection_workflow_ui.js"
+        ).read_text(encoding="utf-8")
+        restore_retry = script.split(
+            "function scheduleSessionRestoreRetry(", 1
+        )[1].split("async function prepareFreshScan(", 1)[0]
+        prepare = script.split("async function prepareFreshScan(", 1)[1].split(
+            "function hasUnfinishedSession(", 1
+        )[0]
+        retryable_restore = prepare.split(
+            "try {\n            await resumeSession(saved);", 1
+        )[1]
+
+        self.assertIn('"session_inactive"', restore_retry)
+        self.assertIn('"session_expired"', restore_retry)
+        self.assertIn("resumeSession(saved).catch", restore_retry)
+        self.assertIn("state.resumeRetryCount >= 5", restore_retry)
+        self.assertIn("The session is retained", restore_retry)
+        self.assertIn("scheduleSessionRestoreRetry(saved, error)", prepare)
+        self.assertNotIn("clearLocal();", retryable_restore)
+        self.assertIn("scheduleSessionRestoreRetry(saved, error);", retryable_restore)
 
     def test_favicon_is_served_at_site_root(self):
         response = self.client.get(reverse("favicon"))
@@ -5848,7 +6349,7 @@ class InspectionWorkspaceUiTests(TestCase):
         self.assertIn("stopPredictionPreview()", handler)
         self.assertIn("if (restoreActiveStage) refreshCamera();", handler)
 
-    def test_scan_validation_enables_explicit_inspection_start(self):
+    def test_model_readiness_automatically_starts_camera_and_front_view(self):
         from django.conf import settings
 
         html = self._page()
@@ -5860,24 +6361,34 @@ class InspectionWorkspaceUiTests(TestCase):
             / "js"
             / "inspection_workflow_ui.js"
         ).read_text(encoding="utf-8")
-        self.assertIn('id="wfStartInspectionBtn" class="wf-button wf-primary" type="button" disabled', html)
-        self.assertIn('addEventListener("submit", scan)', script)
-        self.assertIn('addEventListener("click", startInspection)', script)
+        self.assertNotIn('id="wfStartInspectionBtn"', html)
+        self.assertNotIn('id="wfScanBtn"', html)
+        self.assertNotIn('id="wfPartConfigLink"', html)
+        self.assertIn('addEventListener("change", handlePartSelectionChange)', script)
         self.assertIn("partData.ok !== true", script)
         self.assertIn("modelData.ok !== true", script)
+        self.assertIn('modelData.state !== "model_loaded"', script)
+        self.assertIn("!Array.isArray(modelData.models) || !modelData.models.length", script)
         self.assertIn("state.validatedModelId = Number(modelData.model_id);", script)
-        self.assertIn('byId("wfStartInspectionBtn").disabled = false;', script)
-        self.assertIn('byId("wfStartInspectionBtn").addEventListener("click", startInspection)', script)
+        self.assertIn("await startInspection(version)", script)
+        self.assertIn('setText("wfModelState", "Model ready")', script)
+        self.assertIn('setText("wfModelDetail", modelSummary)', script)
+        self.assertIn("function waitForCameraReady", script)
+        self.assertIn("camera.ready === true", script)
+        self.assertIn('"Camera ready."', script)
+        self.assertNotIn("wfStartInspectionBtn", script)
+        self.assertNotIn("wfScanBtn", script)
+        self.assertNotIn("wfPartConfigLink", script)
         self.assertIn("partVisionPreview", html)
-        self.assertIn("confidence=0.30", script)
+        self.assertIn('confidence: "0.30"', script)
         self.assertNotIn("No detections | Total: 0", script)
-        self.assertIn("async function cameraStatusRequest(sessionId)", script)
-        self.assertIn("var data = await cameraStatusRequest(sessionId);", script)
+        self.assertIn("async function cameraStatusRequest(sessionId, signal)", script)
+        self.assertIn("var data = await cameraStatusRequest(", script)
         self.assertIn("function isSessionId(value)", script)
         self.assertIn("!isSessionId(sessionData.session_id)", script)
         self.assertIn("session_id: state.sessionId", script)
         self.assertNotIn('jsonRequest(URL.cameraStatus, "GET")', script)
-        self.assertIn("inspection_workflow_ui.js?v=20261023-8", html)
+        self.assertIn("inspection_workflow_ui.js?v=20261024-6", html)
         self.assertIn("state.requestVersion", script)
         self.assertIn("function handleInactiveCameraSession", script)
         self.assertIn('errorState === "session_inactive"', script)
@@ -6078,6 +6589,45 @@ class InspectionWorkspaceUiTests(TestCase):
 
         self.assertIn('setResult(side, "PENDING", "PENDING")', retry_camera)
         self.assertNotIn('"IN_PROGRESS"', retry_camera)
+
+    def test_stopping_camera_and_preview_polling_aborts_in_flight_requests(self):
+        from django.conf import settings
+
+        script = (
+            __import__("pathlib").Path(settings.BASE_DIR)
+            / "VisionInspection"
+            / "static"
+            / "VisionInspection"
+            / "js"
+            / "inspection_workflow_ui.js"
+        ).read_text(encoding="utf-8")
+        stop_preview = script.split("function stopPredictionPreview()", 1)[1].split(
+            "function", 1
+        )[0]
+        stop_camera = script.split("function stopCameraPolling()", 1)[1].split(
+            "function handleInactiveCameraSession", 1
+        )[0]
+        clear_feeds = script.split("function clearFeeds()", 1)[1].split(
+            "async function activateCamera", 1
+        )[0]
+        refresh_camera = script.split("async function refreshCamera()", 1)[1].split(
+            "function startCameraPolling(", 1
+        )[0]
+        preview_request = script.split(
+            "async function pollPredictionPreview(", 1
+        )[1].split("function retryPrediction(", 1)[0]
+        status_request = script.split("async function refreshCamera()", 1)[1].split(
+            "function startCameraPolling(", 1
+        )[0]
+
+        self.assertIn("state.predictionController.abort()", stop_preview)
+        self.assertIn("state.cameraStatusController.abort()", stop_camera)
+        self.assertIn("stopCameraPolling()", clear_feeds)
+        self.assertIn("if (!state.busy) startPredictionPreview", refresh_camera)
+        self.assertIn("controller ? controller.signal : null", preview_request)
+        self.assertIn("controller ? controller.signal : null", status_request)
+        self.assertIn("signal: signal", script)
+        self.assertIn('error.name !== "AbortError"', script)
 
     def test_result_transition_uses_persisted_time_and_auto_advances_once(self):
         from django.conf import settings
@@ -6527,6 +7077,14 @@ class StationDuplicateSubmissionTests(TestCase):
 
     def setUp(self):
         self.client, self.operator = _role_client("Operator", "SUBMIT-OPERATOR")
+        camera_patches = (
+            mock.patch.object(CameraService, "start_camera", return_value=True),
+            mock.patch.object(CameraService, "stop_camera", return_value=True),
+            mock.patch.object(CameraService, "get_status", return_value="ON"),
+        )
+        for patcher in camera_patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _submit(self, client):
         return client.post(
@@ -6702,6 +7260,29 @@ class DashboardPageTests(TestCase):
         self.assertContains(r, "Daily Inspection Results")
         self.assertContains(r, "Start Inspection")
 
+    def test_dashboard_routes_render_the_active_template_and_load_page_styles_last(self):
+        from django.contrib.staticfiles import finders
+
+        dashboard_css = finders.find("VisionInspection/css/dashboard.css")
+        self.assertIsNotNone(dashboard_css)
+
+        for route_name in ("dashboard", "dashboard-operations"):
+            with self.subTest(route=route_name):
+                response = self.client.get(reverse(f"VisionInspection:{route_name}"))
+                self.assertEqual(response.status_code, 200)
+                self.assertTemplateUsed(
+                    response, "VisionInspection/ui/dashboard.html"
+                )
+                html = response.content.decode()
+                design_system = html.index("ui_design_system.css")
+                dashboard_styles = html.index("dashboard.css?v=20261024-2")
+                self.assertLess(design_system, dashboard_styles)
+                self.assertIn("js/sidebar.js", html)
+                self.assertNotIn("js/dashboard.js", html)
+                self.assertIn("Inspection Result Distribution", html)
+                self.assertIn("Part Wise Inspection", html)
+                self.assertIn("Daily Inspection Results", html)
+
     def test_summary_cards_use_database_counts_and_percentages(self):
         r = self.client.get(reverse("VisionInspection:dashboard"))
         html = r.content.decode()
@@ -6783,6 +7364,26 @@ class DashboardPageTests(TestCase):
         self.assertEqual(html.count('aria-label="2 OK"'), 1)
         self.assertEqual(html.count('aria-label="2 NOT OK"'), 1)
         self.assertEqual(html.count("data-report-row"), 6)
+
+    def test_chart_axis_and_svg_presentation_survive_missing_stylesheets(self):
+        response = self.client.get(reverse("VisionInspection:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["chart_max"], 2)
+        self.assertEqual(response.context["chart_ticks"], [0, 1, 2])
+
+        html = response.content.decode()
+        self.assertIn('<span>Total</span>', html)
+        self.assertIn('fill="none" stroke="#16A34A"', html)
+        self.assertIn('fill="none" stroke="#E11D48"', html)
+        self.assertIn('fill="#16A34A" stroke="#FFFFFF"', html)
+        self.assertIn('fill="#E11D48" stroke="#FFFFFF"', html)
+        self.assertEqual(
+            [point["show_label"] for point in response.context["trend_rows"]],
+            [
+                index % 2 == 0 and index != 12 or index == 13
+                for index in range(14)
+            ],
+        )
 
     def test_part_dropdown_lists_database_parts(self):
         r = self.client.get(reverse("VisionInspection:dashboard"))

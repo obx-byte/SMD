@@ -6,6 +6,7 @@ It is intentionally separate from the API/operator views in views.py.
 
 import logging
 import json
+import math
 from datetime import datetime, time, timedelta
 
 from django.conf import settings
@@ -35,6 +36,22 @@ from VisionInspection.services.access_control import has_permission, is_admin
 from VisionInspection.services.part_configuration import common_roi_camera_error
 
 logger = logging.getLogger(__name__)
+
+
+def _nice_axis_values(maximum):
+    """Return readable integer ticks covering a non-negative chart maximum."""
+    if maximum <= 0:
+        return 0, []
+
+    rough_step = maximum / 4
+    magnitude = 10 ** int(math.floor(math.log10(max(1, rough_step))))
+    normalized_step = rough_step / magnitude
+    step_factor = next(
+        factor for factor in (1, 2, 5, 10) if normalized_step <= factor
+    )
+    step = step_factor * magnitude
+    axis_max = int(math.ceil(maximum / step) * step)
+    return axis_max, list(range(0, axis_max + 1, int(step)))
 
 
 def favicon(request):
@@ -101,7 +118,8 @@ def dashboard(request):
         )
         .order_by("-total", "part_number")[:8]
     )
-    chart_max = max((row["total"] for row in grouped_parts), default=0)
+    chart_data_max = max((row["total"] for row in grouped_parts), default=0)
+    chart_max, chart_ticks = _nice_axis_values(chart_data_max)
     classified_total = summary["ok"] + summary["not_ok"]
     part_rows = [
         {
@@ -155,6 +173,7 @@ def dashboard(request):
             default=0,
         )
         trend_has_results = trend_max > 0
+        trend_axis_max, trend_ticks = _nice_axis_values(trend_max)
         ok_coordinates = []
         not_ok_coordinates = []
         for index in range(14):
@@ -163,10 +182,14 @@ def dashboard(request):
             ok_count = result_row.get("ok", 0)
             not_ok_count = result_row.get("not_ok", 0)
             x = round(38 + index * (550 / 13), 1)
-            ok_y = round(126 - (ok_count / trend_max * 96), 1) if trend_max else 126
+            ok_y = (
+                round(126 - (ok_count / trend_axis_max * 96), 1)
+                if trend_axis_max
+                else 126
+            )
             not_ok_y = (
-                round(126 - (not_ok_count / trend_max * 96), 1)
-                if trend_max
+                round(126 - (not_ok_count / trend_axis_max * 96), 1)
+                if trend_axis_max
                 else 126
             )
             ok_coordinates.append(f"{x},{ok_y}")
@@ -180,7 +203,7 @@ def dashboard(request):
                     "x": x,
                     "ok_y": ok_y,
                     "not_ok_y": not_ok_y,
-                    "show_label": index % 2 == 0 or index == 13,
+                    "show_label": (index % 2 == 0 and index != 12) or index == 13,
                 }
             )
         trend_ok_points = " ".join(ok_coordinates)
@@ -188,9 +211,11 @@ def dashboard(request):
         trend_grid = [
             {
                 "value": value,
-                "y": round(126 - (value / trend_max * 96), 1) if trend_max else 126,
+                "y": round(126 - (value / trend_axis_max * 96), 1)
+                if trend_axis_max
+                else 126,
             }
-            for value in sorted({0, round(trend_max / 2), trend_max})
+            for value in trend_ticks
         ]
     else:
         trend_grid = []
@@ -253,7 +278,7 @@ def dashboard(request):
         "show_recent_inspections": show_recent_inspections,
         "can_view_reports": show_recent_inspections,
         "chart_max": chart_max,
-        "chart_mid": max(1, round(chart_max / 2)) if chart_max else 0,
+        "chart_ticks": chart_ticks,
     }
     return render(request, "VisionInspection/ui/dashboard.html", context)
 

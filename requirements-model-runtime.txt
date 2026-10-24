@@ -4,5 +4,5 @@ onnx
 Pillow
 numpy
 opencv-python
-torch
+torch==2.6.0
 torchvision

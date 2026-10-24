@@ -3,8 +3,8 @@
 
 {% block title %}Dashboard — Airbag Stitch Inspection{% endblock %}
 
-{% block extra_head %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261022-3">
+{% block extra_css %}
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/dashboard.css' %}?v=20261024-3">
 {% endblock %}
 
 {% block header_title %}Dashboard{% endblock %}
@@ -70,22 +70,15 @@
                 <p class="vi-dash-kpi-note">{{ summary.not_ok_pct|floatformat:"1" }}% of inspections</p>
             </div>
         </article>
-        <article class="vi-card vi-dash-kpi" data-tone="warning">
-            <span class="vi-dash-kpi-icon" aria-hidden="true">!</span>
-            <div>
-                <p class="vi-dash-kpi-label">Incomplete / Error</p>
-                <p class="vi-dash-kpi-value">{{ summary.incomplete_error }}</p>
-                <p class="vi-dash-kpi-note">{{ summary.incomplete_error_pct|floatformat:"1" }}% of inspections</p>
-            </div>
-        </article>
+        
     </section>
 
     <section class="vi-dash-analytics" aria-label="Inspection analytics">
         <article class="vi-card vi-dash-chart-card">
             <header class="vi-dash-card-heading">
                 <div>
-                    <p class="vi-dash-card-eyebrow">QUALITY OVERVIEW</p>
-                    <h3>Inspection Result Distribution</h3>
+                   
+                    <h3>Inspection Result </h3>
                 </div>
                 {% if selected_part %}<span class="vi-dash-part-chip">{{ selected_part }}</span>{% endif %}
             </header>
@@ -114,12 +107,7 @@
                         <strong>{{ summary.not_ok }}</strong>
                         <small>{{ summary.not_ok_pct|floatformat:"1" }}%</small>
                     </div>
-                    <div class="vi-dash-legend-item">
-                        <span class="vi-dash-legend-dot is-incomplete" aria-hidden="true"></span>
-                        <span class="vi-dash-legend-label">Incomplete / Error</span>
-                        <strong>{{ summary.incomplete_error }}</strong>
-                        <small>{{ summary.incomplete_error_pct|floatformat:"1" }}%</small>
-                    </div>
+                    
                 </div>
             </div>
             {% else %}
@@ -134,9 +122,7 @@
         <article class="vi-card vi-dash-chart-card">
             <header class="vi-dash-card-heading">
                 <div>
-                    <p class="vi-dash-card-eyebrow">PRODUCTION BREAKDOWN</p>
-                    <h3>Part Wise Inspection</h3>
-                    <p class="vi-dash-trend-period">Top 8 parts by inspection volume</p>
+                  
                 </div>
                 <div class="vi-dash-chart-key" aria-label="Chart legend">
                     <span><i class="is-ok"></i> OK</span>
@@ -146,7 +132,8 @@
             {% if part_rows %}
                 <div class="vi-dash-bar-axis" aria-hidden="true">
                     <span>Part number</span>
-                    <div><span>0</span><span>{{ chart_mid }}</span><span>{{ chart_max }}</span></div>
+                    <div>{% for tick in chart_ticks %}<span>{{ tick }}</span>{% endfor %}</div>
+                    <span>Total</span>
                 </div>
                 <div class="vi-dash-bars" role="list" aria-label="OK and NOT OK inspection counts by part number">
                     {% for row in part_rows %}
@@ -207,20 +194,20 @@
                      role="img"
                      aria-label="Daily inspection results from {{ trend_period_start|date:'d M Y' }} to {{ trend_period_end|date:'d M Y' }}. {{ trend_ok_total }} OK and {{ trend_not_ok_total }} NOT OK in this period.">
                     {% for gridline in trend_grid %}
-                    <line x1="38" x2="588" y1="{{ gridline.y }}" y2="{{ gridline.y }}" class="vi-dash-trend-gridline"></line>
-                    <text x="30" y="{{ gridline.y|add:4 }}" class="vi-dash-trend-axis-label" text-anchor="end">{{ gridline.value }}</text>
+                    <line x1="38" x2="588" y1="{{ gridline.y }}" y2="{{ gridline.y }}" stroke="#E8EDF4" stroke-width="1" vector-effect="non-scaling-stroke" class="vi-dash-trend-gridline"></line>
+                    <text x="30" y="{{ gridline.y|add:4 }}" fill="#53627A" font-family="inherit" font-size="7" class="vi-dash-trend-axis-label" text-anchor="end">{{ gridline.value }}</text>
                     {% endfor %}
-                    <polyline points="{{ trend_ok_points }}" class="vi-dash-trend-line is-ok"></polyline>
-                    <polyline points="{{ trend_not_ok_points }}" class="vi-dash-trend-line is-not-ok"></polyline>
+                    <polyline points="{{ trend_ok_points }}" fill="none" stroke="#16A34A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" class="vi-dash-trend-line is-ok"></polyline>
+                    <polyline points="{{ trend_not_ok_points }}" fill="none" stroke="#E11D48" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" class="vi-dash-trend-line is-not-ok"></polyline>
                     {% for point in trend_rows %}
-                    <circle cx="{{ point.x }}" cy="{{ point.ok_y }}" r="3.5" class="vi-dash-trend-point is-ok">
+                    <circle cx="{{ point.x }}" cy="{{ point.ok_y }}" r="3.5" fill="#16A34A" stroke="#FFFFFF" stroke-width="1.5" vector-effect="non-scaling-stroke" class="vi-dash-trend-point is-ok">
                         <title>{{ point.label }}: {{ point.ok }} OK</title>
                     </circle>
-                    <circle cx="{{ point.x }}" cy="{{ point.not_ok_y }}" r="3.5" class="vi-dash-trend-point is-not-ok">
+                    <circle cx="{{ point.x }}" cy="{{ point.not_ok_y }}" r="3.5" fill="#E11D48" stroke="#FFFFFF" stroke-width="1.5" vector-effect="non-scaling-stroke" class="vi-dash-trend-point is-not-ok">
                         <title>{{ point.label }}: {{ point.not_ok }} NOT OK</title>
                     </circle>
                     {% if point.show_label %}
-                    <text x="{{ point.x }}" y="162" class="vi-dash-trend-date-label" text-anchor="middle">{{ point.label }}</text>
+                    <text x="{{ point.x }}" y="162" fill="#53627A" font-family="inherit" font-size="7" class="vi-dash-trend-date-label" text-anchor="middle">{{ point.label }}</text>
                     {% endif %}
                     {% endfor %}
                 </svg>

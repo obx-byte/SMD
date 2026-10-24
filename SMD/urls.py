@@ -21,7 +21,7 @@ from VisionInspection import ui_views
 
 urlpatterns = [
     path("favicon.ico", ui_views.favicon, name="favicon"),
-    path("vision-inspection/", include("VisionInspection.urls")),
+    path("", include("VisionInspection.urls")),
     # Jazzmin ("jazzmin" listed before admin in INSTALLED_APPS) transparently
     # themes the default admin UI; keep the standard admin site URLs.
     path("admin/", admin.site.urls),

@@ -103,6 +103,7 @@ MAX_PAGE_SIZE = 500
 _LIVE_PREVIEW_CACHE_LIMIT = 2
 _live_preview_cache = OrderedDict()
 _live_preview_cache_lock = threading.Lock()
+_live_preview_request_lock = threading.Lock()
 _LIVE_PREVIEW_METRICS_INTERVAL = 30.0
 _LIVE_PREVIEW_UNIQUE_SEQUENCE_LIMIT = 2048
 _live_preview_metrics_lock = threading.Lock()
@@ -249,7 +250,10 @@ def _record_live_preview_encode(encode_ms):
 def _instrument_live_preview(view):
     @functools.wraps(view)
     def wrapped(request, *args, **kwargs):
-        response = view(request, *args, **kwargs)
+        # The station has one physical camera; serialize preview cache lookup
+        # and population so concurrent requests cannot infer the same frame twice.
+        with _live_preview_request_lock:
+            response = view(request, *args, **kwargs)
         _record_live_preview_request(len(response.content))
         return response
 
@@ -402,6 +406,7 @@ def _parts_for_select():
     """Parts as ``{part_number, part_desc}`` for the UI <select> controls."""
     return [
         {
+            "id": p.pk,
             "part_number": p.part_number,
             "part_desc": p.part_name or "",
             "is_active": p.is_active,
@@ -2075,6 +2080,7 @@ def workflow_validate_model(request):
 
     data = _body_json(request)
     part_number = data.get("part_number")
+    raw_part_id = data.get("part_id")
     raw_model_id = data.get("model_id")
     if part_number is not None and not isinstance(part_number, str):
         return _json_response(
@@ -2086,6 +2092,49 @@ def workflow_validate_model(request):
             },
             status=400,
         )
+    if raw_part_id is not None:
+        try:
+            if isinstance(raw_part_id, bool):
+                raise ValueError
+            if isinstance(raw_part_id, str) and not raw_part_id.isdecimal():
+                raise ValueError
+            if not isinstance(raw_part_id, (int, str)):
+                raise ValueError
+            part_id = int(raw_part_id)
+            if part_id < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return _json_response(
+                {
+                    "ok": False,
+                    "state": "invalid_request",
+                    "error_code": "invalid_part_id",
+                    "message": "part_id must be a positive integer.",
+                },
+                status=400,
+            )
+        selected_part = VisionInspectionPart.objects.filter(pk=part_id).first()
+        if selected_part is None:
+            return _json_response(
+                {
+                    "ok": False,
+                    "state": "part_not_found",
+                    "error_code": "part_not_found",
+                    "message": "The selected part was not found.",
+                },
+                status=404,
+            )
+        if part_number and part_number.strip() != selected_part.part_number:
+            return _json_response(
+                {
+                    "ok": False,
+                    "state": "part_selection_mismatch",
+                    "error_code": "part_selection_mismatch",
+                    "message": "The selected part ID and part number do not match.",
+                },
+                status=409,
+            )
+        part_number = selected_part.part_number
     part_number = part_number.strip() if part_number is not None else None
     part_number = part_number or None
     if raw_model_id is not None:

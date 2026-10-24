@@ -4,7 +4,7 @@
 {% block title %}Airbag Stitch Inspection{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_workspace.css' %}?v=20261023-9">
+<link rel="stylesheet" href="{% static 'VisionInspection/css/inspection_workspace.css' %}?v=20261024-4">
 {% endblock %}
 
 {% block header_title %}Airbag Stitch Inspection{% endblock %}
@@ -15,25 +15,31 @@
         <div class="wf-scan-panel">
             <div class="wf-kicker">AIRBAG STITCH INSPECTION</div>
             <h2 id="wfScanTitle">Scan Part</h2>
-            <p class="wf-subtitle">Scan the part barcode to validate its inspection configuration.</p>
-            <strong class="wf-scan-result wf-side-result is-pending" id="wfScanResult" role="status" aria-live="polite">REQUEST PENDING</strong>
-            <form id="wfScanForm" class="wf-scan-form">
+            <p class="wf-subtitle">Select a part to validate its configuration and load its model.</p>
+            <strong class="wf-scan-result wf-side-result is-pending" id="wfScanResult" role="status" aria-live="polite">SELECT PART</strong>
+            <div id="wfScanForm" class="wf-scan-form">
                 <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
-                <label for="wfBarcode">Part barcode</label>
+                <label for="wfBarcode">Part</label>
                 <div class="wf-scan-row">
-                    <input id="wfBarcode" class="vi-master-control" type="text" autocomplete="off" autofocus aria-label="Part barcode">
-                    <button id="wfScanBtn" class="wf-button wf-primary" type="submit">SCAN / VALIDATE</button>
+                    <select id="wfBarcode" class="vi-master-control" name="part_number" required autofocus aria-label="Part">
+                        <option value="">Select Part</option>
+                        {% for part in parts %}
+                        <option value="{{ part.part_number }}" data-part-id="{{ part.id }}" data-part-number="{{ part.part_number }}" data-part-name="{{ part.part_desc }}">{{ part.part_number }}{% if part.part_desc %} — {{ part.part_desc }}{% endif %}</option>
+                        {% empty %}
+                        <option value="" disabled>No parts available</option>
+                        {% endfor %}
+                    </select>
                 </div>
-            </form>
-            <div class="wf-scan-actions">
-                <button id="wfStartInspectionBtn" class="wf-button wf-primary" type="button" disabled>START INSPECTION</button>
-                <a id="wfPartConfigLink" class="wf-button wf-config-link" href="#" hidden>EDIT PART VISION SETTINGS</a>
+                {% if not parts %}<p class="wf-empty-parts" role="status">No parts are available. Contact a supervisor to add an eligible part.</p>{% endif %}
+                <p class="wf-selected-part" id="wfSelectedPart" aria-live="polite">Select a part to continue.</p>
             </div>
-            <div class="wf-validation" aria-live="polite">
-                <div><span class="wf-indicator" id="wfScanDot"></span><span>Part</span><strong id="wfScanState">Waiting for scan</strong></div>
-                <div><span class="wf-indicator" id="wfModelDot"></span><span>Model</span><strong id="wfModelState">Waiting for part</strong></div>
+            <div class="wf-scan-status">
+                <div class="wf-validation" aria-live="polite">
+                    <div><span class="wf-indicator" id="wfScanDot"></span><span>Part</span><strong id="wfScanState">Select a part</strong></div>
+                    <div><span class="wf-indicator" id="wfModelDot"></span><span>Model</span><strong id="wfModelState">Waiting for part</strong></div>
+                </div>
             </div>
-            <p class="wf-message" id="wfPartInfo" aria-live="polite">Ready to scan.</p>
+            <p class="wf-message" id="wfPartInfo" aria-live="polite">Select a part to validate its configuration and model.</p>
             <p class="wf-model-detail" id="wfModelDetail" role="status" aria-live="polite" hidden></p>
             <section class="wf-guidance" id="wfOperatorGuidance" aria-live="polite" hidden>
                 <h3>Inspection Instructions</h3>
@@ -151,5 +157,5 @@
         csrf: (document.cookie.split("; ").find(function (c) { return c.indexOf("csrftoken=") === 0; }) || "").split("=")[1] || ""
     };
 </script>
-<script src="{% static 'VisionInspection/js/inspection_workflow_ui.js' %}?v=20261023-8" defer></script>
+<script src="{% static 'VisionInspection/js/inspection_workflow_ui.js' %}?v=20261024-6" defer></script>
 {% endblock %}

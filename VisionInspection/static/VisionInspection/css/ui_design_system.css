@@ -623,6 +623,29 @@ html[data-sidebar-compact="true"] {
         padding 200ms ease, visibility 0s linear 200ms;
 }
 
+.vi-sidebar-tooltip {
+    position: fixed;
+    z-index: 1200;
+    max-width: 220px;
+    padding: 7px 10px;
+    border: 1px solid rgba(203, 215, 234, 0.22);
+    border-radius: 6px;
+    background: #07152f;
+    color: #ffffff;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24);
+    font-size: 12px;
+    line-height: 1.35;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 120ms ease, visibility 120ms ease;
+}
+
+.vi-sidebar-tooltip.is-visible {
+    opacity: 1;
+    visibility: visible;
+}
+
 html[data-sidebar-compact="true"] .vi-sidebar-header {
     justify-content: center;
     gap: 4px;
@@ -692,5 +715,9 @@ html[data-sidebar-compact="true"] .vi-sidebar-footer .vi-sidebar-link:focus-visi
     .vi-sidebar-collapse,
     .vi-sidebar-compact-toggle {
         transition-duration: 0.01ms;
+    }
+
+    .vi-sidebar-tooltip {
+        transition: none;
     }
 }

@@ -27,9 +27,10 @@
         })();
     </script>
     <link rel="stylesheet" href="{% static 'VisionInspection/css/inspection.css' %}?v=20261015-1">
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261022-7">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/admin.css' %}?v=20261024-2">
     {% block extra_head %}{% endblock %}
-    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261022-4">
+    <link rel="stylesheet" href="{% static 'VisionInspection/css/ui_design_system.css' %}?v=20261024-1">
+    {% block extra_css %}{% endblock %}
 </head>
 {# The Airbag Stitch Inspection station page uses the dark reference chrome. #}
 <body class="{% if sidebar_active == 'inspection_master' or sidebar_active == 'inspection' %}vi-fullscreen-chrome{% if sidebar_active == 'inspection' %} vi-inspection-chrome{% endif %}{% endif %}{% if sidebar_active == 'dashboard' %} vi-dashboard-chrome{% endif %}">
@@ -69,9 +70,9 @@
                     <span class="vi-sidebar-section-label">Master Data</span><span class="vi-caret" aria-hidden="true">&#9656;</span>
                 </button>
                 <div class="vi-sidebar-collapse" id="section-master-data">
-                    {% if vi_access.master_data_create %}<a href="{% url 'VisionInspection:ui-parts' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'parts' and request.resolver_match.url_name == 'ui-parts' and request.GET.action == 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#43;</span><span class="vi-sidebar-label" title="Add Part">Add Part</span></a>{% endif %}
+                  
                     {% if vi_access.master_data_view %}<a href="{% url 'VisionInspection:ui-parts' %}" class="vi-sidebar-link {% if sidebar_active == 'parts' and request.resolver_match.url_name == 'ui-parts' and request.GET.action != 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="View Parts">View Parts</span></a>{% endif %}
-                    {% if vi_access.master_data_create %}<a href="{% url 'VisionInspection:ui-employees' %}?action=add" class="vi-sidebar-link {% if sidebar_active == 'employees' and request.resolver_match.url_name == 'ui-employees' and request.GET.action == 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#43;</span><span class="vi-sidebar-label" title="Add Employee">Add Employee</span></a>{% endif %}
+                    
                     {% if vi_access.master_data_view %}<a href="{% url 'VisionInspection:ui-employees' %}" class="vi-sidebar-link {% if sidebar_active == 'employees' and request.resolver_match.url_name == 'ui-employees' and request.GET.action != 'add' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9737;</span><span class="vi-sidebar-label" title="View Employees">View Employees</span></a>{% endif %}
                 </div>
             </div>
@@ -116,13 +117,7 @@
                 </button>
                 <div class="vi-sidebar-collapse" id="section-configuration">
                     {% if vi_access.storage_view %}<a href="{% url 'VisionInspection:storage-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'storage' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9638;</span><span class="vi-sidebar-label" title="Storage Settings">Storage Settings</span></a>{% endif %}
-                    {% if vi_access.camera_setup_view %}
-                    <a href="{% url 'VisionInspection:inspection-master' %}" class="vi-sidebar-link {% if sidebar_active == 'inspection_master' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9679;</span><span class="vi-sidebar-label" title="Camera Setup">Camera Setup</span></a>
-                    {% endif %}
-                    {% if vi_access.model_configuration_view %}
-                    <a href="{% url 'VisionInspection:configuration' %}" class="vi-sidebar-link {% if sidebar_active == 'configuration' or sidebar_active == 'presets' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9881;</span><span class="vi-sidebar-label" title="Model Configuration">Model Configuration</span></a>
-                    {% endif %}
-                    {% if vi_access.approved_models_view %}<a href="{% url 'VisionInspection:ui-yolo-models' %}?approved=1" class="vi-sidebar-link {% if sidebar_active == 'yolo_models' and request.GET.approved %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#10003;</span><span class="vi-sidebar-label" title="Approved Models">Approved Models</span></a>{% endif %}
+                   
                     {% if vi_access.user_management %}<a href="{% url 'VisionInspection:user-management' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'user-management' or request.resolver_match.url_name == 'user-management-detail' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9881;</span><span class="vi-sidebar-label" title="User Management">User Management</span></a>{% endif %}
                     {% if vi_access.permission_management %}
                     <a href="{% url 'VisionInspection:access-groups' %}" class="vi-sidebar-link {% if request.resolver_match.url_name == 'access-groups' or request.resolver_match.url_name == 'access-group-create' or request.resolver_match.url_name == 'access-group-edit' or request.resolver_match.url_name == 'access-group-permissions' %}active{% endif %}"><span class="vi-sidebar-icon" aria-hidden="true">&#9776;</span><span class="vi-sidebar-label" title="Access Groups">Access Groups</span></a>
@@ -145,14 +140,14 @@
                 </div>
             </div>{% endif %}
 
-            <div class="vi-sidebar-footer">
-                {% if vi_access.storage_view %}
-                <a href="{% url 'VisionInspection:ui-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'settings' %}active{% endif %}">
-                    <span class="vi-sidebar-icon">&#9881;</span><span class="vi-sidebar-label">Settings</span>
-                </a>
-                {% endif %}
-            </div>
         </nav>
+        <div class="vi-sidebar-footer">
+            {% if vi_access.storage_view %}
+            <a href="{% url 'VisionInspection:ui-settings' %}" class="vi-sidebar-link {% if sidebar_active == 'settings' %}active{% endif %}">
+                <span class="vi-sidebar-icon">&#9881;</span><span class="vi-sidebar-label">Settings</span>
+            </a>
+            {% endif %}
+        </div>
     </aside>
 
     <div class="vi-main-wrapper">
@@ -177,7 +172,7 @@
                 {% block header_actions %}{% endblock %}
                 {% if user.is_authenticated %}
                 <div class="vi-profile" id="viProfile">
-                    <button class="btn btn-primary" id="viProfileBtn" type="button" aria-label="Account for {{ user.get_username }}" aria-haspopup="true" aria-expanded="false">
+                    <button class="btn btn-primary vi-profile-btn" id="viProfileBtn" type="button" aria-label="Account for {{ user.get_username }}" aria-haspopup="true" aria-expanded="false">
                         <span class="vi-profile-icon" aria-hidden="true">
                             <svg viewBox="0 0 24 24" focusable="false">
                                 <circle cx="12" cy="8" r="4" />
@@ -324,7 +319,7 @@
             }
         });
     </script>
-    <script src="{% static 'VisionInspection/js/sidebar.js' %}?v=20261022-1"></script>
+    <script src="{% static 'VisionInspection/js/sidebar.js' %}?v=20261024-1"></script>
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>

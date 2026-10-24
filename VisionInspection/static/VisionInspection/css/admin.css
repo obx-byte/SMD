@@ -150,6 +150,7 @@ body.vi-inspection-chrome {
 
 .vi-sidebar-nav {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 12px 0;
     display: flex;
@@ -255,6 +256,7 @@ body.vi-inspection-chrome {
 }
 
 .vi-sidebar-footer {
+    flex: 0 0 auto;
     margin-top: auto;
     padding: 10px 0 14px;
     border-top: 1px solid rgba(255, 255, 255, 0.12);
@@ -1326,6 +1328,11 @@ body.vi-fullscreen-chrome .vi-main-wrapper {
     max-width: 100%;
 }
 .vi-top-header .vi-header-datetime {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    height: 36px;
     text-align: center;
 }
 .vi-header-actions { gap: 10px; }
@@ -1335,7 +1342,8 @@ body.vi-fullscreen-chrome .vi-main-wrapper {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 32px;
+    box-sizing: border-box;
+    height: 36px;
     padding: 0 10px;
     border-radius: 5px;
     border: 1px solid rgba(255, 255, 255, 0.22);
@@ -1354,7 +1362,9 @@ body.vi-fullscreen-chrome .vi-main-wrapper {
 .vi-header-inspect:hover { background: var(--smd-primary-dark); }
 
 .vi-top-header .vi-profile-btn {
-    min-height: 44px;
+    box-sizing: border-box;
+    height: 36px;
+    min-height: 36px;
     gap: 8px;
     padding: 0 12px;
     border-color: #d8e1ee;
@@ -1407,7 +1417,9 @@ body.vi-fullscreen-chrome .vi-main-wrapper {
     align-items: center;
     justify-content: center;
     gap: 7px;
-    min-height: 44px;
+    box-sizing: border-box;
+    height: 36px;
+    min-height: 36px;
     padding: 0 14px;
     border: 1px solid #5273a7;
     border-radius: 8px;
@@ -1442,6 +1454,8 @@ body.vi-fullscreen-chrome .vi-main-wrapper {
 @media (max-width: 900px) {
     .vi-brand-title { font-size: 12px; }
     .vi-top-header .vi-header-title { font-size: 16px; }
+    .vi-top-header { gap: 10px; }
+    .vi-header-actions { gap: 8px; }
     .vi-header-inspect { font-size: 12px; padding: 0 8px; }
 }
 
@@ -2064,4 +2078,407 @@ body.vi-fullscreen-chrome .vi-main-wrapper {
     .vi-account-filter-form { grid-template-columns: minmax(0, 1fr); }
     .vi-account-filter-actions,
     .vi-account-pagination { justify-content: flex-start; }
+}
+
+/* ========================================================================
+   Deep navy enterprise sidebar — scoped to body.vi-dashboard-chrome so
+   other pages keep their existing styling. Matches the Airbag Stitch
+   Inspection reference: deep navy background, white text, muted blue-gray
+   section labels, blue active-state accents.
+   ======================================================================== */
+body.vi-dashboard-chrome .vi-top-header {
+    background: linear-gradient(90deg, #205493 0%, #2875D5 100%);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+    color: #FFFFFF;
+    height: 56px;
+    padding: 0 24px;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-brand-title {
+    color: #FFFFFF;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-header-title {
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding-left: 12px;
+    border-left: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-header-datetime,
+body.vi-dashboard-chrome .vi-top-header .vi-header-clock {
+    color: #FFFFFF;
+    background: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 7px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-header-inspect {
+    background: #1677E8;
+    border-color: #0E5FBF;
+    color: #FFFFFF;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-header-inspect:hover {
+    background: #0E5FBF;
+    border-color: #0E5FBF;
+    color: #FFFFFF;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-btn {
+    background: #FFFFFF;
+    border-color: #D8E1EE;
+    color: #16305F;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-btn:hover {
+    background: #F5F8FD;
+    border-color: #9BB7DF;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-menu {
+    background: #FFFFFF;
+    border-color: #E2E8F0;
+    box-shadow: 0 4px 14px rgba(32, 52, 81, .08);
+    color: #203451;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-menu .vi-profile-head {
+    border-bottom-color: #E2E8F0;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-menu .vi-profile-name {
+    color: #203451;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-menu .vi-profile-sub {
+    color: #6B7A96;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-menu a {
+    color: #203451;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-profile-menu a:hover {
+    background: #F4F7FC;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-signout-btn {
+    background: #1677E8;
+    border-color: #0E5FBF;
+    color: #FFFFFF;
+}
+
+body.vi-dashboard-chrome .vi-top-header .vi-signout-btn:hover,
+body.vi-dashboard-chrome .vi-top-header .vi-signout-btn:focus-visible {
+    background: #0E5FBF;
+    border-color: #0E5FBF;
+    color: #FFFFFF;
+}
+
+/* Sidebar — deep navy enterprise shell */
+body.vi-dashboard-chrome .vi-sidebar {
+    background: #0D1C3C;
+    color: #FFFFFF;
+    border-right: 1px solid #24385A;
+    box-shadow: 4px 0 18px rgba(8, 19, 41, 0.12);
+    width: 230px;
+}
+
+body.vi-dashboard-chrome .vi-main-wrapper {
+    margin-left: 230px;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-header {
+    background: #112449;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    gap: 11px;
+    min-height: 76px;
+    padding: 15px 16px;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-logo {
+    color: #7FB0F5;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: rgba(127, 176, 245, 0.12);
+    font-size: 16px;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-brand {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-title {
+    color: #FFFFFF;
+    font-weight: 700;
+    font-size: 15px;
+    line-height: 1.25;
+    letter-spacing: 0.02em;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-subtitle {
+    color: #8EA6C8;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1.3;
+    white-space: nowrap;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-compact-toggle {
+    width: 30px;
+    height: 30px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #E2E8F0;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-compact-toggle:hover {
+    background: rgba(127, 176, 245, 0.15);
+    border-color: rgba(127, 176, 245, 0.5);
+}
+
+body.vi-dashboard-chrome .vi-sidebar-nav {
+    gap: 2px;
+    padding: 14px 8px;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-section {
+    margin: 1px 0;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-section-title {
+    width: 100%;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 11px;
+    margin: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #9EAFC9;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 650;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-section-title:hover {
+    background: rgba(255, 255, 255, 0.045);
+    color: #F2F5FB;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-section-title:focus-visible {
+    outline: 2px solid #7FB0F5;
+    outline-offset: 1px;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-section-title.has-active {
+    color: #D9E3F3;
+    background: transparent;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-section-title.has-active:hover {
+    background: rgba(255, 255, 255, 0.045);
+    color: #F2F5FB;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-section-title.vi-expanded {
+    background: transparent;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-caret {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: #8296B5;
+    transition: transform 0.22s ease;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-section-title.vi-expanded .vi-caret {
+    transform: rotate(90deg);
+}
+
+body.vi-dashboard-chrome .vi-sidebar-collapse {
+    max-height: none;
+    overflow: visible;
+    margin: 1px 0 5px 8px;
+    padding: 0 0 0 8px;
+    border-left: 1px solid rgba(154, 174, 204, 0.2);
+    opacity: 1;
+    visibility: visible;
+    transition: none;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-collapse .vi-sidebar-link {
+    min-height: 40px;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 10px;
+    margin: 1px 0;
+    padding: 0 10px;
+    border-left: 3px solid transparent;
+    border-radius: 5px;
+    color: #BDCBE0;
+    font-size: 12.5px;
+    line-height: 1.2;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    text-decoration: none;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-collapse .vi-sidebar-link:hover {
+    background: rgba(138, 180, 248, 0.09);
+    color: #FFFFFF;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-collapse .vi-sidebar-link:focus-visible {
+    outline: 2px solid #7FB0F5;
+    outline-offset: 1px;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-collapse .vi-sidebar-link::before {
+    content: none;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-icon {
+    width: 16px;
+    flex: 0 0 16px;
+    color: #90A5C4;
+    font-size: 14px;
+    line-height: 1;
+    text-align: center;
+    opacity: 1;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Active page: pale-blue background, blue text, slim blue left border */
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-link.active {
+    border-left-color: #1677E8;
+    background: #E8F0FD;
+    color: #1677E8;
+    font-weight: 650;
+    box-shadow: none;
+}
+
+body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-link.active .vi-sidebar-icon {
+    color: #1677E8;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-footer {
+    margin-top: auto;
+    padding: 10px 8px 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+body.vi-dashboard-chrome .vi-sidebar-footer .vi-sidebar-link {
+    color: #BDCBE0;
+    text-decoration: none;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-footer .vi-sidebar-link:hover {
+    background: rgba(138, 180, 248, 0.09);
+    color: #FFFFFF;
+}
+
+body.vi-dashboard-chrome .vi-sidebar-footer .vi-sidebar-link.active {
+    border-left-color: #1677E8;
+    background: #E8F0FD;
+    color: #1677E8;
+}
+
+/* Responsive sidebar */
+@media (max-width: 1023px) {
+    body.vi-dashboard-chrome .vi-top-header { padding: 0 14px; }
+    body.vi-dashboard-chrome .vi-top-header .vi-header-title { font-size: 12px; }
+}
+
+@media (max-width: 900px) {
+    body.vi-dashboard-chrome .vi-brand-title { font-size: 13px; }
+    body.vi-dashboard-chrome .vi-header-actions { gap: 8px; }
+    body.vi-dashboard-chrome .vi-top-header .vi-header-inspect { font-size: 12px; padding: 0 8px; }
+}
+
+@media (max-width: 600px) {
+    body.vi-dashboard-chrome .vi-top-header { padding: 0 10px; gap: 8px; }
+    body.vi-dashboard-chrome .vi-header-actions { gap: 6px; }
+    body.vi-dashboard-chrome .vi-top-header .vi-profile-btn { gap: 6px; padding: 0 8px; }
+    body.vi-dashboard-chrome .vi-signout-btn { gap: 5px; padding: 0 9px; }
+}
+
+/* Collapsed sidebar: keep labels readable via tooltips, hide text */
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar {
+    width: 68px;
+}
+
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-main-wrapper {
+    margin-left: 68px;
+}
+
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar-brand,
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar-section-label,
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar .vi-sidebar-label,
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar-subtitle {
+    display: none;
+}
+
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar-section-title {
+    justify-content: center;
+    padding: 0;
+    gap: 0;
+}
+
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar-section-title .vi-caret {
+    display: none;
+}
+
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar-collapse .vi-sidebar-link {
+    justify-content: center;
+    gap: 0;
+    padding-right: 4px;
+    padding-left: 4px;
+}
+
+html[data-sidebar-compact="true"] body.vi-dashboard-chrome .vi-sidebar-collapse .vi-sidebar-link.active {
+    padding-left: 4px;
 }

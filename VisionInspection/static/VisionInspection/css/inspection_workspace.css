@@ -358,25 +358,6 @@ body.vi-inspection-chrome .vi-content {
     background: #ffffff;
 }
 
-/* Round green confirm button, as in the reference. */
-#wfScanBtn {
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    border-radius: 50%;
-    background: var(--ws-green);
-    border-color: var(--ws-green);
-    color: #ffffff;
-    font-size: 16px;
-    flex: 0 0 auto;
-}
-
-#wfScanBtn:hover:not(:disabled) {
-    background: var(--ws-green-strong);
-    border-color: var(--ws-green-strong);
-    color: #ffffff;
-}
-
 /* --- Model status (green only when genuinely loaded) --- */
 .ws-model-status {
     margin-top: 11px;
@@ -1636,6 +1617,11 @@ body.vi-inspection-chrome .vi-main-wrapper {
     overflow: hidden;
 }
 
+body.vi-inspection-chrome:not(.vi-camera-fullscreen) .vi-main-wrapper {
+    width: calc(100% - var(--vi-sidebar-width));
+    margin-left: var(--vi-sidebar-width);
+}
+
 body.vi-inspection-chrome .vi-content {
     display: flex;
     min-height: 0;
@@ -1733,8 +1719,7 @@ body.vi-inspection-chrome .vi-content {
 
 .wf-scan-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .wf-scan-row .vi-master-control {
@@ -1746,6 +1731,14 @@ body.vi-inspection-chrome .vi-content {
     background: #FFFFFF;
     color: var(--wf-text);
     font: 600 20px/1.2 "Segoe UI", sans-serif;
+}
+
+.wf-scan-row select.vi-master-control {
+    width: 100%;
+    min-width: 0;
+    appearance: auto;
+    font-size: 16px;
+    cursor: pointer;
 }
 
 .wf-scan-row .vi-master-control:focus {
@@ -1769,40 +1762,6 @@ body.vi-inspection-chrome .vi-content {
 .wf-button:disabled { cursor: wait; opacity: 0.62; }
 .wf-button.wf-primary { background: var(--wf-blue); border-color: var(--wf-blue); color: #FFFFFF; }
 .wf-button.wf-primary:hover:not(:disabled) { background: #0F766E; }
-#wfScanBtn {
-    width: auto;
-    min-width: 180px;
-    height: auto;
-    padding: 0 18px;
-    border: 1px solid #0D9488;
-    border-radius: 5px;
-    background: var(--wf-blue);
-    color: #fff;
-    font-size: 14px;
-}
-#wfScanBtn:hover:not(:disabled) { background: #0F766E; border-color: #0F766E; }
-
-.wf-scan-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 12px;
-}
-
-.wf-scan-actions .wf-button {
-    min-height: 46px;
-    font-size: 14px;
-}
-
-.wf-config-link {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: #334155;
-    text-align: center;
-    text-decoration: none;
-}
-
 .wf-model-detail {
     max-height: 100px;
     overflow-y: auto;
@@ -1823,6 +1782,28 @@ body.vi-inspection-chrome .vi-content {
     grid-template-columns: 1fr 1fr;
     gap: 12px;
     margin-top: 20px;
+}
+
+.wf-scan-status {
+    margin-top: 10px;
+}
+
+.wf-scan-status .wf-validation {
+    gap: 8px;
+    margin-top: 0;
+}
+
+.wf-selected-part,
+.wf-empty-parts {
+    margin: 5px 0 0;
+    color: var(--wf-muted);
+    font-size: 12px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.wf-empty-parts {
+    color: #9F1239;
 }
 
 .wf-validation > div {
@@ -2037,6 +2018,43 @@ body.vi-inspection-chrome .vi-content {
     .wf-leave-actions .wf-button { width: 100%; }
 }
 
+@media (max-width: 900px) {
+    body.vi-inspection-chrome .vi-top-header {
+        height: 56px;
+        gap: 8px;
+        padding: 0 10px;
+    }
+
+    body.vi-inspection-chrome .vi-header-title {
+        min-width: 0;
+        font-size: 15px;
+    }
+
+    body.vi-inspection-chrome .vi-header-actions {
+        min-width: 0;
+        gap: 6px;
+    }
+
+    body.vi-inspection-chrome .vi-top-header .vi-header-datetime {
+        max-width: 122px;
+        height: 32px;
+        overflow: hidden;
+        padding: 0 6px;
+        font-size: 10px;
+        text-overflow: ellipsis;
+    }
+
+    body.vi-inspection-chrome .vi-header-inspect,
+    body.vi-inspection-chrome .vi-top-header .vi-profile-btn,
+    body.vi-inspection-chrome .vi-signout-btn {
+        height: 32px;
+        min-height: 32px;
+        padding-right: 8px;
+        padding-left: 8px;
+        font-size: 11px;
+    }
+}
+
 @media (max-height: 620px) {
     body.vi-inspection-chrome .vi-content { padding-top: 5px; padding-bottom: 5px; }
     .wf-stage-head { min-height: 46px; }
@@ -2054,15 +2072,18 @@ body.vi-inspection-chrome .vi-content {
     .wf-scan-panel, .wf-final-panel { padding: 10px 14px; }
     .wf-stage h2 { margin: 2px 0; font-size: 22px; }
     .wf-subtitle, .wf-message, .wf-stage-foot p { font-size: 12px; }
-    .wf-scan-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+    .wf-scan-panel { width: min(100%, 720px); }
+    .wf-scan-row { grid-template-columns: minmax(0, 1fr); }
     .wf-scan-form { margin-top: 8px; }
     .wf-scan-form label { margin-bottom: 4px; font-size: 13px; }
-    .wf-scan-row .vi-master-control, .wf-scan-row .wf-button { min-width: 0; min-height: 40px; height: 40px; padding: 0 10px; font-size: 12px; }
-    #wfScanBtn { min-width: 0; }
-    .wf-validation { gap: 6px; margin-top: 8px; }
-    .wf-validation > div { min-height: 34px; padding: 5px 7px; gap: 5px; font-size: 12px; }
+    .wf-scan-row .vi-master-control { min-width: 0; min-height: 40px; height: 40px; padding: 0 10px; font-size: 12px; }
+    .wf-scan-row select.vi-master-control { font-size: 14px; }
+    .wf-scan-status { margin-top: 8px; }
+    .wf-scan-status .wf-validation { gap: 6px; }
+    .wf-validation > div { min-height: 38px; padding: 5px 7px; gap: 5px; font-size: 12px; }
     .wf-validation strong { font-size: 11px; }
-    .wf-scan-panel .wf-message { margin-top: 3px; }
+    .wf-selected-part, .wf-empty-parts { margin-top: 3px; font-size: 11px; }
+    .wf-scan-panel .wf-message { margin-top: 3px; font-size: 11px; }
     .wf-stage-head { min-height: 40px; }
     .wf-stage-foot { min-height: 50px; }
 }

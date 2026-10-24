@@ -3,6 +3,12 @@
 
     var root = document.documentElement;
     var compactToggle = document.getElementById("viSidebarCompactToggle");
+    var tooltip = document.createElement("div");
+    var tooltipTarget = null;
+    tooltip.className = "vi-sidebar-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.hidden = true;
+    document.body.appendChild(tooltip);
 
     function setCompact(compact) {
         var value = compact ? "true" : "false";
@@ -10,7 +16,8 @@
         if (compactToggle) {
             compactToggle.setAttribute("aria-expanded", compact ? "false" : "true");
             compactToggle.setAttribute("aria-label", compact ? "Expand navigation" : "Collapse navigation");
-            compactToggle.setAttribute("title", compact ? "Expand navigation" : "Collapse navigation");
+            compactToggle.setAttribute("data-sidebar-tooltip", compact ? "Expand navigation" : "Collapse navigation");
+            compactToggle.removeAttribute("title");
             compactToggle.firstElementChild.textContent = compact ? "\u00bb" : "\u00ab";
         }
     }
@@ -66,16 +73,60 @@
             }
         });
 
-        if (!button.hasAttribute("title")) {
-            button.setAttribute("title", button.getAttribute("aria-label"));
-        }
+        button.setAttribute("data-sidebar-tooltip", button.getAttribute("aria-label"));
+        button.removeAttribute("title");
     });
 
     document.querySelectorAll(".vi-sidebar-link").forEach(function (link) {
         var label = link.querySelector(".vi-sidebar-label");
         var text = label ? label.textContent.trim() : link.textContent.trim();
         if (!text) return;
-        if (!link.hasAttribute("title")) link.setAttribute("title", text);
         link.setAttribute("aria-label", text);
+        link.setAttribute("data-sidebar-tooltip", text);
+        link.removeAttribute("title");
     });
+
+    document.querySelectorAll(".vi-sidebar [title]").forEach(function (element) {
+        element.removeAttribute("title");
+    });
+
+    function hideTooltip() {
+        tooltip.classList.remove("is-visible");
+        tooltip.hidden = true;
+        tooltipTarget = null;
+    }
+
+    function showTooltip(event) {
+        var target = event.target.closest("[data-sidebar-tooltip]");
+        if (!target || root.getAttribute("data-sidebar-compact") !== "true") return;
+
+        var label = target.getAttribute("data-sidebar-tooltip");
+        if (!label) return;
+        tooltipTarget = target;
+        tooltip.textContent = label;
+        tooltip.hidden = false;
+        tooltip.classList.add("is-visible");
+
+        var targetRect = target.getBoundingClientRect();
+        var tooltipRect = tooltip.getBoundingClientRect();
+        var left = Math.min(targetRect.right + 8, window.innerWidth - tooltipRect.width - 8);
+        var top = Math.min(
+            Math.max(8, targetRect.top + (targetRect.height - tooltipRect.height) / 2),
+            window.innerHeight - tooltipRect.height - 8
+        );
+        tooltip.style.left = Math.max(8, left) + "px";
+        tooltip.style.top = top + "px";
+    }
+
+    document.addEventListener("pointerover", showTooltip);
+    document.addEventListener("focusin", showTooltip);
+    document.addEventListener("pointerout", function (event) {
+        if (tooltipTarget && tooltipTarget.contains(event.target) &&
+                !tooltipTarget.contains(event.relatedTarget)) {
+            hideTooltip();
+        }
+    });
+    document.addEventListener("focusout", hideTooltip);
+    document.addEventListener("scroll", hideTooltip, true);
+    window.addEventListener("resize", hideTooltip);
 })();
